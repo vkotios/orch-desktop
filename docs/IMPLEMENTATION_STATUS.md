@@ -29,10 +29,19 @@ The controller reviewed every actual diff and independently ran verification. De
 
 The original 12-test prototype result remains historical evidence. The isolated discovery correction and new boundary suite account for the current 41 package tests; no test timeout was increased.
 
+## CHO-02 protocol and native build readiness
+
+- Protocol integrated in `a1ffafe`: version 1 request/result/error/event frames, explicit generation/correlation checks, 1MiB UTF-8 canonical frame bound and 64-level JSON nesting limit. Twelve deterministic protocol tests cover positive and negative boundaries; the controller independently found and returned the original size/recursion defects before acceptance.
+- Native prerequisites: existing Visual Studio 2022 C++ tools, Windows SDK and WebView2 verified. Official Rustup 1.29.1 installed the minimal Rust 1.99.1 MSVC/Cargo 1.99.1 toolchain; PATH was preserved.
+- Native source/build artifacts: original graphite icon source with generated RGBA PNG/multisize ICO; Cargo.lock pins 410 packages including 409 checksummed crates.io dependencies; generated Tauri schemas are narrowly ignored. Candidate `97d83e5` remains in its isolated worktree pending a completed independent review; these artifacts are not integrated yet.
+- On candidate `97d83e5`, `tauri build --debug --no-bundle --ci` succeeds and produces a Windows executable. It creates a responding CHO window from an unrelated cwd. Computer Use window capture timed out waiting for app approval, so rendering remains unverified.
+- Private Node+JavaScript layout precheck succeeds with global Node absent from PATH and an unrelated cwd. The staged installed runtime is v24.11.1; this is a portability precheck, not a qualified redistribution version or packaged-host acceptance.
+- No current frontend/native transport was switched to the protocol yet. Bundled runtime preparation, Tauri resource resolution, owned persistent host and installer/real-conversation qualification remain open.
+
 ## Remaining work and holds
 
-- Native readiness is still open: no `cargo`, `rustc` or `rustup` was found on PATH and no default-user rustc executable was present. No native build, installed artifact or bundled-runtime smoke is claimed. Inspect/install the required system prerequisites deliberately before native extraction.
-- The next package defines the shared command/event protocol, then one persistent native host; continuing Claude/Codex transport/approval/cancellation spikes precede native-reference storage schema freeze.
+- Compiler/native-executable readiness passes on the isolated native candidate; main-branch native artifacts await review/integration. The bundled-runtime/installed-app smoke remains a prerequisite before host extraction grows; the current Rust router still launches global Node per request. Visual capture is unverified.
+- Next: pin and prepare the runtime resources, prove native resource resolution/handshake/exit, then build one persistent host. Continuing Claude/Codex transport/approval/cancellation spikes precede native-reference storage schema freeze.
 - Full npm audit identifies 3 vulnerable development-tool packages around Vitest/mocker/tinypool (one moderate, two critical). The production-only audit reports 0. Qualify the major test-tool upgrade before publication; do not force-update the dependency graph blindly.
 - Source publication still needs provenance/license and public-example cleanup, release/privacy/security documentation and content checks. The remote still points to the coordinator repository. No push, remote change or publication occurred.
 - Unified launcher is intentionally loopback-only. Direct Vite retains the explicit environment override, while LAN product access remains outside v0.1. Verify native dev URL resolution with the Rust/WebView smoke.
@@ -40,4 +49,4 @@ The original 12-test prototype result remains historical evidence. The isolated 
 - Muse file edits succeeded, but its Windows worker shell was unavailable; controller-executed checks are the evidence. Aider native served-model attribution stays unknown; separate gateway receipts corroborate engine/selector/time. Neither a tiny successful task nor catalogue presence qualifies a whole workload.
 - IGM is one shared engine/model across all clients. Local jobs and engine changes are serial; the completed batch leaves dspark loaded and idle.
 
-This closes the first implementation batch, not the full M0 milestone or product release criteria. Private coordinator evidence retains run/review records, launch failures, the controller-caused review-snapshot incident, gateway receipts and worktree retention decisions. The failed earlier Sonnet-auth run remains a separate coordinator bookkeeping follow-up.
+The foundation batch is closed. CHO-02 advances through reviewed slices; its full native-host milestone and product release criteria remain open. Private coordinator evidence retains run/review records, launch failures, the controller-caused review-snapshot incident, gateway receipts and worktree retention decisions. The failed earlier Sonnet-auth run remains a separate coordinator bookkeeping follow-up.

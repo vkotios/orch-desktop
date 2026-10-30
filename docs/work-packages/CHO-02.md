@@ -9,10 +9,12 @@ This package follows the first foundation batch. It is a scoped implementation h
 - Current Rust shell registers only `discover_harnesses` and `orch_dashboard`. It starts global `node` for each request using a source-relative import. It cannot own continuing CLI sessions or stream the complete UI protocol.
 - `src/lib/api.ts` calls arbitrary Tauri command names and subscribes to `cho:stream`. The browser transport separately POSTs `{command,args}` and uses SSE. Preserve the browser preview while moving both transports onto the same application protocol.
 - Development bridge hardening is a limited hostile-web-origin boundary. It does not provide production local-user authentication, persistent IPC, workspace authorization or controller approvals.
-- This host inspection found Node, but no `cargo`, `rustc`, `rustup` on PATH and no default-user rustc executable. Do not claim a native build, installed-app smoke or packaged-runtime qualification. Record the required Rust/MSVC/WebView prerequisites and install them deliberately before the native integration slice; do not silently bootstrap system toolchains inside a worker task.
+- The controller verified existing Visual Studio 2022 C++ tools, Windows SDK and WebView2, then installed official Rustup 1.29.1 with the minimal Rust 1.99.1 MSVC toolchain, preserving PATH. The isolated native candidate `97d83e5` builds after the missing icon source/generated assets and Cargo.lock are supplied; its integration awaits a completed independent review. It creates a responding CHO window from an unrelated cwd. Visual capture was not approved before timeout; no rendered-window, installed-artifact or bundled-runtime qualification is claimed.
 - Initial packaging direction remains a pinned Node runtime plus packaged JavaScript resources managed by Tauri. Resolve resource paths independently of cwd and source checkout. Validate this direction with an early native smoke before host extraction grows.
 
-## 02-a - Protocol module, no process launch
+## 02-a - Protocol module integrated, no process launch
+
+Implemented as `server/protocol.mjs`, its declarations, and 12 deterministic protocol tests. Integration commit: `a1ffafe`. Version 1 uses request/result/error/event envelopes, canonical compact JSON+LF frames bounded to 1MiB UTF-8 and 64 container levels, with explicit correlation/generation errors. All 53 package tests, typecheck/build passed for the reviewed candidate. No existing transport is switched. The following original scope records the contract; it is not another unstarted assignment.
 
 Worker: Muse, bounded M. Baseline: exact accepted foundation integration commit, clean worktree.
 
@@ -32,6 +34,10 @@ Acceptance:
 2. Deterministic positive and negative fixtures cover version mismatch, missing/invalid correlation and generation, malformed/truncated/oversized messages, terminal/error discrimination and unexpected event types. Tests run without providers, real user state or native executables.
 3. Existing callers continue to work because this slice does not switch transports yet. Root typecheck/test/build pass independently.
 4. Controller reviews actual changed consumers and protocol semantics; independent review is against the precise committed candidate. Any proposed broader refactor returns to the controller before implementation.
+
+## Next: bundled-runtime smoke before host extraction
+
+Compiler/native-window readiness is established; the packaged Node smoke remains open. Pin the official Node 24 distribution and verify its checksum/license, prepare ignored build resources, then add a bounded native resource resolver/startup smoke. Split resource preparation, Rust resolver and bootstrap/tests into exact-file handoffs. Prove the bundled runtime and JavaScript load from an arbitrary cwd with global Node unavailable; record handshake/failure and process-exit outcomes before growing the persistent-host extraction. The current executable still uses the old per-request global Node route and does not pass this acceptance.
 
 ## 02-b1 - One owned host process using fake boundaries
 
