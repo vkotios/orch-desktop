@@ -2,7 +2,7 @@
 
 Updated: 2026-10-30. Integration branch: `codex/cho-v01-foundation`.
 
-Product contract: [specification](PRODUCT_SPEC.md). Sequence: [plan](IMPLEMENTATION_PLAN.md). Sonnet findings: [validated dispositions](reviews/FINDINGS_DISPOSITION.md). Current package: [CHO-02 protocol and host](work-packages/CHO-02.md). Next step: the bounded CHO-04 controller capability spike.
+Product contract: [specification](PRODUCT_SPEC.md). Sequence: [plan](IMPLEMENTATION_PLAN.md). Sonnet findings: [validated dispositions](reviews/FINDINGS_DISPOSITION.md). Current package: [CHO-02 protocol and host](work-packages/CHO-02.md). Current spike: [CHO-04 controller capabilities](work-packages/CHO-04.md); Codex fixture checks pass, Claude remains open.
 
 ## First foundation batch integrated
 
@@ -57,10 +57,20 @@ The exact debug artifact starts from an unrelated cwd with global Node absent an
 
 Independent reviews and controller verification resolved the in-flight cancellation, admission deadline, cleanup reporting, host-queue and cross-language validation findings. Non-blocking maintenance and release-hardening items are tracked in [TASKS.md](../TASKS.md).
 
+## CHO-04 first controller capability slice
+
+Integrated source: `d59a451`. Muse is back in the implementation pool after current subscription access and its native model identity were confirmed. The controller ran all checks; Muse worker shell execution remains unqualified.
+
+The installed Codex CLI 0.156.1 app-server passed owned native fixtures for streamed text, same-thread continuation, resume in a new process without transcript replay, a permitted fixture-file read, rejected writes, interruption and continuation afterward. The fixture conversation was archived and all owned server processes exited. Requested/native-selected model was gpt-6-sol; independently served identity remains unknown. Details and limits are in [CHO-04](work-packages/CHO-04.md).
+
+The shared package now has a separate app-server event mapper with native thread/turn correlation, tool lifecycle including declined results, and distinct completed/failed/interrupted outcomes. It retains the existing exec normalizer. All 108 package tests (23 shared, 85 desktop), type checking and web build pass. Replaying captured native notifications through the candidate preserves 60 text deltas, two declined command results and two interrupted turns. The whole mapper and tests passed independent different-family review after controller-confirmed fixes.
+
+This is a pure event adapter and native protocol spike. The application has not switched its conversation transport to it. Native Claude behavior, live clarification, the pipe peer, product permissions, durable storage and installed conversation acceptance remain open. Rust/native-host source is unchanged from the previous verified milestone.
+
 ## Remaining work and holds
 
 - The bundled-host debug milestone passes. Installed-artifact and rendered-window acceptance remain open; native controller conversations and mutating commands are not yet admitted.
-- Next: run the bounded CHO-04 Claude/Codex continuing-session, streamed-tools, approval and cancellation capability spike before CHO-03 freezes native-reference storage. Then wire the first streamed native conversation and complete M1 distribution evidence.
+- Next: qualify Claude's native session/tool/approval/cancellation behavior and live clarification; implement the bounded Codex pipe peer and product permission flow, then wire the first streamed native conversation. Keep CHO-03 native-reference storage provisional and complete M1 distribution evidence.
 - Full npm audit identifies 3 vulnerable development-tool packages around Vitest/mocker/tinypool (one moderate, two critical). The production-only audit reports 0. Qualify the major test-tool upgrade before publication; do not force-update the dependency graph blindly.
 - Source publication still needs provenance/license and public-example cleanup, release/privacy/security documentation and content checks. The remote still points to the coordinator repository. No push, remote change or publication occurred.
 - Unified launcher is intentionally loopback-only. Direct Vite retains the explicit environment override, while LAN product access remains outside v0.1. Verify native dev URL resolution with the Rust/WebView smoke.
@@ -69,3 +79,5 @@ Independent reviews and controller verification resolved the in-flight cancellat
 - IGM is one shared engine/model across all clients. Local jobs and engine changes are serial; the final runtime reviews use Lucebox DeepSeek after Qwen was confirmed unloaded. Context and output budgets are explicit; declared gateway capacity is distinguished from measured per-slot capacity.
 
 The foundation batch is closed. CHO-02 advances through reviewed slices; the bundled read-only host foundation is complete, while full native conversations and product release criteria remain open. Private coordinator evidence retains run/review records, launch failures, the controller-caused review-snapshot incident, gateway receipts and worktree retention decisions. The failed earlier Sonnet-auth run remains a separate coordinator bookkeeping follow-up. All runtime-batch runs have one recorded disposition and all detached reviews are finalized with clean containment. Runtime batch closeout remains blocked by a lane-busy admission missing spawned keeper identity; the claim and original receipts are preserved pending supported reconciliation. This is a coordinator closeout hold, not an unverified native-host source change.
+
+CHO-04 remains in progress and its claim stays held for the continuing controller work. All runs in this slice have recorded dispositions; detached reviews are finalized with clean containment. Original worker worktrees and private native receipts are preserved.

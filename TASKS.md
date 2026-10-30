@@ -2,7 +2,7 @@
 
 The accepted delivery sequence is [IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md). These items supplement its work packages.
 
-- [ ] **CHO-04 / before CHO-03 schema freeze:** qualify current Claude Code and Codex continuing sessions, streamed tools, approvals, clarification and cancellation in owned fixtures; then implement the first canonical native conversation.
+- [ ] **CHO-04 / before CHO-03 schema freeze:** Codex native text/session/tool/approval/cancellation fixtures pass. Qualify Claude and live clarification, implement the bounded pipe peer and product permissions, then the first canonical native conversation. See [capability results](docs/work-packages/CHO-04.md).
 - [ ] **CHO-07 / CHO-08:** qualify restrictive Tauri CSP, provenance/public examples, native CI, release installer/upgrade and clean-machine acceptance. The inherited `csp: null` setting is unchanged by the native-host work.
 - [ ] **CHO-07:** qualify the development test-tool upgrade for the recorded Vitest/mocker/tinypool advisories; production-only audit is currently clear.
 - [ ] **Maintenance:** remove the unused `mut` in the Rust wire split-stream test (`host_wire.rs`); it is a compiler warning, not a runtime failure.

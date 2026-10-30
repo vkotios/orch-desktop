@@ -1,7 +1,7 @@
 # CHO Desktop v0.1 — Implementation Plan
 
 Date: 2026-10-30  
-Status: Foundation batch and bundled read-only native-host milestone complete locally; continuing native conversations and release qualification remain open
+Status: Foundation and bundled read-only host complete locally; first Codex capability/event slice integrated; native conversation integration and release qualification remain open
 Product contract: [PRODUCT_SPEC.md](PRODUCT_SPEC.md), initially committed as `d9cc7ef`  
 Planning branch: `codex/cho-v01-plan`; implementation branch: `codex/cho-v01-foundation`
 
@@ -266,3 +266,5 @@ After each milestone, compare delivered behaviour with the product spec and reco
 - [Muse adapter](../orch/src/adapters/muse.mjs)
 - [Aider model settings documentation](https://aider.chat/docs/config/adv-model-settings.html)
 - [Aider scripting documentation](https://aider.chat/docs/scripting.html)
+
+Current controller spike and remaining integration gates: [CHO-04 capability results](work-packages/CHO-04.md). Muse has returned to the primary pool after current access was verified; the one-off GLM/Claude feature allocations are not automatically renewed.
