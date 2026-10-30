@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   MAX_FRAME_BYTES,
@@ -9,6 +11,10 @@ import {
   validateEnvelope,
   type HostEnvelope,
 } from "../server/protocol.mjs";
+
+const FIXTURE = JSON.parse(
+  readFileSync(fileURLToPath(new URL("../server/host-wire-fixtures.json", import.meta.url)), "utf-8"),
+) as { schemaVersion: number; cases: Array<{ name: string; field: string; value: string; repeat: number; valid: boolean }> };
 
 const GEN = "gen-1";
 const asEnvelope = (value: unknown): HostEnvelope => value as HostEnvelope;
@@ -149,6 +155,36 @@ describe("host wire protocol", () => {
     const deep = `{"v":1,"type":"result","requestId":"r-1","generation":"${GEN}","result":${"[".repeat(6000)}0${"]".repeat(6000)}}\n`;
     expect(deep.endsWith("]}\n")).toBe(true);
     bad(() => decodeFrame(deep), "INVALID_ENVELOPE", "decode deep");
+  });
+
+  it("fixture-driven ID and errorCode bounds match UTF-16 semantics", () => {
+    for (const c of FIXTURE.cases) {
+      const repeated = c.value.repeat(c.repeat);
+      const env: Record<string, unknown> = {
+        v: 1, type: "error", generation: "gen-1", requestId: "r1",
+        error: { code: "E", message: "test" },
+      };
+      if (c.field === "generation") env.generation = repeated;
+      else if (c.field === "requestId") env.requestId = repeated;
+      else (env.error as Record<string, unknown>).code = repeated;
+      if (c.valid) {
+        expect(() => validateEnvelope(asEnvelope(env)), c.name).not.toThrow();
+      } else {
+        bad(() => validateEnvelope(asEnvelope(env)), "INVALID_ENVELOPE", c.name);
+      }
+    }
+  });
+
+  it("accepts v:1.0 and rejects non-numeric v", () => {
+    expect(decodeFrame(JSON.stringify({ ...request, v: 1.0 }) + "\n").type).toBe("request");
+    bad(() => decodeFrame(JSON.stringify({ ...request, v: true }) + "\n"), "UNSUPPORTED_VERSION");
+    bad(() => decodeFrame(JSON.stringify({ ...request, v: "1" }) + "\n"), "UNSUPPORTED_VERSION");
+  });
+
+  it("rejects event without requestId field, accepts explicit null", () => {
+    const { requestId: _, ...noRid } = events[0];
+    bad(() => decodeFrame(JSON.stringify(noRid) + "\n"), "INVALID_ENVELOPE");
+    expect(decodeFrame(JSON.stringify({ ...events[0], requestId: null }) + "\n").type).toBe("event");
   });
 
   it("rejects values JSON would silently drop or coerce", () => {

@@ -19,3 +19,6 @@ bench-results*.json
 
 # Tauri generated schemas (build output)
 apps/desktop/src-tauri/gen/schemas/
+
+# Generated Windows runtime staging (prepare-runtime.mjs output; never commit binaries)
+apps/desktop/src-tauri/.runtime/

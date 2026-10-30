@@ -1,0 +1,21 @@
+{"schemaVersion":1,"cases":[
+{"name":"generation ascii128","field":"generation","value":"a","repeat":128,"valid":true},
+{"name":"generation ascii129","field":"generation","value":"a","repeat":129,"valid":false},
+{"name":"generation empty","field":"generation","value":"","repeat":0,"valid":false},
+{"name":"generation astral64","field":"generation","value":"\uD835\uDD52","repeat":64,"valid":true},
+{"name":"generation astral65","field":"generation","value":"\uD835\uDD52","repeat":65,"valid":false},
+{"name":"requestId ascii128","field":"requestId","value":"a","repeat":128,"valid":true},
+{"name":"requestId ascii129","field":"requestId","value":"a","repeat":129,"valid":false},
+{"name":"requestId empty","field":"requestId","value":"","repeat":0,"valid":false},
+{"name":"requestId astral64","field":"requestId","value":"\uD835\uDD52","repeat":64,"valid":true},
+{"name":"requestId astral65","field":"requestId","value":"\uD835\uDD52","repeat":65,"valid":false},
+{"name":"errorCode ascii80","field":"errorCode","value":"a","repeat":80,"valid":true},
+{"name":"errorCode ascii81","field":"errorCode","value":"a","repeat":81,"valid":true},
+{"name":"errorCode ascii128","field":"errorCode","value":"a","repeat":128,"valid":true},
+{"name":"errorCode ascii129","field":"errorCode","value":"a","repeat":129,"valid":false},
+{"name":"errorCode empty","field":"errorCode","value":"","repeat":0,"valid":false},
+{"name":"errorCode astral64","field":"errorCode","value":"\uD835\uDD52","repeat":64,"valid":true},
+{"name":"errorCode astral65","field":"errorCode","value":"\uD835\uDD52","repeat":65,"valid":false},
+{"name":"generation ascii1","field":"generation","value":"a","repeat":1,"valid":true},
+{"name":"requestId ascii1","field":"requestId","value":"a","repeat":1,"valid":true}
+]}

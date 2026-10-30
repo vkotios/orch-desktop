@@ -10,6 +10,7 @@
   "scripts": {
     "dev": "npm --workspace @cho-desktop/desktop run dev",
     "build": "npm --workspace @cho-desktop/desktop run build",
+    "native:build": "node apps/desktop/scripts/prepare-runtime.mjs && npm --workspace @cho-desktop/desktop run tauri -- build",
     "test": "npm --workspace @cho-desktop/acp-client run test && npm --workspace @cho-desktop/desktop run test",
     "test:orch": "node --test orch/test/unit.test.mjs orch/test/adapter-claude.test.mjs orch/test/adapter-grok.test.mjs",
     "typecheck": "npm --workspace @cho-desktop/acp-client run typecheck && npm --workspace @cho-desktop/desktop run typecheck"
