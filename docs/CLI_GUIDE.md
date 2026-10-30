@@ -276,6 +276,8 @@ shims npm installs are deliberately **not** accepted (see opencode below).
   preserves native fallback instructions and merges owned project MCP wiring,
   without trust grants or native launches. See [repository adoption](SETUP.md#copilot-and-muse-repository-adoption).
 
+Observed in the 2026-10-30 CHO Windows worktree: file-tool implementation and read-only reviews worked, but worker shell execution failed before commands ran with `windows_elevated unified exec session launcher unavailable`. The controller ran verification independently. A completed file edit is not evidence of shell/sandbox qualification.
+
 ## aider (implementer)
 
 - Worker adapter only: `orch run --cli aider --model <selector>`. Aider is a BYOK/API-key CLI: you
@@ -329,6 +331,8 @@ shims npm installs are deliberately **not** accepted (see opencode below).
   its working directory, so `--dir` may be a subfolder.
 - The ANSWER-block marker was verified on aider 0.86.2 with `--no-pretty`; if another version prints
   a different marker the final message falls back to the whole output.
+
+Observed in the 2026-10-30 CHO worktree with Aider 0.86.2: its GitDB reader failed with `BadObject` on valid Git object packs named `loose-*`; native Git resolved them correctly, while that reader searched only `pack-*.pack`. Inspect the installed reader and native Git connectivity before treating this as repository corruption. For this run, byte-identical conventional-name copies were added while preserving the original packs and all history. Aider also rewrote the edited file to CRLF under this repository's `* -text` attributes; controller review checked the semantic diff explicitly.
 
 ## claude (implementer / reviewer, for non-Claude controllers)
 

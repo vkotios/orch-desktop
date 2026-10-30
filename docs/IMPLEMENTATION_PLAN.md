@@ -42,6 +42,8 @@ The route/gateway observations above were collected on 2026-10-29; the source st
 
 Prefer the already loaded eligible local model when it avoids a reload, but do not repeatedly select one model merely because it succeeded. Batch independent suitable slices by model, then rotate with recorded reasons and evidence. Never assign a large refactor to a local worker simply to meet a quota.
 
+The owner clarified that IGM is one shared engine/model across every client, not just this project's orch lane. Never start parallel local engine/model instances. Finish the local run, confirm gateway idleness, explicitly unload and confirm the previous engine has stopped before loading another. An idle snapshot is not a lease; inspect conflicts and unknown native occupancy rather than forcing a switch or blindly retrying. Batch work on the loaded eligible model when practical.
+
 Use `orch pick` against the scoped project roster and ledger. The owner's route preference overrides the kit's generic default ordering; record that reason when overriding a proposal. If routing/usage policies are active, carry their required profile/capability information rather than bypassing admission.
 
 ### Independent review assignments
@@ -235,6 +237,8 @@ The owner has authorized this first foundation batch:
 7. Prepare 02-a and the first persistent-host slice, then the per-controller transport spike before native-reference storage contracts are frozen.
 
 At each launch use a fresh exact-file handoff, not this entire plan as an unrestricted prompt. The controller reviews every worker diff and runs the checks independently. Additional model reviews satisfy coordinator workflow requirements where applicable; do not make broad, up-front route qualification the product's critical path.
+
+First-batch results and remaining gates: [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md). The next protocol/host handoff is [work-packages/CHO-02.md](work-packages/CHO-02.md); native toolchain and packaged-runtime readiness remain prerequisites for extraction.
 
 ## 9. Evidence and checkpoints
 

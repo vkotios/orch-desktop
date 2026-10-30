@@ -55,16 +55,16 @@ The inherited coordinator may support additional platforms or adapters. That doe
 
 The repository contains a redesigned React interface, a Node bridge, a Tauri scaffold, an event-normalization package, and the inherited `orch` engine. The last local UI work passed a frontend build, typecheck, and 12 package/UI tests. Those results do not establish native packaging or live CLI qualification. The independent review on 2026-10-30 observed a cold-discovery test timeout; a subsequent controller run passed all 12 tests. That variability is a test-isolation defect to fix, not grounds to erase the earlier dated result.
 
-Known gaps at specification time:
+Known gaps at specification time, with foundation progress tracked in [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md):
 
 - Native commands expose only discovery and dashboard operations; the complete UI does not work through the native transport.
 - Direct chat launches a new CLI process per turn and pastes a short transcript instead of resuming a native conversation.
 - UI conversation persistence uses browser storage rather than an application-owned session store.
 - Normalization logic is duplicated between the bridge and the nominal shared package.
 - Several direct-chat launch paths bypass approval mechanisms.
-- The standalone bridge defaults to all-interface listening, permissive CORS, and unauthenticated execution commands. A loopback-only review launch does not fix those source defaults.
+- At specification time the standalone bridge exposed all-interface listening and wildcard CORS. The foundation batch narrows development defaults to loopback and adds a hostile-web-origin request boundary; production private IPC and local-user authorization remain separate requirements.
 - The delegation form now orders claim, worktree creation, and run submission, with focused mock tests. Full lifecycle recovery and installed-app acceptance remain unqualified.
-- The current Git remote points to `cli-agentic-coordinator`; desktop/workspace additions are untracked, and the inherited CI selection ignores `apps/**` and `packages/**`.
+- The current Git remote points to `cli-agentic-coordinator`; the prototype is now checkpointed locally. The inherited coordinator selection ignores `apps/**` and `packages/**`; the foundation batch adds an independent desktop workflow. Hosted execution remains unverified until it runs.
 - The README describes capabilities more broadly than the current evidence supports.
 
 ## 4. Primary user journeys
