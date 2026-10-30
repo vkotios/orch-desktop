@@ -42,4 +42,9 @@ export function handleBridgeCommand(
   args?: Record<string, any>
 ): Promise<any>;
 
-export function createBridgeServer(): import('node:http').Server;
+export interface BridgeServerOptions {
+  dispatch?: (cmd: string, args?: Record<string, any>) => Promise<any>;
+  port?: number;
+}
+
+export function createBridgeServer(options?: BridgeServerOptions): import('node:http').Server;

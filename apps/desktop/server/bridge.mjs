@@ -1526,29 +1526,148 @@ export async function handleBridgeCommand(command, args = {}) {
 }
 
 /* ============================================================================
- * 7. HTTP + SSE SERVER
+ * 7. HTTP + SSE SERVER (LOCAL-ONLY DEVELOPMENT BRIDGE BOUNDARY)
+ * ----------------------------------------------------------------------------
+ * Development-only boundary. This is NOT local-user authentication and NOT a
+ * replacement for the native IPC production host (implemented separately).
+ * Removing CORS headers alone would not stop a hostile website's simple POST
+ * from executing privileged commands, so every /api request is gated BEFORE
+ * any command dispatch or SSE registration on:
+ *   - an explicit 127.0.0.1 bind (no automatic LAN host override),
+ *   - Host validated as a literal loopback host + the actual listening port
+ *     (DNS-rebinding resistance, including no-Origin requests),
+ *   - an explicit Origin allow-list (no wildcard, no suffix/prefix tricks,
+ *     no arbitrary loopback ports, no Origin:null),
+ *   - cross-site fetch metadata never bypassing the policy,
+ *   - POST /api/invoke requiring application/json with a bounded body.
  * ========================================================================= */
 
-export function createBridgeServer() {
-  return http.createServer(async (req, res) => {
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+const BRIDGE_LOOPBACK_HOST = '127.0.0.1';
+const BRIDGE_FRONTEND_PORT = 1420;
+const BRIDGE_MAX_BODY_BYTES = 1024 * 1024;
 
-    if (req.method === 'OPTIONS') {
-      res.writeHead(204);
+function resolveBridgePortHint(explicitPort) {
+  const n = Number(explicitPort ?? DEFAULT_PORT);
+  return Number.isInteger(n) && n > 0 && n < 65536 ? n : DEFAULT_PORT;
+}
+
+function getBridgeListenPort(server, portHint) {
+  try {
+    const addr = server.address();
+    if (addr && typeof addr === 'object' && Number.isInteger(addr.port)) return addr.port;
+  } catch {
+    /* ignore: fall back to the configured hint */
+  }
+  return portHint;
+}
+
+function isAllowedBridgeOrigin(origin, listenPort) {
+  if (typeof origin !== 'string') return false;
+  const raw = origin.trim();
+  if (!raw || raw === 'null') return false;
+  let parsed = null;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== 'http:') return false;
+  if (parsed.username || parsed.password) return false;
+  const host = parsed.hostname.toLowerCase();
+  if (host !== 'localhost' && host !== '127.0.0.1') return false;
+  if (!parsed.port) return false;
+  return parsed.port === String(BRIDGE_FRONTEND_PORT) || parsed.port === String(listenPort);
+}
+
+function isValidBridgeHost(hostHeader, listenPort) {
+  if (typeof hostHeader !== 'string') return false;
+  const raw = hostHeader.trim().toLowerCase();
+  const sep = raw.lastIndexOf(':');
+  if (sep === -1) return false;
+  const name = raw.slice(0, sep).replace(/^\[|\]$/g, '');
+  const port = raw.slice(sep + 1);
+  if (name !== 'localhost' && name !== '127.0.0.1') return false;
+  if (!/^\d+$/.test(port)) return false;
+  return Number(port) === Number(listenPort);
+}
+
+function checkBridgeBoundary(req, server, portHint) {
+  const listenPort = getBridgeListenPort(server, portHint);
+  if (!isValidBridgeHost(req.headers.host, listenPort)) {
+    return { ok: false, status: 403, error: 'Forbidden host' };
+  }
+  const fetchSite = req.headers['sec-fetch-site'];
+  if (typeof fetchSite === 'string' && fetchSite.trim().toLowerCase() === 'cross-site') {
+    return { ok: false, status: 403, error: 'Forbidden fetch metadata' };
+  }
+  const origin = req.headers.origin;
+  if (origin !== undefined) {
+    if (!isAllowedBridgeOrigin(origin, listenPort)) {
+      return { ok: false, status: 403, error: 'Forbidden origin' };
+    }
+    return { ok: true, origin };
+  }
+  return { ok: true, origin: null };
+}
+
+function sendBridgeJson(res, status, payload, origin) {
+  if (res.writableEnded || res.destroyed) return;
+  const headers = { 'Content-Type': 'application/json', Vary: 'Origin' };
+  if (origin) headers['Access-Control-Allow-Origin'] = origin;
+  res.writeHead(status, headers);
+  res.end(JSON.stringify(payload));
+}
+
+function isJsonContentType(req) {
+  const raw = String(req.headers['content-type'] || '');
+  return raw.split(';')[0].trim().toLowerCase() === 'application/json';
+}
+
+export function createBridgeServer(options = {}) {
+  const dispatch = typeof options?.dispatch === 'function' ? options.dispatch : handleBridgeCommand;
+  const portHint = resolveBridgePortHint(options?.port);
+  const server = http.createServer(async (req, res) => {
+    let url = null;
+    try {
+      url = new URL(req.url || '/', 'http://127.0.0.1');
+    } catch {
+      sendBridgeJson(res, 400, { ok: false, error: 'Malformed request target' }, null);
+      return;
+    }
+
+    if (req.method === 'OPTIONS' && url.pathname.startsWith('/api/')) {
+      const gate = checkBridgeBoundary(req, server, portHint);
+      if (!gate.ok) {
+        sendBridgeJson(res, gate.status, { ok: false, error: gate.error }, null);
+        return;
+      }
+      if (res.writableEnded) return;
+      const headers = {
+        Vary: 'Origin',
+        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type',
+        'Access-Control-Max-Age': '600',
+      };
+      if (gate.origin) headers['Access-Control-Allow-Origin'] = gate.origin;
+      res.writeHead(204, headers);
       res.end();
       return;
     }
 
-    const url = new URL(req.url || '/', 'http://127.0.0.1');
-
     if (req.method === 'GET' && url.pathname === '/api/events') {
-      res.writeHead(200, {
+      const gate = checkBridgeBoundary(req, server, portHint);
+      if (!gate.ok) {
+        sendBridgeJson(res, gate.status, { ok: false, error: gate.error }, null);
+        return;
+      }
+      const headers = {
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache',
         Connection: 'keep-alive',
-      });
+        Vary: 'Origin',
+      };
+      if (gate.origin) headers['Access-Control-Allow-Origin'] = gate.origin;
+      res.writeHead(200, headers);
       res.write(`event: connected\ndata: ${JSON.stringify({ ok: true })}\n\n`);
       sseClients.add(res);
       req.on('close', () => sseClients.delete(res));
@@ -1556,17 +1675,78 @@ export function createBridgeServer() {
     }
 
     if (req.method === 'POST' && url.pathname === '/api/invoke') {
+      const gate = checkBridgeBoundary(req, server, portHint);
+      if (!gate.ok) {
+        sendBridgeJson(res, gate.status, { ok: false, error: gate.error }, null);
+        return;
+      }
+      if (!isJsonContentType(req)) {
+        sendBridgeJson(res, 415, { ok: false, error: 'Content-Type must be application/json' }, gate.origin);
+        return;
+      }
+      // Bounded event-based body read: accumulation stops at
+      // BRIDGE_MAX_BODY_BYTES, overflow bytes are discarded, and request
+      // errors resolve (never an uncaught rejection).
       let body = '';
+      let receivedBytes = 0;
+      let tooLarge = false;
+      let readError = null;
       req.setEncoding('utf8');
-      for await (const chunk of req) body += chunk;
+      await new Promise((resolve) => {
+        req.on('data', (chunk) => {
+          if (tooLarge) return;
+          receivedBytes += Buffer.byteLength(chunk);
+          if (receivedBytes > BRIDGE_MAX_BODY_BYTES) {
+            tooLarge = true;
+            return;
+          }
+          body += chunk;
+        });
+        req.on('end', resolve);
+        req.on('error', (err) => {
+          readError = err;
+          resolve();
+        });
+        req.on('close', resolve);
+      });
+      if (tooLarge) {
+        // Answer, then close this connection so leftover bytes cannot
+        // corrupt a reused socket.
+        if (!res.writableEnded && !res.destroyed) {
+          const headers = { 'Content-Type': 'application/json', Vary: 'Origin', Connection: 'close' };
+          if (gate.origin) headers['Access-Control-Allow-Origin'] = gate.origin;
+          res.writeHead(413, headers);
+          res.end(JSON.stringify({ ok: false, error: 'Request body too large' }));
+        }
+        return;
+      }
+      if (readError) {
+        sendBridgeJson(res, 400, { ok: false, error: 'Request body could not be read' }, gate.origin);
+        return;
+      }
+      let parsed = null;
       try {
-        const { command, args } = JSON.parse(body || '{}');
-        const result = await handleBridgeCommand(command, args || {});
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ ok: true, result }));
+        parsed = JSON.parse(body || '{}');
+      } catch {
+        sendBridgeJson(res, 400, { ok: false, error: 'Malformed JSON' }, gate.origin);
+        return;
+      }
+      if (
+        !parsed ||
+        typeof parsed !== 'object' ||
+        Array.isArray(parsed) ||
+        typeof parsed.command !== 'string' ||
+        !parsed.command.trim() ||
+        (parsed.args !== undefined && (typeof parsed.args !== 'object' || parsed.args === null || Array.isArray(parsed.args)))
+      ) {
+        sendBridgeJson(res, 400, { ok: false, error: 'Invalid invoke shape' }, gate.origin);
+        return;
+      }
+      try {
+        const result = await dispatch(parsed.command, parsed.args || {});
+        sendBridgeJson(res, 200, { ok: true, result }, gate.origin);
       } catch (e) {
-        res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ ok: false, error: e.message || String(e) }));
+        sendBridgeJson(res, 400, { ok: false, error: (e && e.message) || String(e) }, gate.origin);
       }
       return;
     }
@@ -1574,11 +1754,18 @@ export function createBridgeServer() {
     res.writeHead(404, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: 'Not found' }));
   });
+  return server;
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const server = createBridgeServer();
-  server.listen(DEFAULT_PORT, '0.0.0.0', () => {
-    console.log(`[CHO-desktop Bridge] Listening on http://0.0.0.0:${DEFAULT_PORT} (repo: ${REPO_ROOT})`);
+  const port = resolveBridgePortHint(process.env.CHO_BRIDGE_PORT || 1421);
+  const server = createBridgeServer({ port });
+  server.listen(port, BRIDGE_LOOPBACK_HOST, () => {
+    const addr = server.address();
+    const shown =
+      addr && typeof addr === 'object'
+        ? `${addr.address}:${addr.port}`
+        : `${BRIDGE_LOOPBACK_HOST}:${port}`;
+    console.log(`[CHO-desktop Bridge] Listening on http://${shown} (repo: ${REPO_ROOT})`);
   });
 }
