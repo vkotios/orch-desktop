@@ -18,7 +18,7 @@ const localViteBin = path.join(desktopDir, 'node_modules', 'vite', 'bin', 'vite.
 const rootViteBin = path.join(repoRoot, 'node_modules', 'vite', 'bin', 'vite.js');
 const viteBin = fs.existsSync(localViteBin) ? localViteBin : rootViteBin;
 
-const vite = spawn(process.execPath, [viteBin, '--host', '0.0.0.0', '--port', '1420', '--strictPort'], {
+const vite = spawn(process.execPath, [viteBin, '--host', '127.0.0.1', '--port', '1420', '--strictPort'], {
   cwd: desktopDir,
   stdio: 'inherit',
   windowsHide: true,
