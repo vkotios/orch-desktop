@@ -2,7 +2,7 @@
 
 Updated: 2026-10-30. Integration branch: `codex/cho-v01-foundation`.
 
-Product contract: [specification](PRODUCT_SPEC.md). Sequence: [plan](IMPLEMENTATION_PLAN.md). Sonnet findings: [validated dispositions](reviews/FINDINGS_DISPOSITION.md). Next executable package: [CHO-02 protocol and host](work-packages/CHO-02.md).
+Product contract: [specification](PRODUCT_SPEC.md). Sequence: [plan](IMPLEMENTATION_PLAN.md). Sonnet findings: [validated dispositions](reviews/FINDINGS_DISPOSITION.md). Current package: [CHO-02 protocol and host](work-packages/CHO-02.md). Next step: the bounded CHO-04 controller capability spike.
 
 ## First foundation batch integrated
 
@@ -36,21 +36,36 @@ The original 12-test prototype result remains historical evidence. The isolated 
 - Native source/build artifacts: original graphite icon source with generated RGBA PNG/multisize ICO; Cargo.lock pins 410 packages including 409 checksummed crates.io dependencies; generated Tauri schemas are narrowly ignored. Native build-readiness changes are independently reviewed and integrated in `7e3cd37`.
 - On combined commit `7e3cd37`, `tauri build --debug --no-bundle --ci -- --locked` succeeds and produces a Windows executable. It creates a responding CHO window from an unrelated cwd. Computer Use window capture timed out waiting for app approval, so rendering remains unverified.
 - Private Node+JavaScript layout precheck succeeds with global Node absent from PATH and an unrelated cwd. The staged installed runtime is v24.11.1; this is a portability precheck, not a qualified redistribution version or packaged-host acceptance.
-- No current frontend/native transport was switched to the protocol yet. Bundled runtime preparation, Tauri resource resolution, owned persistent host and installer/real-conversation qualification remain open.
+- At that checkpoint no transport used the new protocol. The bundled-runtime and owned-host work below supersedes that state; installer and real-conversation qualification remain open.
 
 Combined application verification on `7e3cd37`: all 53 package tests, type checking, web build and locked Windows native debug build pass. Qwen completed seven independent review passes with no in-scope defect; its stale-doc follow-up was already resolved. Native window metadata and exact artifact hash are retained privately; pixel rendering remains unverified.
 
 Gateway retry: the unload succeeded on retry, with no model/native process left before Qwen loaded. Two small API prompts passed with at least 5.5 seconds between requests. That is a limited liveness check, not proof that request cadence caused the earlier timeout. Keep gateway calls controlled by this controller at least five seconds apart.
 
+## CHO-02 bundled native host foundation
+
+Integrated source: `cc065f4`. Windows x64 debug artifact verified; this is an early native-host milestone, not the M1 installed conversation.
+
+- The native shell owns one long-lived bundled Node 24.22.2 process, with fixed Tauri resource paths, versioned ready/ping handshake, exact generation/request correlation, bounded pipe frames and a serial native client. The per-request global Node launcher is removed.
+- Runtime preparation verifies pinned official Node and license SHA-256 values, stages a narrow public-source list and replaces complete resources with explicit backup-recovery reporting. Generated binaries, private profiles and runtime state stay outside Git.
+- Windows Job Object ownership cleans up the host and its descendants. Cancellation during a request poisons the connection without replay; queue admission shares the request deadline. Queued cancellation/expiry is reported as not sent. Cleanup errors are returned without false success.
+- This native phase admits health checks, harness discovery and dashboard reads. Controller conversations, native event forwarding and mutating coordinator commands still need the planned adapter, permissions and storage work.
+
+Combined verification: 90 package tests, type checking, web build, 11 locked Rust tests and a locked Windows native debug build pass. Shared fixtures check JavaScript/Rust UTF-16 ID/error-code limits and protocol compatibility. Owned fake-host probes cover cancellation after send and mid-frame, queue deadlines, cancellation before dispatch, normal shutdown, drop and descendant cleanup. A real packaged dashboard read through the Rust client succeeds.
+
+The exact debug artifact starts from an unrelated cwd with global Node absent and injected Node options removed. Normal exit, missing runtime, invalid ready PID, startup timeout and app crash checks all leave the owned host gone. Installer/upgrade, rendered-window and clean-machine release evidence remain open; OS-level termination/wait failures were checked in source, not injected into the kernel.
+
+Independent reviews and controller verification resolved the in-flight cancellation, admission deadline, cleanup reporting, host-queue and cross-language validation findings. Non-blocking maintenance and release-hardening items are tracked in [TASKS.md](../TASKS.md).
+
 ## Remaining work and holds
 
-- Compiler/native-executable readiness passes on the integrated branch. The bundled-runtime/installed-app smoke remains a prerequisite before host extraction grows; the current Rust router still launches global Node per request. Visual capture is unverified.
-- Next: pin and prepare the runtime resources, prove native resource resolution/handshake/exit, then build one persistent host. Continuing Claude/Codex transport/approval/cancellation spikes precede native-reference storage schema freeze.
+- The bundled-host debug milestone passes. Installed-artifact and rendered-window acceptance remain open; native controller conversations and mutating commands are not yet admitted.
+- Next: run the bounded CHO-04 Claude/Codex continuing-session, streamed-tools, approval and cancellation capability spike before CHO-03 freezes native-reference storage. Then wire the first streamed native conversation and complete M1 distribution evidence.
 - Full npm audit identifies 3 vulnerable development-tool packages around Vitest/mocker/tinypool (one moderate, two critical). The production-only audit reports 0. Qualify the major test-tool upgrade before publication; do not force-update the dependency graph blindly.
 - Source publication still needs provenance/license and public-example cleanup, release/privacy/security documentation and content checks. The remote still points to the coordinator repository. No push, remote change or publication occurred.
 - Unified launcher is intentionally loopback-only. Direct Vite retains the explicit environment override, while LAN product access remains outside v0.1. Verify native dev URL resolution with the Rust/WebView smoke.
 - Add a dedicated mid-body disconnect/error fixture with shared transport lifecycle tests. Existing AGY login hints, native transport completeness, direct-chat resume/approval and durable-event semantics remain mapped to CHO-02 through CHO-05.
 - Muse file edits succeeded, but its Windows worker shell was unavailable; controller-executed checks are the evidence. Aider native served-model attribution stays unknown; separate gateway receipts corroborate engine/selector/time. Neither a tiny successful task nor catalogue presence qualifies a whole workload.
-- IGM is one shared engine/model across all clients. Local jobs and engine changes are serial; the latest completed review/probes leave Kyojin Qwen loaded. dspark was confirmed unloaded before Qwen was started.
+- IGM is one shared engine/model across all clients. Local jobs and engine changes are serial; the final runtime reviews use Lucebox DeepSeek after Qwen was confirmed unloaded. Context and output budgets are explicit; declared gateway capacity is distinguished from measured per-slot capacity.
 
-The foundation batch is closed. CHO-02 advances through reviewed slices; its full native-host milestone and product release criteria remain open. Private coordinator evidence retains run/review records, launch failures, the controller-caused review-snapshot incident, gateway receipts and worktree retention decisions. The failed earlier Sonnet-auth run remains a separate coordinator bookkeeping follow-up.
+The foundation batch is closed. CHO-02 advances through reviewed slices; the bundled read-only host foundation is complete, while full native conversations and product release criteria remain open. Private coordinator evidence retains run/review records, launch failures, the controller-caused review-snapshot incident, gateway receipts and worktree retention decisions. The failed earlier Sonnet-auth run remains a separate coordinator bookkeeping follow-up. All runtime-batch runs have one recorded disposition and all detached reviews are finalized with clean containment. Runtime batch closeout remains blocked by a lane-busy admission missing spawned keeper identity; the claim and original receipts are preserved pending supported reconciliation. This is a coordinator closeout hold, not an unverified native-host source change.

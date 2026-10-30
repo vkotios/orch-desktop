@@ -2,21 +2,22 @@
 
 **CHO-desktop** combines the multi-harness desktop shell architecture of [`RapidAI/grok-build-desktop`](https://github.com/RapidAI/grok-build-desktop) with the multi-agent coordination engine of [`vkotios/cli-agentic-coordinator`](https://github.com/vkotios/cli-agentic-coordinator) (`orch`).
 
-It gives you a unified desktop application with two integrated modes that run directly on your **existing subscription CLIs** (`claude`, `grok`, `codex`, `muse`, `copilot`, `vibe`, `opencode`) without routing your traffic through third-party APIs or burning metered API keys:
+The product brings direct CLI conversations and the `orch` coordination dashboard into one desktop workspace. The current delivery is a prototype with a verified Windows native-host foundation; the two modes are still being completed:
 
-1. **Direct Multi-Harness Subscription Chat (`packages/acp-client` + `apps/desktop`):**
-   - Switch between **Claude Code**, **Grok CLI**, **OpenAI Codex**, **Muse Code**, **GitHub Copilot CLI**, **Mistral Vibe**, and **OpenCode** in one desktop interface.
-   - Spawns the native CLI executable directly (`shell: false`, never `.cmd` shims) with metered API environment variables (`ANTHROPIC_API_KEY`, `XAI_API_KEY`, `GROK_API_KEY`, `OPENAI_API_KEY`, `GITHUB_TOKEN`, etc.) explicitly stripped from the child process environment so every turn uses your saved subscription login.
-   - Streams real-time NDJSON / ACP events, tool calls, and served model provenance.
-2. **`orch` Coordinator Studio (`orch` + Desktop Dashboard):**
-   - Full graphical control plane for `orch`: claim Work Packages (`WP-*`), pick under-tested models (`orch pick`), launch isolated worktree worker runs (`orch run --no-window`), monitor live worker logs (`stdout.log`, `stderr.log`, `keeper.ndjson`), verify file scope (`orch scope`), run blinded cross-model reviews (`orch review --no-wait`), record gate verdicts, and adopt repositories (`orch adopt`).
-   - Includes a first-class **`grok` subscription adapter** ([`orch/src/adapters/grok.mjs`](orch/src/adapters/grok.mjs)) alongside Claude, Codex, Muse, Copilot, Vibe, and OpenCode.
+1. **Direct CLI conversations:** the browser prototype includes subscription CLI adapters and streamed-event normalization. Native continuing sessions, tools, approvals and cancellation need the planned capability checks and integration.
+2. **Coordinator studio:** the browser prototype exposes orchestration workflows. The native shell currently supports harness discovery and dashboard reads; mutating commands remain outside the admitted native route.
+
+The implementation builds on the existing coordinator and adapter code. Supported product behavior and release acceptance are tracked in the specification and status below.
+
+## Desktop implementation status
+
+The Windows x64 native host foundation is implemented: the app owns its bundled Node process and supports harness discovery and dashboard reads. Continuing native conversations, permissions, durable recovery and installer acceptance are still in progress. The browser preview retains prototype workflows. See the [product specification](docs/PRODUCT_SPEC.md) and [verified implementation status](docs/IMPLEMENTATION_STATUS.md) for the current boundary.
 
 ## Workspace Layout & Quick Commands
 
 ```text
 CHO-desktop/
-├── apps/desktop/          # React 19 + Vite + Tauri 2 + Node 24 Host Bridge GUI
+├── apps/desktop/          # React 18 + Vite + Tauri 2 + Node 24 Host Bridge GUI
 ├── packages/acp-client/   # ACP NDJSON frame codec & multi-harness stream normalizer
 ├── orch/                  # Bundled cli-agentic-coordinator engine, MCP server & CLI adapters
 └── hooks/                 # Guard hooks (blocks direct headless worker bypasses)
@@ -24,10 +25,14 @@ CHO-desktop/
 
 ```powershell
 # Install workspace dependencies
-npm install
+npm ci
 
 # Launch the CHO-desktop GUI + local Node 24 host bridge
 npm run dev
+
+# Build the native Windows debug artifact (Node 24, Rust MSVC, C++ tools,
+# Windows SDK and WebView2 required; Cargo must be available in this shell)
+npm run native:build -- --debug --no-bundle --ci -- --locked
 
 # Run typecheck, unit/integration tests, and production bundle build
 npm run typecheck

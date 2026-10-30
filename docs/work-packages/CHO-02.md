@@ -1,12 +1,12 @@
-# CHO-02 - Next executable package
+# CHO-02 - Native host and transport
 
 Prepared: 2026-10-30. Product authority: [PRODUCT_SPEC](../PRODUCT_SPEC.md), ARCH-01-04/07/08, RUN-01-03/07, SEC-01/02/07. Sequence authority: [implementation plan](../IMPLEMENTATION_PLAN.md).
 
-This package follows the first foundation batch. It is a scoped implementation handoff, not evidence that a native host already works. Muse and the two approved local Aider routes remain the implementation pool; Codex reviews actual diffs and runs verification.
+This package follows the first foundation batch. Its bundled read-only native-host foundation is now implemented and verified below. Continuing conversations, native event forwarding and installed-artifact acceptance remain open. The execution plan records the owner-authorized workforce; Codex reviews actual diffs and runs verification.
 
-## Entry facts and prerequisite
+## Entry facts at the start of this package
 
-- Current Rust shell registers only `discover_harnesses` and `orch_dashboard`. It starts global `node` for each request using a source-relative import. It cannot own continuing CLI sessions or stream the complete UI protocol.
+- At entry, the Rust shell registered only `discover_harnesses` and `orch_dashboard`. It started global `node` for each request using a source-relative import and could not own continuing CLI sessions or stream the complete UI protocol. The owned bundled-host foundation below replaces that launcher.
 - `src/lib/api.ts` calls arbitrary Tauri command names and subscribes to `cho:stream`. The browser transport separately POSTs `{command,args}` and uses SSE. Preserve the browser preview while moving both transports onto the same application protocol.
 - Development bridge hardening is a limited hostile-web-origin boundary. It does not provide production local-user authentication, persistent IPC, workspace authorization or controller approvals.
 - The controller verified existing Visual Studio 2022 C++ tools, Windows SDK and WebView2, then installed official Rustup 1.29.1 with the minimal Rust 1.99.1 MSVC toolchain, preserving PATH. The native source/build fixes are independently reviewed and integrated as `7e3cd37`, including the icon assets, Cargo.lock and generated-schema ignore. The combined branch passes all 53 package tests, typecheck/web build and a locked native debug build. It creates a responding CHO window from an unrelated cwd. Visual capture was not approved before timeout; no rendered-window, installed-artifact or bundled-runtime qualification is claimed.
@@ -35,9 +35,13 @@ Acceptance:
 3. Existing callers continue to work because this slice does not switch transports yet. Root typecheck/test/build pass independently.
 4. Controller reviews actual changed consumers and protocol semantics; independent review is against the precise committed candidate. Any proposed broader refactor returns to the controller before implementation.
 
-## Next: bundled-runtime smoke before host extraction
+## Bundled runtime and owned read-only host foundation - completed
 
-Compiler/native-window readiness is established; the packaged Node smoke remains open. Pin the official Node 24 distribution and verify its checksum/license, prepare ignored build resources, then add a bounded native resource resolver/startup smoke. Split resource preparation, Rust resolver and bootstrap/tests into exact-file handoffs. Prove the bundled runtime and JavaScript load from an arbitrary cwd with global Node unavailable; record handshake/failure and process-exit outcomes before growing the persistent-host extraction. The current executable still uses the old per-request global Node route and does not pass this acceptance.
+Integrated in `cc065f4`: official pinned Node 24.22.2 plus license/checksums, public-source staging, bounded Node bootstrap and Rust pipe client, Tauri resource resolution and Windows process-tree ownership. Native routes now share one persistent host for health/discovery/dashboard reads; the old global-Node launcher is removed.
+
+The combined source passes 90 package tests, type checking, web build, 11 locked Rust tests and the locked native debug build. Actual artifact checks cover arbitrary cwd/no global Node, ready/ping, normal exit, missing resources, wrong ready PID, startup timeout and app crash. A real packaged dashboard call succeeds through the Rust client. Owned fake-host checks cover queued and in-flight cancellation, partial replies, shared request deadlines, shutdown/drop and descendant cleanup. Detailed state and limits are in [implementation status](../IMPLEMENTATION_STATUS.md).
+
+This completes the early runtime/ownership foundation. It does not complete M1: continuing provider conversations, event forwarding, permission handling, durable sessions and installed-artifact acceptance remain in the accepted sequence.
 
 ## 02-b1 - One owned host process using fake boundaries
 
@@ -45,7 +49,7 @@ Worker: Muse, bounded M slices. Start after 02-a review and the native packaging
 
 Extract a transport-neutral dispatcher around the existing command implementation. Own startup/handshake, request correlation, single terminal responses, host generation, shutdown, restart and disconnected/unknown outcomes. Separate protocol stdout from diagnostics. Validate commands and workspace scope at the host boundary before any provider execution. Test with fake host/process boundaries first: no real subscriptions or worker orchestration required to prove the generic lifecycle.
 
-Following slices separately own Rust process lifecycle/resource resolution, command routing/event forwarding, frontend transport adaptation and an early installed-shell smoke. The Rust owner must terminate its host tree on normal exit and surface startup/handshake failure. Do not keep the current per-request global Node launcher as an unreported fallback.
+The Rust lifecycle/resource resolver and read-only command routing are now implemented and verified. Following slices still own native event forwarding, canonical controller execution, permissions, frontend transport completion and installed-shell conversation acceptance. Maintain bounded cleanup and visible startup/handshake failures; do not reintroduce a global-Node fallback.
 
 ## Next capability spike before session schema freeze
 

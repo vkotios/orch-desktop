@@ -1,7 +1,7 @@
 # CHO Desktop v0.1 — Implementation Plan
 
 Date: 2026-10-30  
-Status: First foundation batch authorized on 2026-10-30; execution in progress  
+Status: Foundation batch and bundled read-only native-host milestone complete locally; continuing native conversations and release qualification remain open
 Product contract: [PRODUCT_SPEC.md](PRODUCT_SPEC.md), initially committed as `d9cc7ef`  
 Planning branch: `codex/cho-v01-plan`; implementation branch: `codex/cho-v01-foundation`
 
@@ -45,6 +45,14 @@ Prefer the already loaded eligible local model when it avoids a reload, but do n
 The owner clarified that IGM is one shared engine/model across every client, not just this project's orch lane. Never start parallel local engine/model instances. Finish the local run, confirm gateway idleness, explicitly unload and confirm the previous engine has stopped before loading another. An idle snapshot is not a lease; inspect conflicts and unknown native occupancy rather than forcing a switch or blindly retrying. Batch work on the loaded eligible model when practical. Space controller-operated gateway API requests by at least five seconds as a precaution. Two spaced probes passed after the unload retry; this does not establish the cause of the earlier timeout, and native CLI request cadence is a separate concern.
 
 Use `orch pick` against the scoped project roster and ledger. The owner's route preference overrides the kit's generic default ordering; record that reason when overriding a proposal. If routing/usage policies are active, carry their required profile/capability information rather than bypassing admission.
+
+### Runtime batch workforce and context update (2026-10-30)
+
+When Muse exhausted its available quota, the owner authorized one GLM 5.3/Vibe slice, one Claude Sonnet 5.5 high native feature slice, a GPT 6.1 Terra high review subagent, and one larger implementation trial per local model. The Claude correction round remained within that same native feature. These are bounded exceptions for this batch, not permanent permission to expand the workforce. Actual worker changes and independent checks determine acceptance.
+
+Use the [IGM context-sizing procedure](https://github.com/vkotios/inference-gateway-manager/blob/main/skills/inference-gateway-manager/references/context-sizing.md) before local dispatch. Forecast instructions/tools, required artifacts and growth to the next verified milestone; begin with a 25% uncertainty margin. Separate the effective backend capacity, advertised client window and output/reasoning cap. Inspect the installed client's usable threshold, avoid reserving output twice, retain automatic compaction and reassess after two early compactions. Reuse a warm larger backend when suitable; change backend capacity only at a coordinated idle boundary.
+
+The successful Qwen parity trial used a 65,536-token client/backend window, a 16,384-token output cap and 49,152-token input budget. Native usage was 10,229 prompt plus 10,375 generation tokens, with actual edits and passing checks. The initial 8,192-token output attempt truncated without edits. The larger DeepSeek implementation trial also applied no edits and exhausted its generation cap; this does not demonstrate context overflow or general coding incapability. DeepSeek's subsequent bounded reviews use explicit client metadata; its reported backend context is declared rather than certified per-slot capacity. Preserve that uncertainty and the private usage receipts.
 
 ### Independent review assignments
 
