@@ -16,3 +16,6 @@ orch/roster.json
 # Logs and run output
 *.log
 bench-results*.json
+
+# Tauri generated schemas (build output)
+apps/desktop/src-tauri/gen/schemas/
