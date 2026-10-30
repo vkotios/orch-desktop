@@ -9,7 +9,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 import { resolveCliExe } from '../../../orch/src/exe.mjs';
@@ -47,7 +47,7 @@ export function broadcastEvent(event, payload) {
 }
 
 /* ============================================================================
- * 1. HARNESS DISCOVERY, LIVE MODEL DISCOVERY & SUBSCRIPTION AUTH INSPECTION
+ * 1. HARNESS DISCOVERY & SUBSCRIPTION AUTH INSPECTION
  * ========================================================================= */
 
 const HARNESS_CATALOG = [
@@ -263,43 +263,16 @@ function loadRosterModelsByCli() {
   return byCli;
 }
 
-let cachedAgyModels = null;
-function discoverAgyModels(exePath) {
-  if (cachedAgyModels) return cachedAgyModels;
-  if (!exePath) return [];
-  try {
-    const r = spawnSync(exePath, ['models'], {
-      encoding: 'utf8',
-      timeout: 3500,
-      windowsHide: true,
-      shell: false,
-    });
-    if (r.status === 0 && r.stdout) {
-      const models = [];
-      for (const line of r.stdout.split(/\r?\n/)) {
-        const m = /^([a-z0-9][a-z0-9._-]+)\s+/i.exec(line.trim());
-        if (m && !m[1].toLowerCase().startsWith('fetching')) {
-          models.push(m[1]);
-        }
-      }
-      if (models.length > 0) {
-        cachedAgyModels = models;
-        return models;
-      }
-    }
-  } catch {
-    /* ignore */
-  }
-  return [];
-}
-
+/**
+ * Passive harness overview: static catalog + configured roster models only.
+ * Performs no model-catalog subprocess and no network/provider calls.
+ */
 export function discoverHarnesses() {
   const rosterModels = loadRosterModelsByCli();
   return HARNESS_CATALOG.map((item) => {
     const executablePath = resolveHarnessExecutable(item.id);
     const fromRoster = rosterModels.get(item.id) || [];
-    const fromAgy = item.id === 'agy' && executablePath ? discoverAgyModels(executablePath) : [];
-    const mergedModels = [...new Set([...fromAgy, ...fromRoster, ...item.suggestedModels])];
+    const mergedModels = [...new Set([...fromRoster, ...item.suggestedModels])];
     const defaultModel = mergedModels[0] || item.defaultModel;
     return {
       ...item,
@@ -1252,23 +1225,28 @@ function loadRecentRunsFast(limit = 45, worktrees = []) {
   return out;
 }
 
+/**
+ * Passive coordinator overview. Launches no model-catalog subprocess and
+ * makes no network/provider calls; harnesses come from discoverHarnesses().
+ */
 export async function getOrchDashboard() {
   // The overview needs ownership records, not a Git status in every worktree.
   // Explicit scope checks still use the coordinator's live verification path.
   const claimsRes = await execOrchTool('claims', {});
   const worktrees = listWorktreeRecords({ stateRoot: resolveStateRoot() });
 
-  let roster = [];
   const rosterPath = fs.existsSync(path.join(REPO_ROOT, 'orch/roster.json'))
     ? path.join(REPO_ROOT, 'orch/roster.json')
     : path.join(REPO_ROOT, 'orch/roster.example.json');
+  const rosterSource = path.relative(REPO_ROOT, rosterPath).replace(/\\/g, '/');
+  let roster;
   try {
     roster = JSON.parse(fs.readFileSync(rosterPath, 'utf8')).models || [];
   } catch {
     roster = [];
   }
 
-  let catalog = [];
+  let catalog;
   try {
     catalog = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'model-catalog.json'), 'utf8')).models || [];
   } catch {
@@ -1280,7 +1258,7 @@ export async function getOrchDashboard() {
   return {
     repoRoot: REPO_ROOT,
     repositories: discoverRepositories(),
-    rosterSource: path.relative(REPO_ROOT, rosterPath).replace(/\\/g, '/'),
+    rosterSource,
     claims: claimsRes.output?.claims || (Array.isArray(claimsRes.output) ? claimsRes.output : []),
     worktrees: worktrees.map(({ id, wp, slice, repo, path: worktreePath, branch, baseline, removed_at }) => ({
       id, wp, slice, repo, path: worktreePath, branch, baseline, removed_at: removed_at || null,

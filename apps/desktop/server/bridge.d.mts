@@ -19,8 +19,11 @@ export interface DiscoveredRepository {
   adopted: boolean;
 }
 
+export const REPO_ROOT: string;
+
 export function discoverHarnesses(): DiscoveredHarness[];
 export function discoverRepositories(): DiscoveredRepository[];
+export function getOrchDashboard(): Promise<Record<string, any>>;
 
 export function extractCleanRunOutput(
   cli: string,
