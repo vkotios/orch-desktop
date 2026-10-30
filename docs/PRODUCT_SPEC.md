@@ -1,7 +1,7 @@
 # CHO Desktop — Product and Release Specification
 
-Version: 0.1 draft  
-Date: 2026-10-29  
+Version: 0.2 — validated-review revision  
+Date: 2026-10-30  
 Target: Windows-first public v0.1 release
 
 ## 1. Product intent
@@ -53,7 +53,7 @@ The inherited coordinator may support additional platforms or adapters. That doe
 
 ## 3. Current baseline
 
-The repository contains a redesigned React interface, a Node bridge, a Tauri scaffold, an event-normalization package, and the inherited `orch` engine. The last local UI work passed a frontend build, typecheck, and 12 package/UI tests. Those results do not establish native packaging or live CLI qualification.
+The repository contains a redesigned React interface, a Node bridge, a Tauri scaffold, an event-normalization package, and the inherited `orch` engine. The last local UI work passed a frontend build, typecheck, and 12 package/UI tests. Those results do not establish native packaging or live CLI qualification. The independent review on 2026-10-30 observed a cold-discovery test timeout; a subsequent controller run passed all 12 tests. That variability is a test-isolation defect to fix, not grounds to erase the earlier dated result.
 
 Known gaps at specification time:
 
@@ -125,6 +125,7 @@ flowchart LR
 | ARCH-05 | Use a pinned coordinator snapshot/version with recorded provenance and an explicit upstream update process. Keep desktop concerns outside coordinator internals wherever practical. |
 | ARCH-06 | Break the large UI component into conversation, composer, projects, connections, activity, diff/review, and dialog components. Keep subprocess and workflow policy out of presentation components. |
 | ARCH-07 | The production desktop path must not depend on Vite, a development server, fixed development ports, or source files outside the installed bundle. |
+| ARCH-08 | Before host extraction, check native build prerequisites and exercise a packaged-host smoke. The initial bundling approach is a pinned Node runtime plus packaged JavaScript resources managed by Tauri; record a change only if the smoke identifies a concrete reason. |
 
 The recommended host transport is stdin/stdout or a user-scoped local pipe, mediated by Tauri. The final transport choice must demonstrate request correlation, streaming, cancellation, bounded messages, and access control. A local HTTP server is not required for the desktop path.
 
@@ -134,7 +135,7 @@ The recommended host transport is stdin/stdout or a user-scoped local pipe, medi
 
 | ID | Requirement |
 | --- | --- |
-| SESSION-01 | Persist stable project, conversation, turn, and native session identifiers in application-owned storage. Use a schema with migrations and crash-safe writes; SQLite is the default implementation choice. |
+| SESSION-01 | Establish per-controller resume/approval/cancellation capabilities before freezing native-reference persistence contracts. Persist stable project, conversation, turn, and native session identifiers in application-owned storage. Use a schema with migrations and crash-safe writes; SQLite is the default implementation choice. |
 | SESSION-02 | Preserve messages, drafts, tool activity, selected harness/model, conversation title, archive state, and parent/child agent relationships across restarts. |
 | SESSION-03 | Resume native sessions for qualified controllers. An unsupported or failed resume must produce an explicit recovery choice, never a silent short-transcript substitute. |
 | SESSION-04 | Define whether model changes can continue a native session. Changing harnesses must create a new native session with an explicit context handoff unless genuine shared-session semantics exist. |
@@ -176,6 +177,7 @@ The recommended host transport is stdin/stdout or a user-scoped local pipe, medi
 | ORCH-06 | Provide a changed-file list and integrated diff viewer. Opening a file reference must resolve to the correct repository/worktree and show its path clearly. |
 | ORCH-07 | Keep finish, acceptance, integration, and cleanup distinct. Recording an accepted ledger entry alone must not imply review convergence or authorize Git mutations. |
 | ORCH-08 | Default activity to the active conversation/project. Historical or cross-project activity requires an explicit view and must not be presented as children of the current controller. |
+| ORCH-09 | The application host owns coordinator claims and execution admission. Controllers submit delegation proposals tied to a conversation, scope, route, and approval. A prompt alone is not enforcement: the selected native tool/approval/isolation boundary must prevent unapproved delegation from bypassing admission. If a controller cannot provide that boundary, gate that delegation capability instead of claiming it is enforced. |
 
 ## 7. Security and user control
 
@@ -250,7 +252,7 @@ The packages describe deliverables, not permission to launch worker CLIs or publ
 | CHO-07 | Installer/release pipeline, application branding, dependency notices, privacy/security documentation, and truthful support matrix. | CHO-01, CHO-02; release candidate also needs CHO-04–06 | Versioned release artifact, checksums, public-tree scan, and release notes matching qualified features. |
 | CHO-08 | Clean-machine acceptance and release-candidate fixes. | CHO-01–07 | All mandatory acceptance criteria below pass on the release artifact; known limitations documented. |
 
-Start with CHO-01 and CHO-02. Packaging must be exercised early, not postponed until all UI work is finished. Additional visual expansion should follow stable host/session contracts.
+Start with CHO-01 and CHO-02. Include working desktop CI coverage in the first CI slice, check native build/runtime bundling before host extraction, and investigate controller transports before freezing session persistence. Qualify worker routes only when the next real slice needs them. Additional visual expansion should follow stable host/session contracts. The primary implementation workforce is Muse CLI and Aider with the requested Qwen/dspark routes; the controller independently reviews their work.
 
 ## 12. Public repository and distribution
 

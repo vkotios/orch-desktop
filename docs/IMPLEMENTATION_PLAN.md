@@ -1,9 +1,9 @@
 # CHO Desktop v0.1 — Implementation Plan
 
 Date: 2026-10-30  
-Status: Ready for owner review; implementation has not started under this plan  
+Status: First foundation batch authorized on 2026-10-30; execution in progress  
 Product contract: [PRODUCT_SPEC.md](PRODUCT_SPEC.md), initially committed as `d9cc7ef`  
-Planning branch: `codex/cho-v01-plan`
+Planning branch: `codex/cho-v01-plan`; implementation branch: `codex/cho-v01-foundation`
 
 ## 1. Delivery approach
 
@@ -13,13 +13,13 @@ Codex is the controller: define contracts and handoffs, assign work through `orc
 
 The owner's preferred development pool is Muse CLI plus Aider using Kyojin Qwen3.8 Flash Next and Lucebox DeepSeek V4 dspark. This is the development workforce, separate from the CLIs that CHO will eventually expose to its users.
 
-The current request authorizes the specification commit and preparation of this plan. A completed plan is the boundary before implementation. This document does not create claims, change private model settings, load a model, launch a worker, authorize a push, or publish a release.
+The owner authorized validating the review, applying warranted corrections, and beginning implementation on 2026-10-30. Muse and the two requested Aider routes implement; the controller independently inspects the work, runs checks, and adjudicates findings. Existing detached review records are used where required by the coordinator workflow; they do not replace controller review. No push, remote creation, or release publication is authorized by this execution approval.
 
 ## 2. Current facts affecting execution
 
 | Observation | Consequence |
 | --- | --- |
-| The spec is committed, but the application, workspace manifests, and earlier integration changes are still uncommitted/untracked. | No implementation worktree may be created until its required source baseline is committed. Do not assume workers can see the current working directory's untracked files. |
+| The prototype and its required Grok/coordinator dependencies have been checkpointed on the foundation branch. | Use the exact checkpoint/integration commit for each worktree. This preserves the prototype; it does not certify native behaviour or publication readiness. |
 | `origin` still points to the coordinator repository. | Keep work local. Do not push CHO changes to that remote. Creating the intended CHO remote/public repository is a separate decision/action. |
 | The repository's private roster is an older snapshot: it lacks the requested Aider routes and dspark. | Prepare a minimal project execution roster; do not copy or activate the entire machine roster. |
 | The live gateway catalogue lists both requested models. The planning-time status showed Kyojin Qwen loaded and idle. | Model availability is discoverable, but readiness must be checked again before each launch. This snapshot is neither a lease nor a coding qualification. |
@@ -102,7 +102,7 @@ Use the protocol's attempt and review-round limits. A retry needs a recorded mat
 | M3 — Reviewed change | A conversation delegates into a worktree, displays progress/diffs, completes independent review, and presents explicit acceptance/integration decisions. | CHO-05 and the corresponding CHO-06 surfaces |
 | M4 — Public release candidate | Onboarding, interaction polish, installer/upgrade behaviour, documentation, and the release evidence pass clean-machine acceptance. | Remaining CHO-06, CHO-07, and CHO-08 |
 
-The first meaningful demonstration is M1, followed by restart/resume in M2. Do not spend the early implementation budget expanding decorative dashboards.
+The first meaningful demonstration is M1, followed by restart/resume in M2. Before 02-b extraction, inspect native toolchain readiness and prove the packaged runtime layout. Before CHO-03 freezes native-reference contracts, run a bounded capability spike for each initial controller. Do not spend the early implementation budget expanding decorative dashboards.
 
 ## 6. Preflight: preserve the baseline and prepare routes
 
@@ -112,9 +112,9 @@ Preflight is a prerequisite to CHO-01 execution, not an excuse for a broad envir
 
 Inventory the current application/workspace additions and the inherited Grok/coordinator changes separately. Verify that the intended desktop checkpoint contains all imports/resources required to build it, while excluding private configuration, logs, generated outputs, and credentials. Review the inherited modifications before including them; do not use `git add .` against the dirty checkout.
 
-Commit the approved desktop baseline with explicit paths. Keep unrelated changes untouched. Establish an integration branch and record the baseline SHA. Preserve upstream coordinator provenance. Do not rewrite history or change the existing remote as a side effect.
+Commit a dependency-complete prototype checkpoint with explicit paths. In particular, the desktop bridge imports the Grok adapter, so include that prerequisite before or with the desktop source rather than following a mechanically separated, broken commit sequence. Keep unrelated changes untouched. Establish an integration branch and record the baseline SHA. Preserve upstream coordinator provenance. Do not rewrite history or change the existing remote as a side effect.
 
-Exit: a fresh worktree from the recorded commit contains the intended app, can install dependencies reproducibly, and passes the documented baseline checks. A spec-only commit does not satisfy this exit.
+Exit: a fresh worktree from the recorded commit contains the intended app and can install dependencies reproducibly. Record known test failures rather than blocking the checkpoint needed to fix them. The foundation gate requires deterministic passing checks after the worker fixes; a spec-only commit does not satisfy this exit.
 
 ### P0.2 — Project execution profile
 
@@ -126,7 +126,7 @@ Exit: the profile is reproducible and confined to this project; all routes remai
 
 ### P0.3 — Bounded workforce qualification
 
-After implementation-plan approval, use owned disposable fixtures through `orch`: one small existing-file edit and new-file creation per requested Aider route, independent verification/scope checks, and a Muse implementation/review check. Qualify proposed OpenCode local reviewers on read-only review and attribution before they can close Muse slices. Reuse matching fresh evidence where available rather than rerunning a ceremonial suite.
+Qualify only the implementer/reviewer pair required by the next useful slice, through `orch`. Prefer a small real scoped task with independent checks over a separate ceremonial fixture. Reuse matching fresh evidence. Establish other Aider/reviewer routes just in time, with no requirement to qualify all candidates before desktop CI or native-host work starts. Keep the two local models serialized, and preserve unknown attribution honestly.
 
 Exit: the required implementer/reviewer pairing for the first slice is evidenced. An unavailable secondary candidate blocks only tasks needing that candidate, not unrelated planning or preparation.
 
@@ -140,16 +140,16 @@ Owner outcome: a fresh checkout contains the actual desktop product and checks i
 
 | Slice | Target scope | Preferred worker | Acceptance |
 | --- | --- | --- | --- |
-| 01-s1 | A single desktop CI workflow; existing workspace scripts as read context. | Muse, S/M | Installs root workspace dependencies and checks desktop/package typecheck, tests, and web build. No provider credentials/calls; coordinator tests remain separately visible. |
+| 01-s1 | An independent desktop CI workflow and its trigger/coverage verification; existing coordinator CI is read context. | Muse, S/M | Root dependency installation, typecheck, deterministic tests, and web build run for desktop changes. Prefer an independent unconditional workflow over changing the coordinator selector unnecessarily. No provider credentials/calls; coordinator checks stay visible. |
 | 01-s2 | Public configuration/example cleanup, split into one-file edits. | Aider Qwen/dspark, XS/S | No developer-specific paths or credentials in shipped examples; private settings and runtime evidence remain excluded. |
 | 01-s3 | One coordinator provenance/update-policy document. | Aider, S | Records the bundled source commit and local modifications; gives a bounded update/verification procedure. |
-| 01-s4 | CI coverage/selection integration and any necessary root scripts, split if needed. | Muse, S/M | Desktop changes trigger desktop checks; inherited coordinator coverage is preserved and ignored desktop paths do not create a false green. |
+| 01-s4 | Coverage verification is part of 01-s1, not a later unchecked gap. Any necessary root-script change is separately scoped. | Muse, S/M if needed | Prove the desktop job actually runs; do not infer this from a coordinator-only green. Inherited coordinator coverage is preserved. |
 
 Map to ARCH-05/07 and AC-14/15. Exit M0 only after the source checkpoint and required workforce profile are ready.
 
 ### CHO-02 — Persistent native host and local access boundary
 
-Settle the protocol before assigning consumer changes. Preserve the current browser preview while replacing its host implementation behind a compatibility boundary.
+First inspect native prerequisites and exercise the current shell/packaged-runtime smoke without silently installing system toolchains. Record missing prerequisites. Use a pinned Node runtime plus JavaScript resources as the initial bundling approach, subject to that smoke. Settle the protocol before consumer changes and preserve the browser preview during extraction.
 
 | Slice family | Scope and outcome | Preferred worker |
 | --- | --- | --- |
@@ -165,6 +165,8 @@ Map to ARCH-01–04/07, RUN-01–03/07, SEC-01/02/07, AC-01/11. Exit M1 requires
 
 ### CHO-03 — Durable sessions and recovery
 
+Prerequisite: perform the CHO-04 capability spike before freezing native session references. Record current native resume, streamed tools, approval, clarification, and cancellation mechanisms; help text alone is not behavioural qualification. Do not require every optional harness to pass before beginning generic storage work.
+
 1. Define the versioned project/conversation/native-session/turn/event/operation storage contracts and migration behaviour (Muse).
 2. Implement storage ownership, atomic writes, event cursors, and native reference persistence in bounded slices (Muse; settled one-file helpers/fixtures to Aider).
 3. Add explicit transcript import from the existing browser store without inventing native session identifiers (Muse, security/data review).
@@ -175,9 +177,9 @@ Map to SESSION-01–06, RUN-04/06, AC-03/04/07/13. Exit: sessions and drafts sur
 
 ### CHO-04 — Canonical controller adapters and permissions
 
-1. Define capabilities and normalized events once; remove duplicated parsing incrementally (Muse contract, then Aider for one settled parser/fixture at a time).
+1. Start with a bounded transport/capability spike for each initial controller before native-reference schema freeze. Then define capabilities and normalized events once; remove duplicated parsing incrementally (Muse contract, then Aider for one settled parser/fixture at a time).
 2. Build the first controller's native session/resume and approval/clarification path using current official CLI documentation and owned fixtures (Muse).
-3. Bind permission decisions to exact native requests/process generations and test reject/cancel/restart cases (Muse; two independent reviewers).
+3. Define host-owned claim/admission and a delegation-proposal approval boundary (ORCH-09), including how the native tool/approval/isolation mechanism prevents direct bypass. Do not assume adding claimant identities for each UI harness is necessary. Bind permission decisions to native requests/process generations and test reject/cancel/restart cases (Muse; two independent reviewers).
 4. Integrate the second controller against the same contract and qualify its actual supported modes (Muse integration; Aider for bounded consumers).
 5. Record tested versions, sign-in/access evidence, actual attribution, and capability limitations; evaluate Antigravity as a real controller candidate and clearly gate any incomplete routes.
 
@@ -222,17 +224,17 @@ Publish readiness is the aggregate of the evidence, not a worker's declaration o
 
 ## 8. First execution batch
 
-Keep the first authorization small and reviewable:
+The owner has authorized this first foundation batch:
 
-1. P0.1: review and commit the intended desktop baseline without unrelated changes or a push.
-2. P0.2: prepare the minimal private execution profile and record exact routes/settings without changing global configuration.
-3. P0.3: run only the bounded qualification necessary for the first implementer/reviewer pairs; do not qualify every installed model.
-4. CHO-01 / 01-s1: assign Muse the desktop CI workflow; independent qualified local review.
-5. CHO-01 / 01-s2 or 01-s3: assign an eligible single-file slice to the already loaded qualified Qwen route; Muse review.
-6. Rotate the next eligible local slice to dspark after the current local work and reviews are complete; Muse review.
-7. After CHO-01 is accepted, prepare CHO-02 / 02-a and the first persistent-host slice. Demonstrate early packaged execution before expanding the rest of the interface.
+1. Validate Sonnet's findings, preserve factual corrections, and commit a dependency-complete prototype checkpoint and the revised documents.
+2. Give Muse a bounded cold-discovery/test-isolation fix; preserve behaviour while removing real provider/executable/home-state dependencies from unit tests.
+3. Use the requested local Aider routes on real XS/S single-file tasks, such as loopback-safe development launch defaults and a truthful prototype README. Qualify only what the current task needs and rotate when the local lane is idle.
+4. Establish desktop CI and coverage together with an independent workflow. Controller review and actual local checks precede integration; hosted CI is not claimed until it runs.
+5. Make the development bridge safe for local use with a focused host-boundary slice and meaningful negative tests; retain the larger production IPC migration in CHO-02.
+6. Check native toolchain readiness and the bundled-runtime layout early. Record any system prerequisite that requires installation; do not treat a web build as a native smoke.
+7. Prepare 02-a and the first persistent-host slice, then the per-controller transport spike before native-reference storage contracts are frozen.
 
-At each launch use a fresh exact-file handoff, not this entire plan as an unrestricted prompt. The first batch produces a stable baseline, verified workforce pairing, and CI protection before the architectural migration.
+At each launch use a fresh exact-file handoff, not this entire plan as an unrestricted prompt. The controller reviews every worker diff and runs the checks independently. Additional model reviews satisfy coordinator workflow requirements where applicable; do not make broad, up-front route qualification the product's critical path.
 
 ## 9. Evidence and checkpoints
 
