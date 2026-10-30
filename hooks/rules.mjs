@@ -20,7 +20,7 @@ const deny = (reason, rule) => ({ block: true, reason, rule });
  * 1. WORKER LAUNCH
  * ===================================================================== */
 
-export const WORKERS = ['opencode', 'vibe', 'agy', 'codex', 'copilot', 'muse', 'aider', 'claude'];
+export const WORKERS = ['opencode', 'vibe', 'agy', 'codex', 'copilot', 'muse', 'aider', 'claude', 'grok'];
 
 /** npm / PyPI package names that install a worker CLI. */
 const PACKAGE_ALIASES = {
@@ -31,6 +31,8 @@ const PACKAGE_ALIASES = {
   'aider-chat': 'aider',
   'aider': 'aider',
   '@anthropic-ai/claude-code': 'claude',
+  '@xai/grok': 'grok',
+  'grok-cli': 'grok',
 };
 
 const HELP_FLAGS = new Set(['--help', '-h', '--version', '-v', '-V', '/?']);
@@ -54,6 +56,7 @@ export function programName(token) {
   t = t.split(/[\\/]/).pop() || '';
   t = t.toLowerCase().replace(/\.(exe|cmd|bat|ps1|com|js|mjs|cjs|py)$/, '');
   if (/^muse-bin-\d+\.\d+\.\d+-r\d+(?:\.\d+)?$/.test(t)) return 'muse';
+  if (t === 'grok-agent') return 'grok';
   return t;
 }
 
@@ -323,6 +326,9 @@ export function judgeWorker(cli, args) {
   } else if (cli === 'claude') {
     // headless print mode only: interactive `claude`, `claude mcp ...`, `claude auth ...` stay allowed
     if (hasFlag('-p', '--print')) launch = 'claude -p';
+  } else if (cli === 'grok') {
+    // headless print/exec mode only: interactive `grok`, `grok agent stdio`, `grok login` stay allowed
+    if (hasFlag('-p', '--print', '--prompt') || a.includes('exec')) launch = 'grok -p';
   }
   if (!launch) return ok;
   return { ...deny(`Blocked: a direct \`${launch}\` launch bypasses orch. ${orchHint(cli)}`, 'worker-launch'), cli };
@@ -356,7 +362,7 @@ export function collectVars(text, outer = {}) {
   return vars;
 }
 
-const WORKER_WORD = /(?:^|[\\/\s'"(])(opencode|vibe|agy|codex|copilot|muse(?:-bin-\d+\.\d+\.\d+-r\d+(?:\.\d+)?)?|aider|claude)(?:\.(?:exe|cmd|bat|ps1))?(?=$|[\s'")])/i;
+const WORKER_WORD = /(?:^|[\\/\s'"(])(opencode|vibe|agy|codex|copilot|muse(?:-bin-\d+\.\d+\.\d+-r\d+(?:\.\d+)?)?|aider|claude|grok(?:-agent)?)(?:\.(?:exe|cmd|bat|ps1))?(?=$|[\s'")])/i;
 
 /** Program name of a (resolved) token; an expression such as `(Get-Command codex).Source` names its worker. */
 function programOf(v) {

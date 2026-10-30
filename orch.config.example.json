@@ -18,6 +18,7 @@
     "agy": "C:/tools/agy/agy.exe",
     "aider": "C:/tools/aider/aider.exe",
     "claude": "C:/Users/example/.local/bin/claude.exe",
+    "grok": "C:/Users/example/.local/bin/grok.exe",
     "vibe": "C:/Users/example/.local/bin/vibe.exe",
     "wt": "wt.exe",
     "powershell": "powershell.exe"

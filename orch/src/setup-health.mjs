@@ -20,8 +20,9 @@ import {qualificationStatus} from './setup-qualification.mjs';
 import {controllerQualification} from './setup-controller.mjs';
 import {museBinaryInDirectory} from './adapters/muse.mjs';
 import {copilotStoreCandidates} from './adapters/copilot.mjs';
+import {grokFallbacks} from './adapters/grok.mjs';
 
-const MAX=1048576,HARNESSES=['claude','codex','opencode','vibe','agy','copilot','muse'];
+const MAX=1048576,HARNESSES=['claude','codex','opencode','vibe','agy','copilot','muse','grok'];
 const fail=()=>{throw new OrchError('Use setup health with a complete session and separate private configuration; no refresh or activation options','setup-health-refused');};
 const equal=isDeepStrictEqual;
 function input(file){const x=readSetupInput(file,{max:MAX}).raw;if(!x||typeof x!=='object'||Array.isArray(x))fail();return x;}
@@ -30,7 +31,7 @@ function existing(file){try{checkedSetupPath(file);return true;}catch{return fal
 // Discovery only inspects executable files, never runs the harness or login commands.
 export function discoverExecutables(config,base){return Object.fromEntries(HARNESSES.map(h=>{
   const override=process.env[`ORCH_${h.toUpperCase()}_EXE`]||config.exe?.[h];
-  const fallback=override?[]:['claude','vibe'].includes(h)?[path.join(process.env.USERPROFILE||os.homedir(),'.local','bin',h+(process.platform==='win32'?'.exe':''))]:h==='opencode'?npmPrefixes('opencode').map(p=>process.platform==='win32'?path.join(p,...OPENCODE_EXE_IN_PREFIX):path.join(p,'opencode')):h==='muse'?whereAll('muse.cmd').map(f=>museBinaryInDirectory(path.dirname(f))).filter(Boolean):h==='copilot'?copilotStoreCandidates():[];
+  const fallback=override?[]:['claude','vibe'].includes(h)?[path.join(process.env.USERPROFILE||os.homedir(),'.local','bin',h+(process.platform==='win32'?'.exe':''))]:h==='grok'?grokFallbacks():h==='opencode'?npmPrefixes('opencode').map(p=>process.platform==='win32'?path.join(p,...OPENCODE_EXE_IN_PREFIX):path.join(p,'opencode')):h==='muse'?whereAll('muse.cmd').map(f=>museBinaryInDirectory(path.dirname(f))).filter(Boolean):h==='copilot'?copilotStoreCandidates():[];
   const files=override?[typeof override==='string'?path.resolve(process.env[`ORCH_${h.toUpperCase()}_EXE`]?process.cwd():base,override):'']:[...(h==='muse'?[]:whereAll(h+(process.platform==='win32'?'.exe':''))),...fallback];
   return [h,files.some(f=>{try{return isNativeExecutable(f);}catch{return false;}})];
 }));}

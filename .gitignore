@@ -1,5 +1,7 @@
-# Dependencies
+# Dependencies & Build Outputs
 node_modules/
+dist/
+target/
 
 # Runtime state written by orch (never source)
 orch/.state/

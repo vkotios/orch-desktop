@@ -35,7 +35,9 @@
   "ignored": [
     "README.md",
     "LICENSE",
-    "docs/**"
+    "docs/**",
+    "packages/**",
+    "apps/**"
   ],
   "groups": {
     "contracts": {
@@ -195,7 +197,8 @@
       "files": [
         "orch/test/adapters.test.mjs",
         "orch/test/adapters-p04b.test.mjs",
-        "orch/test/adapter-claude.test.mjs"
+        "orch/test/adapter-claude.test.mjs",
+        "orch/test/adapter-grok.test.mjs"
       ],
       "inputs": [
         "orch/src/adapters/**",

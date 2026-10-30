@@ -13,7 +13,8 @@ import { validateCatalog } from './catalog.mjs';
 import { resolveOpencodeExe } from './adapters/opencode.mjs';
 import { resolveMuseExe } from './adapters/muse.mjs';
 import { resolveCopilotExe } from './adapters/copilot.mjs';
-const LIMIT = 65536, HARNESSES = ['claude', 'codex', 'opencode', 'vibe', 'copilot', 'muse'], WORKERS = ['codex', 'opencode', 'vibe', 'agy', 'copilot', 'muse', 'aider', 'claude'];
+import { grokFallbacks } from './adapters/grok.mjs';
+const LIMIT = 65536, HARNESSES = ['claude', 'codex', 'opencode', 'vibe', 'copilot', 'muse'], WORKERS = ['codex', 'opencode', 'vibe', 'agy', 'copilot', 'muse', 'aider', 'claude', 'grok'];
 const authority = { configChanges: false, adoptionChanges: false, credentialChanges: false, launchChanges: false };
 const sha = x => crypto.createHash('sha256').update(x).digest('hex');
 const encoded = x => JSON.stringify(x, null, 2) + '\n';
@@ -111,7 +112,7 @@ function validateAnswer(id, a, meta) {
             for (const r of values) {
                 object(r, ['harness', 'model', 'billing', 'permission']);
                 text(r.model, 200);
-                if (['copilot','muse','claude'].includes(r.harness) && r.billing !== 'subscription') fail('Claude, Copilot and Muse adapters currently support subscription routes only');
+                if (['copilot','muse','claude','grok'].includes(r.harness) && r.billing !== 'subscription') fail('Claude, Copilot, Grok and Muse adapters currently support subscription routes only');
                 if (!/^[A-Za-z0-9][A-Za-z0-9._:/+-]*$/.test(r.model) || !(role === 'controller' ? HARNESSES : WORKERS).includes(r.harness) || !['subscription', 'local', 'api'].includes(r.billing) || !['ask', 'allowed'].includes(r.permission) || role === 'controller' && r.harness !== meta.harness)
                     fail('Invalid harness/model/billing role route');
             }
@@ -196,7 +197,7 @@ export const readSetupInput = read;
 export const checkedSetupPath = safe;
 function discover(catalog, roster) {
     const harnesses = [...new Set([...HARNESSES, ...WORKERS])].map(harness => { try {
-        const exe = harness === 'opencode' ? resolveOpencodeExe() : harness === 'muse' ? resolveMuseExe() : harness === 'copilot' ? resolveCopilotExe() : resolveCliExe(harness, { fallbacks: env => ['vibe', 'claude'].includes(harness) ? [path.join(env.USERPROFILE || os.homedir(), '.local', 'bin', harness + '.exe')] : [] });
+        const exe = harness === 'opencode' ? resolveOpencodeExe() : harness === 'muse' ? resolveMuseExe() : harness === 'copilot' ? resolveCopilotExe() : harness === 'grok' ? resolveCliExe('grok', { fallbacks: grokFallbacks }) : resolveCliExe(harness, { fallbacks: env => ['vibe', 'claude'].includes(harness) ? [path.join(env.USERPROFILE || os.homedir(), '.local', 'bin', harness + '.exe')] : [] });
         const installed = fs.existsSync(exe) && fs.statSync(exe).isFile();
         return { harness, installed, status: installed ? 'installed-but-unqualified' : 'blocked', nextStep: installed ? 'Verify subscription authentication and exact model access before qualification' : 'Install the CLI and log in explicitly; setup does not perform either action' };
     }

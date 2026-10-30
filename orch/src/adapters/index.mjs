@@ -7,12 +7,13 @@ import copilot from './copilot.mjs';
 import muse from './muse.mjs';
 import aider from './aider.mjs';
 import claude from './claude.mjs';
+import grok from './grok.mjs';
 import { OrchError } from '../errors.mjs';
 
-export const ADAPTERS = { opencode, vibe, codex, agy, copilot, muse, aider, claude, fake };
+export const ADAPTERS = { opencode, vibe, codex, agy, copilot, muse, aider, claude, grok, fake };
 
 /** Adapters a real dispatch may name. `fake` exists only for the test suite. */
-export const PUBLIC_ADAPTERS = ['opencode', 'vibe', 'codex', 'agy', 'copilot', 'muse', 'aider', 'claude'];
+export const PUBLIC_ADAPTERS = ['opencode', 'vibe', 'codex', 'agy', 'copilot', 'muse', 'aider', 'claude', 'grok'];
 
 export function getAdapter(name) {
   const a = ADAPTERS[name];

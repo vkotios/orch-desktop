@@ -1,0 +1,32 @@
+{
+  "name": "@cho-desktop/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "dev:vite": "vite --port 1420 --strictPort",
+    "dev:bridge": "node server/bridge.mjs",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --port 1420 --strictPort",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@cho-desktop/acp-client": "*",
+    "@tauri-apps/api": "^2.2.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.2.0",
+    "@types/node": "^22.10.2",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "@vitejs/plugin-react": "^4.3.4",
+    "typescript": "^5.7.3",
+    "vite": "^6.0.7",
+    "vitest": "^3.0.7"
+  }
+}

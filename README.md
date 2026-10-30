@@ -1,7 +1,46 @@
-# cli-agentic-coordinator
+# CHO-desktop (`cli-agentic-coordinator` + Multi-Harness Desktop GUI)
+
+**CHO-desktop** combines the multi-harness desktop shell architecture of [`RapidAI/grok-build-desktop`](https://github.com/RapidAI/grok-build-desktop) with the multi-agent coordination engine of [`vkotios/cli-agentic-coordinator`](https://github.com/vkotios/cli-agentic-coordinator) (`orch`).
+
+It gives you a unified desktop application with two integrated modes that run directly on your **existing subscription CLIs** (`claude`, `grok`, `codex`, `muse`, `copilot`, `vibe`, `opencode`) without routing your traffic through third-party APIs or burning metered API keys:
+
+1. **Direct Multi-Harness Subscription Chat (`packages/acp-client` + `apps/desktop`):**
+   - Switch between **Claude Code**, **Grok CLI**, **OpenAI Codex**, **Muse Code**, **GitHub Copilot CLI**, **Mistral Vibe**, and **OpenCode** in one desktop interface.
+   - Spawns the native CLI executable directly (`shell: false`, never `.cmd` shims) with metered API environment variables (`ANTHROPIC_API_KEY`, `XAI_API_KEY`, `GROK_API_KEY`, `OPENAI_API_KEY`, `GITHUB_TOKEN`, etc.) explicitly stripped from the child process environment so every turn uses your saved subscription login.
+   - Streams real-time NDJSON / ACP events, tool calls, and served model provenance.
+2. **`orch` Coordinator Studio (`orch` + Desktop Dashboard):**
+   - Full graphical control plane for `orch`: claim Work Packages (`WP-*`), pick under-tested models (`orch pick`), launch isolated worktree worker runs (`orch run --no-window`), monitor live worker logs (`stdout.log`, `stderr.log`, `keeper.ndjson`), verify file scope (`orch scope`), run blinded cross-model reviews (`orch review --no-wait`), record gate verdicts, and adopt repositories (`orch adopt`).
+   - Includes a first-class **`grok` subscription adapter** ([`orch/src/adapters/grok.mjs`](orch/src/adapters/grok.mjs)) alongside Claude, Codex, Muse, Copilot, Vibe, and OpenCode.
+
+## Workspace Layout & Quick Commands
+
+```text
+CHO-desktop/
+├── apps/desktop/          # React 19 + Vite + Tauri 2 + Node 24 Host Bridge GUI
+├── packages/acp-client/   # ACP NDJSON frame codec & multi-harness stream normalizer
+├── orch/                  # Bundled cli-agentic-coordinator engine, MCP server & CLI adapters
+└── hooks/                 # Guard hooks (blocks direct headless worker bypasses)
+```
+
+```powershell
+# Install workspace dependencies
+npm install
+
+# Launch the CHO-desktop GUI + local Node 24 host bridge
+npm run dev
+
+# Run typecheck, unit/integration tests, and production bundle build
+npm run typecheck
+npm test
+npm run build
+```
+
+---
+
+## Coordinator Engine (`orch`) Overview
 
 One orchestrator agent in your chosen harness coordinating **worker coding CLIs** (opencode, vibe,
-codex, agy, Copilot, Muse, aider, Claude) on Windows. The orchestrator specifies, launches, monitors, reviews and accepts; the workers
+codex, grok, agy, Copilot, Muse, aider, Claude) on Windows. The orchestrator specifies, launches, monitors, reviews and accepts; the workers
 write the code. The `orch` tool is the only way work gets launched, and it keeps the record.
 
 What `orch` enforces:
@@ -67,13 +106,14 @@ escalates.
   | [opencode](https://opencode.ai) | local models through an OpenAI-compatible gateway (llama.cpp, llama-swap, LocalAI, ...) | npm package `opencode-ai`; orch launches the real `opencode.exe`, not the `.cmd` shim |
   | vibe (Mistral) | cloud implementer / reviewer | the model is selected through the worktree's `.vibe/config.toml` |
   | codex (OpenAI) | cloud implementer / reviewer | `codex exec`, model always pinned |
+  | grok (xAI / Grok Build) | subscription implementer / reviewer | headless `grok -p --output-format stream-json` on saved login; strips `XAI_*` / `GROK_API_*` keys; read-only plan mode for reviewers |
   | agy (Gemini) | cloud reviewer | print mode, plan mode |
   | GitHub Copilot CLI | subscription implementer / reviewer | direct native executable; explicit model or Auto access route |
   | Muse Code (Meta) | subscription implementer / reviewer | native versioned executable; saved device sign-in |
   | aider | cloud implementer (BYOK/API-key) | headless `--message-file`; model always pinned; never commits (review role unsupported) |
   | Claude Code | subscription implementer / reviewer (for non-Claude controllers) | headless `claude -p` on the saved login; no settings, hooks or MCP; reviewer has read-only tools |
 
-  Copilot and Muse currently support subscription workers and reviewers; controller support is separate.
+  Copilot, Muse, and Grok support subscription workers and reviewers; controller support is separate.
   Per-CLI details and verified quirks: `docs/CLI_GUIDE.md`.
 
 ## Install
