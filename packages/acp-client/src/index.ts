@@ -294,3 +294,9 @@ export {
   type CodexAppServerEvent,
   type CodexAppServerOutcome,
 } from "./codex-app-server";
+
+export {
+  normalizeClaudeStreamEvent,
+  type ClaudeStreamContext,
+  type ClaudeStreamEvent,
+} from "./claude-stream";
