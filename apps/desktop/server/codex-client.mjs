@@ -93,6 +93,8 @@ function isPlainObject(value) {
 
 // Accepts a bare array or { models: [...] } / { data: [...] }; keeps valid
 // nonempty ids only, defaults a missing name to the id, never invents flags.
+// Real native model/list returns { data: [{ id, displayName, ... }] }; the
+// narrow { models: [...] } shape is preserved for compatibility.
 function normalizeModels(listed) {
   const raw = Array.isArray(listed)
     ? listed
@@ -104,13 +106,22 @@ function normalizeModels(listed) {
   const models = [];
   for (const entry of raw) {
     if (!isPlainObject(entry) || typeof entry.id !== "string" || entry.id.length === 0) continue;
-    const name = typeof entry.name === "string" && entry.name.length > 0 ? entry.name : entry.id;
+    const name = typeof entry.name === "string" && entry.name.length > 0
+      ? entry.name
+      : typeof entry.displayName === "string" && entry.displayName.length > 0
+        ? entry.displayName
+        : entry.id;
     models.push(Object.freeze({ id: entry.id, name, isDefault: entry.isDefault === true }));
   }
   return Object.freeze(models);
 }
 
 export async function openCodexClient(options) {
+  // The 15s startup budget includes synchronous preparation (workspace
+  // resolve, exe resolve, spawn): it cannot preempt synchronous FS/resolve
+  // callbacks, so elapsed preparation is accounted against the budget and a
+  // late launch fails instead of starting the handshake with no time left.
+  const startupStart = Date.now();
   const opts = options ?? {};
   const workspace = resolveWorkspace(opts.workspace);
   const resolveExe = opts.resolveExe ?? resolveCodexExe;
@@ -220,6 +231,20 @@ export async function openCodexClient(options) {
     failSticky(new Error(`Codex connection failed: ${err?.message ?? err}; ${stderrContext()}`));
   }
 
+  // Records a stdio stream fault truthfully. Before close it is fatal; while
+  // closing/closed it is recorded so close can report it instead of claiming
+  // a clean close. Handlers stay attached through EOF/kill waits and after
+  // peer.close so a late stdin/stdout/stderr error is never unhandled.
+  function onStdioError(err) {
+    const error = err instanceof Error ? err : new Error(String(err));
+    if (state.spawnError === null) state.spawnError = error;
+    if (state.closing || state.closed) return;
+    failSticky(new Error(`Codex stdio error: ${error.message}; ${stderrContext()}`));
+  }
+
+  const stdioStreams = () => [child.stdin, child.stdout, child.stderr]
+    .filter((stream) => stream !== null && stream !== undefined && typeof stream?.on === "function");
+
   // Guards are registered before any asynchronous error can arrive.
   child.on("error", onChildError);
   child.on("exit", onChildExit);
@@ -234,6 +259,9 @@ export async function openCodexClient(options) {
   if (child.stderr !== null && child.stderr !== undefined && typeof child.stderr.on === "function") {
     child.stderr.on("data", onStderr);
   }
+  for (const stream of stdioStreams()) {
+    stream.on("error", onStdioError);
+  }
 
   async function handshake(peer) {
     const step = async (name, fn) => {
@@ -245,10 +273,14 @@ export async function openCodexClient(options) {
     };
     await step("initialize", () => peer.request("initialize", { clientInfo: { ...CLIENT_INFO } }));
     await step("initialized", () => peer.notify("initialized"));
-    const account = await step("account/read", () => peer.request("account/read", { refreshToken: false }));
-    if (!isPlainObject(account) || account.type !== "chatgpt") {
-      const seen = isPlainObject(account) && typeof account.type === "string"
-        ? ` (reported type ${JSON.stringify(account.type)})`
+    // Real account/read RESULT is { account: { type, ... }, requiresOpenaiAuth }.
+    // Only the nested account.type decides; a null/missing account and an
+    // apiKey login both reject. No email/plan/token is read or printed.
+    const accountResult = await step("account/read", () => peer.request("account/read", { refreshToken: false }));
+    const nestedAccount = isPlainObject(accountResult) ? accountResult.account : null;
+    if (!isPlainObject(nestedAccount) || nestedAccount.type !== "chatgpt") {
+      const seen = isPlainObject(nestedAccount) && typeof nestedAccount.type === "string"
+        ? ` (reported type ${JSON.stringify(nestedAccount.type)})`
         : "";
       throw new Error(`Codex saved sign-in is not a ChatGPT subscription${seen}. Sign in with \`codex login\` using ChatGPT and retry; no automatic login was attempted.`);
     }
@@ -256,23 +288,32 @@ export async function openCodexClient(options) {
     return normalizeModels(listed);
   }
 
-  // "closed" covers an observed child close; "error" covers a spawn failure;
-  // anything else is a timeout. Never leaves timers or listeners behind.
+  // "closed" covers an observed child close; "error" covers a spawn or stdio
+  // failure; anything else is a timeout. Never leaves timers or transient
+  // listeners behind; persistent stdio guards stay attached.
   function waitChildSettled(ms) {
     if (state.sawClose) return Promise.resolve("closed");
     if (state.spawnError !== null) return Promise.resolve("error");
     return new Promise((resolve) => {
       let timer = null;
+      const transient = stdioStreams();
       const cleanup = () => {
         if (timer !== null) clearTimeout(timer);
         child.removeListener("close", onClose);
         child.removeListener("error", onError);
+        for (const stream of transient) {
+          if (typeof stream.removeListener === "function") stream.removeListener("error", onStdioWaitError);
+        }
       };
       const onClose = () => {
         cleanup();
         resolve("closed");
       };
       const onError = () => {
+        cleanup();
+        resolve("error");
+      };
+      const onStdioWaitError = () => {
         cleanup();
         resolve("error");
       };
@@ -283,6 +324,9 @@ export async function openCodexClient(options) {
       if (typeof timer.unref === "function") timer.unref();
       child.on("close", onClose);
       child.on("error", onError);
+      for (const stream of transient) {
+        stream.on("error", onStdioWaitError);
+      }
     });
   }
 
@@ -292,6 +336,9 @@ export async function openCodexClient(options) {
     child.removeListener("close", onChildClose);
     if (child.stderr !== null && child.stderr !== undefined && typeof child.stderr.removeListener === "function") {
       child.stderr.removeListener("data", onStderr);
+    }
+    for (const stream of stdioStreams()) {
+      if (typeof stream.removeListener === "function") stream.removeListener("error", onStdioError);
     }
   }
 
@@ -305,6 +352,12 @@ export async function openCodexClient(options) {
         // Already torn down.
       }
     }
+    // On cleanup failure the child state is unknown: keep the harmless
+    // guards attached and deliver the owner fatal so the host job owner can
+    // terminate the tree. Detach only after an observed close. The 3s EOF
+    // plus 1s SIGKILL bounds and messages are preserved; killing the owned
+    // PID is never reported as whole-tree termination.
+    let cleanupError = null;
     try {
       if (child.stdin !== null && child.stdin !== undefined && typeof child.stdin.end === "function") {
         try {
@@ -334,9 +387,14 @@ export async function openCodexClient(options) {
           );
         }
       }
-    } finally {
-      detachGuards();
+    } catch (err) {
+      cleanupError = err instanceof Error ? err : new Error(String(err));
     }
+    if (cleanupError !== null) {
+      deliverFatal(cleanupError);
+      throw cleanupError;
+    }
+    detachGuards();
   }
 
   function doClose() {
@@ -355,10 +413,15 @@ export async function openCodexClient(options) {
       timeoutMs: REQUEST_TIMEOUT_MS,
     });
     state.peer = peer;
+    const elapsedPrep = Date.now() - startupStart;
+    const remainingStartupMs = STARTUP_TIMEOUT_MS - elapsedPrep;
+    if (remainingStartupMs <= 0) {
+      throw new Error(`codex client startup timed out after 15s (resolve, spawn, and metadata); ${stderrContext()}`);
+    }
     const startupTimedOut = new Promise((_, reject) => {
       startupTimer = setTimeout(() => {
         reject(new Error(`codex client startup timed out after 15s (resolve, spawn, and metadata); ${stderrContext()}`));
-      }, STARTUP_TIMEOUT_MS);
+      }, remainingStartupMs);
       if (typeof startupTimer.unref === "function") startupTimer.unref();
     });
     try {

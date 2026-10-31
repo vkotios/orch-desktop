@@ -224,6 +224,12 @@ export function createNativeRpc(options) {
   function pump() {
     while (!state.closed && !state.waitingDrain && state.queue.length > 0) {
       const node = state.queue[0];
+      // Claim dispatch ownership before entering output.write: a legitimate
+      // synchronous PassThrough loopback may deliver the matching response
+      // (or a fatal) reentrantly during write, and it must see this request
+      // as already handed over (OUTCOME_UNKNOWN), never as never-sent.
+      // Genuinely queued entries stay unwritten.
+      if (node.entry !== null) node.entry.written = true;
       let accepted;
       try {
         accepted = output.write(node.bytes, (err) => onWriteSettled(err));
@@ -231,13 +237,15 @@ export function createNativeRpc(options) {
         // A synchronous throw may follow a partial handover, so a request
         // given to write here counts as written: teardown fails it
         // OUTCOME_UNKNOWN, never NOT_SENT.
-        if (node.entry !== null) node.entry.written = true;
         fatal(err instanceof Error ? err : new Error(String(err)));
         return;
       }
+      // A reentrant sync response/error may have closed the peer during
+      // write: do not touch the queue or pump further after closure, so a
+      // sync/async callback fatal can never write after closure.
+      if (state.closed) return;
       state.queue.shift();
-      if (node.entry !== null) node.entry.written = true;
-      else {
+      if (node.entry === null) {
         if (node.responseId !== undefined) state.pendingIn.delete(node.responseId);
         node.resolve();
       }

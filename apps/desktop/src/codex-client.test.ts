@@ -21,7 +21,18 @@ class FakeChild extends EventEmitter {
   kill = vi.fn(() => true);
 }
 const orderOf = (c: FakeChild) => (c as unknown as { order: string[] }).order;
-function autoReply(child: FakeChild, accountType: unknown = "chatgpt") {
+// Real native shapes (Codex 0.156.1): account/read RESULT is
+// { account: { type, ... }, requiresOpenaiAuth }, model/list RESULT is
+// { data: [{ id, displayName, ... }], nextCursor }. Replies stay synchronous
+// to exercise the legitimate PassThrough loopback path. No default account:
+// an unspecified spec must read as unsigned (null), never as chatgpt.
+function accountFixture(spec: unknown) {
+  if (spec === "chatgpt") return { account: { type: "chatgpt", email: "private", planType: "pro" }, requiresOpenaiAuth: true };
+  if (spec === "apiKey") return { account: { type: "apiKey" } };
+  if (spec === null || spec === undefined) return { account: null };
+  return spec as Record<string, unknown>;
+}
+function autoReply(child: FakeChild, accountSpec: unknown) {
   const order: string[] = [];
   (child as unknown as { order: string[] }).order = order;
   let buf = "";
@@ -37,17 +48,17 @@ function autoReply(child: FakeChild, accountType: unknown = "chatgpt") {
       if (msg.id === undefined) { order.push(`notify:${msg.method}`); continue; }
       order.push(msg.method ?? "?");
       const result = msg.method === "initialize" ? {}
-        : msg.method === "account/read" ? { type: accountType, login: "saved" }
-        : { models: [{ id: "gpt-5", name: "GPT-5", isDefault: true }, { id: "", name: "bad" }, { id: "o4-mini" }] };
+        : msg.method === "account/read" ? accountFixture(accountSpec)
+        : { data: [{ id: "gpt-6-sol", displayName: "GPT-6 Sol", isDefault: false }, { id: "", displayName: "bad" }, { id: "o4-mini" }], nextCursor: null };
       child.stdout.write(frame({ id: msg.id, result }));
     }
   });
 }
-function fakeSpawn(seen: Array<{ exe: string; args: string[]; options: any; child: FakeChild }>, accountType?: unknown, auto = true): SpawnFn {
+function fakeSpawn(seen: Array<{ exe: string; args: string[]; options: any; child: FakeChild }>, accountSpec?: unknown, auto = true): SpawnFn {
   return ((exe: string, args: string[], options: any) => {
     const child = new FakeChild();
     seen.push({ exe, args, options, child });
-    if (auto) autoReply(child, accountType);
+    if (auto) autoReply(child, accountSpec);
     return child;
   }) as unknown as SpawnFn;
 }
@@ -70,7 +81,7 @@ describe("codex client process connection", () => {
     const restore = setEnv({ OPENAI_API_KEY: "parent-secret", openai_org_id: "x", NODE_OPTIONS: "--inspect", IGM_CONTROL_KEY: "k", CODEX_API_KEY: "bare", FOO_API_KEY: "k2", FOO_BASE_URL: "u", CODEX_HOME: "saved-home", KEEP_ME: "yes" });
     try {
       const seen: Array<{ exe: string; args: string[]; options: any; child: FakeChild }> = [];
-      const spawnImpl = fakeSpawn(seen);
+      const spawnImpl = fakeSpawn(seen, "chatgpt");
       const client = await openCodexClient({ workspace: dir, spawnImpl, resolveExe: () => EXE });
       expect(seen).toHaveLength(1);
       expect(seen[0].exe).toBe(EXE);
@@ -87,7 +98,7 @@ describe("codex client process connection", () => {
       expect(env["KEEP_ME"]).toBe("yes");
       expect(process.env.OPENAI_API_KEY).toBe("parent-secret");
       expect(orderOf(seen[0].child)).toEqual(["initialize", "notify:initialized", "account/read", "model/list"]);
-      expect(client.models).toEqual([{ id: "gpt-5", name: "GPT-5", isDefault: true }, { id: "o4-mini", name: "o4-mini", isDefault: false }]);
+      expect(client.models).toEqual([{ id: "gpt-6-sol", name: "GPT-6 Sol", isDefault: false }, { id: "o4-mini", name: "o4-mini", isDefault: false }]);
       expect(client.pid).toBe(4242);
       expect(client.workspace).toBe(realpathSync(dir));
       expect(client.connectionId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
@@ -121,11 +132,11 @@ describe("codex client process connection", () => {
   });
 
   it("rejects non-chatgpt accounts without auto-login and cleans up", async () => {
-    for (const accountType of ["apiKey", undefined]) {
+    for (const accountSpec of ["apiKey" as const, null, undefined]) {
       const dir = tempDir();
       try {
         const seen: Array<{ exe: string; args: string[]; options: any; child: FakeChild }> = [];
-        const pending = openCodexClient({ workspace: dir, spawnImpl: fakeSpawn(seen, accountType), resolveExe: () => EXE, onFatal: vi.fn() });
+        const pending = openCodexClient({ workspace: dir, spawnImpl: fakeSpawn(seen, accountSpec), resolveExe: () => EXE, onFatal: vi.fn() });
         seen[0].child.stdin.on("finish", () => seen[0].child.emit("close", 0, null));
         await expect(pending).rejects.toThrow(/ChatGPT.*no automatic login/i);
         expect(seen[0].child.stdin.writableEnded).toBe(true);
@@ -171,7 +182,7 @@ describe("codex client process connection", () => {
     try {
       const seen: Array<{ exe: string; args: string[]; options: any; child: FakeChild }> = [];
       const onFatal = vi.fn();
-      const client = await openCodexClient({ workspace: dir, spawnImpl: fakeSpawn(seen), resolveExe: () => EXE, onFatal });
+      const client = await openCodexClient({ workspace: dir, spawnImpl: fakeSpawn(seen, "chatgpt"), resolveExe: () => EXE, onFatal });
       const child = seen[0].child;
       child.stdout.emit("error", new Error("cable cut"));
       await tick();
@@ -194,13 +205,54 @@ describe("codex client process connection", () => {
     try {
       const dir = tempDir();
       const seen: Array<{ exe: string; args: string[]; options: any; child: FakeChild }> = [];
-      const client = await openCodexClient({ workspace: dir, spawnImpl: fakeSpawn(seen), resolveExe: () => EXE });
+      const client = await openCodexClient({ workspace: dir, spawnImpl: fakeSpawn(seen, "chatgpt"), resolveExe: () => EXE });
       const assertion = expect(client.close()).rejects.toThrow(/did not exit/);
       await vi.advanceTimersByTimeAsync(3_000);
       expect(seen[0].child.kill).toHaveBeenCalledTimes(1);
       await vi.advanceTimersByTimeAsync(1_000);
       await assertion;
       await expect(client.close()).rejects.toThrow(/did not exit/);
+      rmSync(dir, { recursive: true, force: true });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("records a stdio error during close truthfully and delivers owner fatal once", async () => {
+    const dir = tempDir();
+    try {
+      const seen: Array<{ exe: string; args: string[]; options: any; child: FakeChild }> = [];
+      const onFatal = vi.fn();
+      const client = await openCodexClient({ workspace: dir, spawnImpl: fakeSpawn(seen, "chatgpt"), resolveExe: () => EXE, onFatal });
+      const child = seen[0].child;
+      const closing = client.close();
+      child.stderr.emit("error", new Error("late stderr cut"));
+      await expect(closing).rejects.toThrow(/process error/);
+      expect(onFatal).toHaveBeenCalledTimes(1);
+      child.stdin.emit("error", new Error("late stdin"));
+      child.stdout.emit("error", new Error("late stdout"));
+      await tick();
+      expect(onFatal).toHaveBeenCalledTimes(1);
+      await expect(client.close()).rejects.toThrow(/process error/);
+      expect(onFatal).toHaveBeenCalledTimes(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("delivers owner fatal once when close times out with state unknown", async () => {
+    vi.useFakeTimers();
+    try {
+      const dir = tempDir();
+      const seen: Array<{ exe: string; args: string[]; options: any; child: FakeChild }> = [];
+      const onFatal = vi.fn();
+      const client = await openCodexClient({ workspace: dir, spawnImpl: fakeSpawn(seen, "chatgpt"), resolveExe: () => EXE, onFatal });
+      const assertion = expect(client.close()).rejects.toThrow(/did not exit/);
+      await vi.advanceTimersByTimeAsync(4_000);
+      await assertion;
+      expect(onFatal).toHaveBeenCalledTimes(1);
+      await expect(client.close()).rejects.toThrow(/did not exit/);
+      expect(onFatal).toHaveBeenCalledTimes(1);
       rmSync(dir, { recursive: true, force: true });
     } finally {
       vi.useRealTimers();
