@@ -1,6 +1,6 @@
 # CHO-04 — Controller capability spike and first transport slice
 
-Updated: 2026-10-31. Status: first native Codex debug conversation implemented and verified, including the rendered window. The second controller remains open. No session storage schema freeze yet.
+Updated: 2026-10-31. Status: the first native Codex conversation is integrated and rendered-verified. A separate Claude candidate passes native runtime checks and packaging; rendered acceptance and local integration remain pending. No session storage schema freeze yet.
 
 Authority: [implementation plan](../IMPLEMENTATION_PLAN.md), [product specification](../PRODUCT_SPEC.md). The bundled host foundation is recorded in [CHO-02](CHO-02.md).
 
@@ -10,18 +10,18 @@ The controller tested the installed Codex app-server protocol in an owned Window
 
 | Capability | Codex CLI 0.156.1 | Claude Code 2.1.282 |
 | --- | --- | --- |
-| Native transport | Stdio initialize/initialized handshake observed | Input/output stream-json options present; native flow not yet tested |
-| Native identity | Actual thread and turn IDs returned | Session-ID/resume options present; flow not yet tested |
-| Streamed text | Actual agent-message deltas observed | Documentation/CLI evidence only |
-| Continuing turns | Two turns retained a fixture marker | Not yet tested |
-| Resume in a new process | Same native thread retained the marker without transcript replay | Not yet tested |
-| Tool lifecycle | Owned fixture-file read produced start, successful result and content | Not yet tested |
-| Approval allow | Exact reviewed fixture-read command accepted once, without a persistent rule | Not yet tested |
-| Approval reject | Declined/cancelled tool observed; proposed fixture write did not occur | Not yet tested |
-| Cancellation | Interrupted native turn observed after native start | Not yet tested |
-| Continue after cancellation | Original marker retained in the next turn | Not yet tested |
+| Native transport | Stdio initialize/initialized handshake observed | Bidirectional stream-json initialize and control requests observed |
+| Native identity | Actual thread and turn IDs returned | Owned native session UUID, echoed input UUID and actual assistant/tool IDs; no Codex aliases |
+| Streamed text | Actual agent-message deltas observed | Real text deltas mapped through the candidate and copied bundle |
+| Continuing turns | Two turns retained a fixture marker | Two turns retained a fixture marker without transcript replay |
+| Resume in a new process | Same native thread retained the marker without transcript replay | Owned native session retained the marker under a new process |
+| Tool lifecycle | Owned fixture-file read produced start, successful result and content | Fixture Read produced actual tool ID, result and streamed file content |
+| Approval allow | Exact reviewed fixture-read command accepted once, without a persistent rule | Exact original Read input allowed once; no persistent permission amendment |
+| Approval reject | Declined/cancelled tool observed; proposed fixture write did not occur | Write denied, tool declined and turn interrupted; no file created |
+| Cancellation | Interrupted native turn observed after native start | Interrupt control acknowledged, then actual aborted-streaming result observed |
+| Continue after cancellation | Original marker retained in the next turn | Original marker retained after both denial and Stop |
 | Clarification | Installed experimental schema exists; live flow not qualified | Not yet tested |
-| Model attribution | Requested/native-selected gpt-6-sol; independently served identity unknown | Not qualified by this spike |
+| Model attribution | Requested/native-selected gpt-6-sol; independently served identity unknown | Live native catalogue queried; model-reported identity retained separately from independent verification |
 
 The installed Codex model catalogue was queried rather than copied from the prototype. It does not establish access to every hard-coded or documented model. The app must retain the distinction between a requested/selected model and verified served identity.
 
@@ -33,7 +33,7 @@ The owned read required a native permission decision under the tested untrusted 
 
 The retained initial probe receipts include their failed assertions and the acknowledgement/activation race. The later checks extend that evidence; they do not rewrite it as an uninterrupted pass. Production event ordering, pending-request reconciliation, stale approval rejection and unknown outcomes still need deterministic peer tests.
 
-Official protocol references: [Codex app-server](https://developers.openai.com/codex/app-server), [Claude programmatic CLI](https://code.claude.com/docs/en/headless), [Claude CLI reference](https://code.claude.com/docs/en/cli-reference). Installed schema/CLI evidence takes precedence when newer documentation differs. Claude's programmatic control and saved-login behavior need their own owned native checks; another harness's results do not qualify it.
+Official protocol references: [Codex app-server](https://developers.openai.com/codex/app-server), [Claude programmatic CLI](https://code.claude.com/docs/en/headless), [Claude CLI reference](https://code.claude.com/docs/en/cli-reference). Installed schema/CLI evidence takes precedence when newer documentation differs. The Claude checks below use its own installed native process and saved first-party sign-in.
 
 ## First implemented adapter
 
@@ -59,9 +59,19 @@ The built Windows view also passes actual rendered acceptance after the owner ma
 
 ## Next bounded slices
 
-1. Qualify Claude's continuing-session, streamed-tool, approval, clarification and cancellation behavior in an owned native fixture. Keep saved subscription access and private credentials separate from public receipts.
+1. Complete rendered Claude conversation/continuation/Stop acceptance for the built candidate before local integration. Windows automation currently reports input access denied; project trust requires the owner's manual action.
 2. Complete installed-artifact M1 evidence. The built debug view's text/continuation/Stop acceptance passes; keep debug, installed and clean-machine claims separate.
 3. Qualify live clarification and deliberately supported permission extensions. The current preview interrupts unsupported requests; do not add automatic replay or persistent grants.
 4. Keep CHO-03 native-reference storage contracts provisional until both controller spikes establish their actual requirements. Add durable conversation and recovery behavior through its own reviewed slice.
 
 CHO-04 remains in progress. The native Codex implementation and focused rendered conversation check do not complete the second controller, clarification, durable recovery, broader UI polish or installer/release acceptance.
+
+## Claude native candidate
+
+Source candidate: `d07df86`, retained separately from the integrated Codex checkpoint. The project screen selects Codex or Claude before validation and explicit trust. Claude preparation checks saved `claude.ai`/first-party authentication, obtains its live catalogue without starting a turn and closes that metadata process before admitting a project. Conversations open lazily, pin their model, role and supported effort, and keep actual native session and input identities. Codex retains its existing per-turn effort control.
+
+The Claude actor uses the shared project trust, host ownership and bounded mailbox. A wire write is submission, not native activation or completion. Stream continuations require an observed message anchor; post-tool continuation has a one-use causal allowance from a previously unseen, known active tool result on the same connection. Any supplied input-UUID fields must match exactly. Permission requests bind the actual tool ID, name and original input before appearing in the UI. Cancellation, native withdrawal and terminal events retire queued, unwritten grants. Replayed native permission responses are informational; they cannot settle an unrelated RPC request or grant access again. Persistent grants, user customizations, hooks, external MCP services and delegation are disabled for this path. Review mode limits the exposed tools and is not an OS sandbox.
+
+Controller verification passes 291 package tests, type checking, web/native debug builds and 12 locked Rust tests. Six actual Claude service cases pass both in the checkout and using the copied bundle's Node/runtime outside the checkout: first turn, marker continuation, approved Read with streamed file content, denied Write without a created file, Stop and continuation after Stop. The copied 94-file debug bundle also passes Rust-owned startup/cleanup with global Node absent and poisoned Node environment variables. Captured traffic and counterexamples drove corrections for missing continuation UUID fields, permission-response echoes and overlapping stream starts; fake-peer tests cover those boundaries.
+
+This candidate has not passed a rendered Claude window check or been merged into the integration branch. Native clarification, durable recovery, installed release and clean-machine qualification remain open. Requested/native-reported model identity is not independently verified served identity. Owned native fixture sessions and private receipts remain local; no credentials or user conversations are published.

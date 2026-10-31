@@ -1,7 +1,7 @@
 # CHO Desktop v0.1 — Implementation Plan
 
 Date: 2026-10-30  
-Status: Foundation and bundled read-only host complete locally; first Codex capability/event slice integrated; native conversation integration and release qualification remain open
+Status: Foundation and native Codex conversation integrated locally; Claude native candidate passes runtime and bundle checks, pending rendered acceptance and integration; recovery and release qualification remain open
 Product contract: [PRODUCT_SPEC.md](PRODUCT_SPEC.md), initially committed as `d9cc7ef`  
 Planning branch: `codex/cho-v01-plan`; implementation branch: `codex/cho-v01-foundation`
 
