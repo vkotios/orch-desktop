@@ -161,6 +161,7 @@ export function createNativeRpc(options) {
     pendingOut: new Map(),
     pendingIn: new Map(),
     waitingDrain: false,
+    pumping: false,
     nextId: 1,
   };
 
@@ -222,34 +223,44 @@ export function createNativeRpc(options) {
   }
 
   function pump() {
-    while (!state.closed && !state.waitingDrain && state.queue.length > 0) {
-      const node = state.queue[0];
-      // Claim dispatch ownership before entering output.write: a legitimate
-      // synchronous PassThrough loopback may deliver the matching response
-      // (or a fatal) reentrantly during write, and it must see this request
-      // as already handed over (OUTCOME_UNKNOWN), never as never-sent.
-      // Genuinely queued entries stay unwritten.
-      if (node.entry !== null) node.entry.written = true;
-      let accepted;
-      try {
-        accepted = output.write(node.bytes, (err) => onWriteSettled(err));
-      } catch (err) {
-        // A synchronous throw may follow a partial handover, so a request
-        // given to write here counts as written: teardown fails it
-        // OUTCOME_UNKNOWN, never NOT_SENT.
-        fatal(err instanceof Error ? err : new Error(String(err)));
-        return;
+    // Reentry guard: the head stays queued through output.write, so a nested
+    // respond/notify/request/close during a synchronous write must not
+    // re-enter the loop and redispatch it. Nested pump calls return; the
+    // outer loop picks up newly queued frames in order.
+    if (state.pumping) return;
+    state.pumping = true;
+    try {
+      while (!state.closed && !state.waitingDrain && state.queue.length > 0) {
+        const node = state.queue[0];
+        // Claim dispatch ownership before entering output.write: a legitimate
+        // synchronous PassThrough loopback may deliver the matching response
+        // (or a fatal) reentrantly during write, and it must see this request
+        // as already handed over (OUTCOME_UNKNOWN), never as never-sent.
+        // Genuinely queued entries stay unwritten.
+        if (node.entry !== null) node.entry.written = true;
+        let accepted;
+        try {
+          accepted = output.write(node.bytes, (err) => onWriteSettled(err));
+        } catch (err) {
+          // A synchronous throw may follow a partial handover, so a request
+          // given to write here counts as written: teardown fails it
+          // OUTCOME_UNKNOWN, never NOT_SENT.
+          fatal(err instanceof Error ? err : new Error(String(err)));
+          return;
+        }
+        // A reentrant sync response/error may have closed the peer during
+        // write: do not touch the queue or pump further after closure, so a
+        // sync/async callback fatal can never write after closure.
+        if (state.closed) return;
+        state.queue.shift();
+        if (node.entry === null) {
+          if (node.responseId !== undefined) state.pendingIn.delete(node.responseId);
+          node.resolve();
+        }
+        if (accepted === false) state.waitingDrain = true;
       }
-      // A reentrant sync response/error may have closed the peer during
-      // write: do not touch the queue or pump further after closure, so a
-      // sync/async callback fatal can never write after closure.
-      if (state.closed) return;
-      state.queue.shift();
-      if (node.entry === null) {
-        if (node.responseId !== undefined) state.pendingIn.delete(node.responseId);
-        node.resolve();
-      }
-      if (accepted === false) state.waitingDrain = true;
+    } finally {
+      state.pumping = false;
     }
   }
 

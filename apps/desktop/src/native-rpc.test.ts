@@ -298,4 +298,67 @@ describe("native rpc peer", () => {
     expect(over.peer.closed).toBe(true);
     expect(over.onFatal).toHaveBeenCalledTimes(1);
   });
+
+  it("writes each frame once when a server request arrives reentrantly during write", async () => {
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const onFatal = vi.fn();
+    const seen: unknown[] = [];
+    const origWrite = output.write.bind(output);
+    let peer!: ReturnType<typeof createNativeRpc>;
+    let nested = false;
+    const answers: Array<Promise<void>> = [];
+    const writeSpy = vi.spyOn(output, "write").mockImplementation(((chunk: unknown, cb: unknown) => {
+      seen.push(JSON.parse(Buffer.from(chunk as Uint8Array).toString("utf8")));
+      if (!nested) {
+        nested = true;
+        // Synchronous reentry during the first write: a nested server
+        // request answered from onRequest, then the native result.
+        input.emit("data", Buffer.from(frame({ id: 0, method: "approve", params: {} }), "utf8"));
+        input.emit("data", Buffer.from(frame({ id: "rpc-1", result: {} }), "utf8"));
+      }
+      return (origWrite as any)(chunk, cb);
+    }) as any);
+    peer = createNativeRpc({
+      input,
+      output,
+      onRequest: (msg) => { answers.push(peer.respond((msg as { id: number }).id, { decision: "decline" })); },
+      onFatal,
+    });
+    const pending = peer.request("turn/start", {});
+    await expect(pending).resolves.toEqual({});
+    await expect(Promise.all(answers)).resolves.toHaveLength(1);
+    await tick();
+    expect(seen).toEqual([
+      { id: "rpc-1", method: "turn/start", params: {} },
+      { id: 0, result: { decision: "decline" } },
+    ]);
+    expect(writeSpy).toHaveBeenCalledTimes(2);
+    expect(peer.closed).toBe(false);
+    expect(onFatal).not.toHaveBeenCalled();
+    peer.close();
+    writeSpy.mockRestore();
+  });
+
+  it("writes nothing further when close runs synchronously during write", async () => {
+    const h = makePeer();
+    const origWrite = h.output.write.bind(h.output);
+    let closed = false;
+    const writeSpy = vi.spyOn(h.output, "write").mockImplementation(((chunk: unknown, cb: unknown) => {
+      if (!closed) {
+        closed = true;
+        h.peer.close("owner");
+      }
+      return (origWrite as any)(chunk, cb);
+    }) as any);
+    const first = h.peer.request("a", {});
+    first.catch(() => {});
+    await tick();
+    await expect(first).rejects.toMatchObject({ code: "OUTCOME_UNKNOWN" }); // handed over before the close
+    await expect(h.peer.notify("b", {})).rejects.toMatchObject({ code: "CLOSED" });
+    expect(writeSpy).toHaveBeenCalledTimes(1); // no writes after closure
+    expect(h.peer.closed).toBe(true);
+    expect(h.onFatal).not.toHaveBeenCalled();
+    writeSpy.mockRestore();
+  });
 });
