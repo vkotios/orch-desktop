@@ -154,6 +154,24 @@ export function createNativeRpc(options) {
   const onRequest = options?.onRequest;
   const onFatal = options?.onFatal;
   const timeoutMs = options?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const codec = options?.codec;
+  if (codec !== undefined && (!isPlainObject(codec) || typeof codec.encode !== "function" || typeof codec.decode !== "function")) {
+    throw new TypeError("native RPC codec requires encode and decode functions");
+  }
+
+  function encodeFrame(envelope) {
+    if (codec === undefined) return encodeOutbound(envelope);
+    try {
+      if (!isPlainObject(envelope)) throw new Error("internal envelope must be an object");
+      encodeOutbound(envelope);
+      const transformed = codec.encode(envelope);
+      if (!isPlainObject(transformed)) throw new Error("encoded envelope must be an object");
+      return encodeOutbound(transformed);
+    } catch (err) {
+      if (err instanceof NativeRpcError && err.code === "NOT_SENT") throw err;
+      throw notSent(`outgoing codec failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
 
   const state = {
     closed: false,
@@ -305,7 +323,7 @@ export function createNativeRpc(options) {
     state.nextId += 1;
     let bytes;
     try {
-      bytes = encodeOutbound(params === undefined ? { id, method } : { id, method, params });
+      bytes = encodeFrame(params === undefined ? { id, method } : { id, method, params });
     } catch (err) {
       return Promise.reject(err);
     }
@@ -329,7 +347,7 @@ export function createNativeRpc(options) {
     if (!isValidMethod(method)) return Promise.reject(notSent("notification method must be a nonempty string"));
     let bytes;
     try {
-      bytes = encodeOutbound(params === undefined ? { method } : { method, params });
+      bytes = encodeFrame(params === undefined ? { method } : { method, params });
     } catch (err) {
       return Promise.reject(err);
     }
@@ -350,7 +368,7 @@ export function createNativeRpc(options) {
     if (result === undefined) return Promise.reject(notSent("respond result must not be undefined"));
     let bytes;
     try {
-      bytes = encodeOutbound({ id, result });
+      bytes = encodeFrame({ id, result });
     } catch (err) {
       return Promise.reject(err);
     }
@@ -403,6 +421,11 @@ export function createNativeRpc(options) {
     }
     if (!isPlainObject(parsed)) throw new Error("native RPC envelope must be a JSON object");
     if (!depthWithinBound(parsed)) throw new Error(`native RPC frame exceeds JSON depth ${MAX_JSON_DEPTH}`);
+    if (codec !== undefined) {
+      parsed = codec.decode(parsed);
+      if (!isPlainObject(parsed)) throw new Error("decoded native RPC envelope must be a JSON object");
+      encodeOutbound(parsed); // validate transformed depth and serialized size before dispatch
+    }
     const hasId = Object.hasOwn(parsed, "id");
     const hasMethod = Object.hasOwn(parsed, "method");
     const hasResult = Object.hasOwn(parsed, "result");

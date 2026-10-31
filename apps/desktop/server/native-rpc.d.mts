@@ -38,6 +38,12 @@ export interface NativeRpcOptions {
   onRequest?: (message: NativeRpcServerRequest) => void;
   onFatal?: (error: Error) => void;
   timeoutMs?: number;
+  codec?: NativeRpcCodec;
+}
+
+export interface NativeRpcCodec {
+  encode(envelope: Record<string, unknown>): Record<string, unknown>;
+  decode(envelope: Record<string, unknown>): Record<string, unknown>;
 }
 
 export interface NativeRpcPeer {
