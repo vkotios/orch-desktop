@@ -566,6 +566,51 @@ describe("approval requests", () => {
   });
 });
 
+describe("consumer lease", () => {
+  async function active() {
+    const h = await prepared();
+    const sent = await h.svc.handle("direct_chat_send", sendFor(h.token));
+    h.client.note("turn/started", { threadId: sent.nativeThreadId, turn: { id: sent.nativeTurnId } });
+    return { ...h, sent };
+  }
+
+  it("renews only on a validated poll and expires once after consumer silence", async () => {
+    vi.useFakeTimers();
+    const h = await active();
+    await vi.advanceTimersByTimeAsync(29_000);
+    expect(h.fatals).toHaveLength(0);
+    await pollFor(h.svc, h.token);
+    await vi.advanceTimersByTimeAsync(29_000);
+    expect(h.fatals).toHaveLength(0);
+    await expect(h.svc.handle("native_chat_poll", { generation: "stale", projectToken: h.token })).rejects.toThrow(/stale/);
+    await expect(pollFor(h.svc, "wrong")).rejects.toThrow(/project token/);
+    h.client.note("item/agentMessage/delta", { threadId: "th-1", turnId: "tu-1", itemId: "i", delta: "progress" });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(h.fatals).toHaveLength(1);
+    expect(h.fatals[0].message).toMatch(/consumer lease/);
+    expect(h.client.closes).toBe(1);
+    await expect(h.svc.handle("direct_chat_send", sendFor(h.token, { turnId: "u2" }))).rejects.toThrow(/closed/);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(h.fatals).toHaveLength(1);
+  });
+
+  it("clears the lease after terminal or project close and never expires when idle", async () => {
+    vi.useFakeTimers();
+    const completed = await active();
+    completeTurn(completed.client, "th-1", completed.sent.nativeTurnId, "completed");
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(completed.fatals).toHaveLength(0);
+    const closed = await active();
+    await closed.svc.handle("native_chat_close", { generation: GEN, projectToken: closed.token });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(closed.fatals).toHaveLength(0);
+    expect(closed.client.closes).toBe(1);
+    const idle = await prepared();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(idle.fatals).toHaveLength(0);
+  });
+});
+
 describe("cancel", () => {
   it("does not interrupt on ACK alone and retains the activation deadline", async () => {
     vi.useFakeTimers();

@@ -20,6 +20,7 @@ import { normalizeCodexAppServerEvent } from "../../../packages/acp-client/src/c
 
 const CHALLENGE_TTL_MS = 5 * 60 * 1000;
 const ACTIVATION_TIMEOUT_MS = 15_000;
+const CONSUMER_LEASE_MS = 30_000;
 const MAX_SESSIONS = 8;
 const MAX_ADMITTED_TURNS = 256;
 const MAX_PENDING_APPROVALS = 8;
@@ -86,6 +87,16 @@ export function createNativeChatService(options) {
   function clearTimer(a) {
     if (a?.timer != null) { clearTimeout(a.timer); a.timer = null; }
   }
+  function clearLease(a) {
+    if (a?.leaseTimer != null) { clearTimeout(a.leaseTimer); a.leaseTimer = null; }
+  }
+  function renewLease(a) {
+    clearLease(a);
+    a.leaseTimer = setTimeout(() => {
+      if (state.active === a) fatalize(new Error("native chat consumer lease expired"));
+    }, CONSUMER_LEASE_MS);
+    a.leaseTimer.unref?.();
+  }
   // Whole-service terminal fault: drop the turn and displayable approvals,
   // stop the producer, and always notify the owner even when the queue is full.
   function fatalize(raw) {
@@ -95,6 +106,7 @@ export function createNativeChatService(options) {
     const a = state.active;
     state.active = null;
     clearTimer(a);
+    clearLease(a);
     state.approvals.clear();
     try {
       const event = { kind: "error", text: boundText(`native chat fatal: ${messageOf(error)}`, MAX_ERROR_TEXT), nativeOutcome: "unknown", generation, harness: "codex" };
@@ -158,6 +170,7 @@ export function createNativeChatService(options) {
   function failActiveTurn(a, text) {
     if (state.active === a) state.active = null;
     clearTimer(a);
+    clearLease(a);
     a.stash.length = 0;
     invalidateApprovals();
     queueError(a, text);
@@ -166,6 +179,7 @@ export function createNativeChatService(options) {
     a.terminal = true;
     if (state.active === a) state.active = null;
     clearTimer(a);
+    clearLease(a);
     a.stash.length = 0;
     invalidateApprovals();
   }
@@ -380,6 +394,7 @@ export function createNativeChatService(options) {
     const client = prepared.client;
     const a = { sessionId: args.sessionId, turnId: args.turnId, nativeThreadId: session.nativeThreadId, nativeTurnId: null, ackTurnId: null, activated: false, terminal: false, cancelPending: false, interruptSent: false, timer: null, stash: [] };
     state.active = a; // pending before any provider request so early events bind here
+    renewLease(a);
     const timer = setTimeout(() => {
       if (state.active === a) fatalize(new Error("native turn did not activate within 15s"));
     }, ACTIVATION_TIMEOUT_MS);
@@ -438,6 +453,7 @@ export function createNativeChatService(options) {
     requireLive();
     requireGeneration(args);
     requireToken(args);
+    if (state.active !== null) renewLease(state.active);
     return { generation, events: mailbox.drain() };
   }
 
@@ -475,7 +491,7 @@ export function createNativeChatService(options) {
 
   function resetProject() {
     state.context = null;
-    if (state.active !== null) { const a = state.active; state.active = null; clearTimer(a); }
+    if (state.active !== null) { const a = state.active; state.active = null; clearTimer(a); clearLease(a); }
     state.approvals.clear();
     state.sessions.clear();
     state.challenge = null;
