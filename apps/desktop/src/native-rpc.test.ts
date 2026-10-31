@@ -62,6 +62,35 @@ describe("native rpc peer", () => {
     h.peer.close();
   });
 
+  it("does not retire a response being written or discard the next frame", async () => {
+    const h = makePeer();
+    h.input.write(frame({ id: 0, method: "prompt", params: {} }));
+    h.input.write(frame({ id: "0", method: "other", params: {} }));
+    await tick();
+    const originalWrite = h.output.write.bind(h.output);
+    let later: Promise<void> | undefined;
+    const writeSpy = vi.spyOn(h.output, "write").mockImplementation(((chunk: unknown, cb: unknown) => {
+      const accepted = originalWrite(chunk as any, cb as any);
+      if (!later) {
+        later = h.peer.notify("later", {});
+        expect(h.peer.retire(0)).toBe(true);
+      }
+      return accepted;
+    }) as any);
+    const answer = h.peer.respond(0, { decision: "decline" });
+    await expect(answer).resolves.toBeUndefined();
+    await expect(later).resolves.toBeUndefined();
+    writeSpy.mockRestore();
+    await h.peer.respond("0", { ok: true });
+    expect(h.lines()).toEqual([
+      { id: 0, result: { decision: "decline" } },
+      { method: "later", params: {} },
+      { id: "0", result: { ok: true } },
+    ]);
+    expect(h.onFatal).not.toHaveBeenCalled();
+    h.peer.close();
+  });
+
   it("matches out-of-order results and stays healthy after a remote error", async () => {
     const h = makePeer();
     const a = h.peer.request("a", {});

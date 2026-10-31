@@ -240,6 +240,7 @@ export function createNativeRpc(options) {
         // as already handed over (OUTCOME_UNKNOWN), never as never-sent.
         // Genuinely queued entries stay unwritten.
         if (node.entry !== null) node.entry.written = true;
+        node.dispatching = true;
         let accepted;
         try {
           accepted = output.write(node.bytes, (err) => onWriteSettled(err));
@@ -378,7 +379,7 @@ export function createNativeRpc(options) {
     if (!state.pendingIn.has(id)) return false;
     state.pendingIn.delete(id);
     const index = state.queue.findIndex(
-      (node) => node.entry === null && node.responseId !== undefined && node.responseId === id,
+      (node) => !node.dispatching && node.entry === null && node.responseId !== undefined && node.responseId === id,
     );
     if (index >= 0) {
       const [node] = state.queue.splice(index, 1);

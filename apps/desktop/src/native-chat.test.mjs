@@ -569,12 +569,12 @@ describe("native rpc retire", () => {
     const h = livePeer();
     h.input.write(frame({ id: 0, method: "approval", params: {} }));
     await tick();
-    const blocked = [];
     const origWrite = h.output.write.bind(h.output);
     h.output.write = (chunk, cb) => {
-      blocked.push(chunk);
-      return false; // hold the pump: the response stays queued-unsent
+      origWrite(chunk, cb);
+      return false; // the notification is admitted and holds the pump
     };
+    const primer = h.peer.notify("block", {});
     const answered = h.peer.respond(0, { decision: "accept" });
     answered.catch(() => {});
     await tick();
@@ -584,8 +584,12 @@ describe("native rpc retire", () => {
     h.output.write = origWrite;
     h.output.emit("drain");
     await tick();
-    expect(h.lines()).toHaveLength(0); // the retired answer is never written late
+    await expect(primer).resolves.toBeUndefined();
+    expect(h.lines()).toEqual([{ method: "block", params: {} }]); // no late answer
     await expect(h.peer.respond(0, { late: true })).rejects.toMatchObject({ code: "NOT_SENT" });
+    await h.peer.notify("later", {});
+    expect(h.lines()).toEqual([{ method: "block", params: {} }, { method: "later", params: {} }]);
+    expect(h.fatal).toHaveLength(0);
     h.peer.close();
   });
 
