@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { runHost } from "../server/host.mjs";
-import type { HostDispatch } from "../server/host.mjs";
+import type { HostDispatch, HostRunOptions, HostServiceContext, HostFatalCallback } from "../server/host.mjs";
 import { encodeFrame, MAX_FRAME_BYTES } from "../server/protocol.mjs";
 import type { JsonObject, RequestEnvelope } from "../server/protocol.mjs";
 
@@ -16,7 +16,7 @@ const req = (requestId: string, generation: string, command: string, args: JsonO
   ({ v: 1, type: "request", requestId, generation, command, args });
 interface Harness { input: PassThrough; done: Promise<void>; frames: () => any[]; errors: () => string; }
 
-function makeHarness(dispatch?: HostDispatch, generation = GEN): Harness {
+function makeHarness(dispatch?: HostDispatch, generation = GEN, extra: Partial<HostRunOptions> = {}): Harness {
   const input = new PassThrough();
   const output = new PassThrough();
   const error = new PassThrough();
@@ -24,7 +24,7 @@ function makeHarness(dispatch?: HostDispatch, generation = GEN): Harness {
   const err: Buffer[] = [];
   output.on("data", (c: Buffer) => { out.push(c); });
   error.on("data", (c: Buffer) => { err.push(c); });
-  const done = runHost({ input, output, error, generation, dispatch });
+  const done = runHost({ input, output, error, generation, dispatch, ...extra });
   return {
     input, done,
     frames: () => Buffer.concat(out).toString("utf8").split("\n").filter((l) => l.length > 0).map((l) => JSON.parse(l)),
@@ -120,14 +120,14 @@ describe("host bootstrap", () => {
     let calls = 0;
     const dispatch: HostDispatch = async () => { calls += 1; return {}; };
     const h = makeHarness(dispatch);
-    for (const [id, cmd] of [["r1", "bogus_cmd"], ["r2", "orch_claim"], ["r3", "direct_chat_send"], ["r4", "orch_cancel"]] as const) {
+    for (const [id, cmd] of [["r1", "bogus_cmd"], ["r2", "orch_claim"], ["r3", "orch_cancel"]] as const) {
       h.input.write(encodeFrame(req(id, GEN, cmd)));
     }
-    h.input.write(encodeFrame(req("r5", GEN, "ping")));
+    h.input.write(encodeFrame(req("r4", GEN, "ping")));
     h.input.end();
     await h.done;
     const errs = h.frames().filter((f) => f.type === "error");
-    expect(errs).toHaveLength(4);
+    expect(errs).toHaveLength(3); // native commands (e.g. direct_chat_send) route to the service; see below
     for (const e of errs) expect(e.error.code).toBe("COMMAND_NOT_ALLOWED");
     expect(calls).toBe(0);
     expect(h.frames().filter((f) => f.type === "result")).toHaveLength(1); // host keeps serving after rejections
@@ -351,6 +351,122 @@ describe("host bootstrap", () => {
     await tick();
     await tick();
     expect(h.frames()).toHaveLength(1); // ready only; the late result is dropped
+  });
+});
+
+describe("native chat service wiring", () => {
+  interface Fake {
+    calls: Array<{ command: string; args: unknown }>;
+    closes: number;
+    contexts: HostServiceContext[];
+    fireFatal: HostFatalCallback | null;
+    failWith: Error | null;
+    handle: (command: string, args: unknown) => Promise<unknown>;
+    close: () => Promise<void>;
+  }
+  function fakeService(): Fake {
+    const fake: Fake = {
+      calls: [],
+      closes: 0,
+      contexts: [],
+      fireFatal: null,
+      failWith: null,
+      handle: async (command, args) => {
+        fake.calls.push({ command, args });
+        if (fake.failWith) throw fake.failWith;
+        return { echo: command };
+      },
+      close: async () => { fake.closes += 1; },
+    };
+    return fake;
+  }
+  const factoryFor = (fake: Fake) => (ctx: HostServiceContext) => {
+    fake.contexts.push(ctx);
+    fake.fireFatal = ctx.onFatal;
+    return fake;
+  };
+
+  it("forwards native commands with actual args, exactly one result each", async () => {
+    const fake = fakeService();
+    const h = makeHarness(undefined, GEN, { serviceFactory: factoryFor(fake) });
+    h.input.write(encodeFrame(req("r1", GEN, "native_chat_validate_project", { path: "C:\\proj" })));
+    h.input.write(encodeFrame(req("r2", GEN, "direct_chat_send", { text: "hi" })));
+    h.input.end();
+    await h.done;
+    const res = h.frames().filter((f) => f.type === "result");
+    expect(res.map((f) => f.requestId)).toEqual(["r1", "r2"]);
+    expect(res.map((f) => f.result)).toEqual([{ echo: "native_chat_validate_project" }, { echo: "direct_chat_send" }]);
+    expect(fake.calls).toEqual([
+      { command: "native_chat_validate_project", args: { path: "C:\\proj" } },
+      { command: "direct_chat_send", args: { text: "hi" } },
+    ]);
+    expect(fake.contexts).toHaveLength(1); // singleton service, host generation
+    expect(fake.contexts[0].generation).toBe(GEN);
+    expect(fake.closes).toBe(1); // EOF closed the service
+    expect(h.errors()).toBe("");
+  });
+  it("creates the service lazily and never routes native commands to dispatch", async () => {
+    let dispatchCalls = 0;
+    const dispatch: HostDispatch = async () => { dispatchCalls += 1; return {}; };
+    let factoryCalls = 0;
+    const fake = fakeService();
+    const factory = (ctx: HostServiceContext) => { factoryCalls += 1; return factoryFor(fake)(ctx); };
+    const h = makeHarness(dispatch, GEN, { serviceFactory: factory });
+    h.input.write(encodeFrame(req("r1", GEN, "ping")));
+    h.input.write(encodeFrame(req("r2", GEN, "discover_harnesses")));
+    await tick();
+    await tick();
+    expect(factoryCalls).toBe(0); // ready/discovery/ping start no provider
+    h.input.write(encodeFrame(req("r3", GEN, "native_chat_poll")));
+    h.input.write(encodeFrame(req("r4", GEN, "native_chat_respond", { text: "ok" })));
+    h.input.end();
+    await h.done;
+    expect(factoryCalls).toBe(1);
+    expect(dispatchCalls).toBe(1); // discover_harnesses only; native slice bypasses dispatch
+    expect(fake.calls.map((c) => c.command)).toEqual(["native_chat_poll", "native_chat_respond"]);
+    expect(h.frames().filter((f) => f.type === "result")).toHaveLength(4);
+  });
+  it("reports invalid UI requests as ordinary COMMAND_FAILED, never fatal", async () => {
+    const fake = fakeService();
+    fake.failWith = new Error("bad project path");
+    const fatals: unknown[] = [];
+    const h = makeHarness(undefined, GEN, { serviceFactory: factoryFor(fake), onFatal: (r: unknown) => { fatals.push(r); } });
+    h.input.write(encodeFrame(req("r1", GEN, "native_chat_validate_project", { path: 42 })));
+    h.input.write(encodeFrame(req("r2", GEN, "ping"))); // host keeps serving
+    h.input.end();
+    await h.done;
+    const [err, pong] = h.frames().slice(1);
+    expect(err.type).toBe("error");
+    expect(err.error.code).toBe("COMMAND_FAILED");
+    expect(err.error.message).toBe("bad project path");
+    expect(pong.type).toBe("result");
+    expect(fatals).toEqual([]);
+    expect(h.errors()).toBe("");
+  });
+  it("routes service onFatal through the injected callback and settles", async () => {
+    const fake = fakeService();
+    const fatals: unknown[] = [];
+    const h = makeHarness(undefined, GEN, { serviceFactory: factoryFor(fake), onFatal: (r: unknown) => { fatals.push(r); } });
+    h.input.write(encodeFrame(req("r1", GEN, "direct_chat_send", { text: "hi" })));
+    for (let i = 0; i < 100 && h.frames().length < 2; i += 1) await tick();
+    expect(h.frames().filter((f) => f.type === "result")).toHaveLength(1);
+    const fire = fake.fireFatal;
+    expect(typeof fire).toBe("function");
+    fire!("producer lost");
+    await h.done;
+    expect(fatals).toEqual(["producer lost"]);
+    expect(fake.closes).toBe(1);
+    expect(h.frames().filter((f) => f.type === "result")).toHaveLength(1); // still exactly one
+  });
+  it("closes the service on shutdown before acknowledging", async () => {
+    const fake = fakeService();
+    const h = makeHarness(undefined, GEN, { serviceFactory: factoryFor(fake) });
+    h.input.write(encodeFrame(req("r1", GEN, "native_chat_poll")));
+    h.input.write(encodeFrame(req("r2", GEN, "shutdown")));
+    await h.done;
+    expect(fake.closes).toBe(1);
+    const res = h.frames().filter((f) => f.type === "result");
+    expect(res.map((f) => f.requestId)).toEqual(["r1", "r2"]);
   });
 });
 

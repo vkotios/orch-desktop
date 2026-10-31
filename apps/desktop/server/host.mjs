@@ -7,7 +7,23 @@ import crypto from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { PROTOCOL_VERSION, MAX_FRAME_BYTES, encodeFrame, decodeFrame } from './protocol.mjs';
 
-const ALLOWED_COMMANDS = new Set(['ping', 'shutdown', 'discover_harnesses', 'orch_dashboard']);
+// Fixed native-chat slice. These never reach the browser bridge dispatcher;
+// they are handled by the lazily created native-chat service below.
+const NATIVE_COMMANDS = new Set([
+  'native_chat_validate_project',
+  'native_chat_prepare_project',
+  'direct_chat_send',
+  'native_chat_poll',
+  'native_chat_respond',
+  'direct_chat_cancel',
+  'native_chat_close',
+]);
+const ALLOWED_COMMANDS = new Set(['ping', 'shutdown', 'discover_harnesses', 'orch_dashboard', ...NATIVE_COMMANDS]);
+// Bound for closing the lazily created native-chat service on shutdown, EOF,
+// output faults and owner-fatal paths. Keeps the serial shutdown exchange
+// inside the Rust per-phase deadline; a close that exceeds it is reported
+// explicitly and the Rust job owner remains the termination fallback.
+const NATIVE_CLOSE_TIMEOUT_MS = 1000;
 const SENDER_ID_RE = /^r(0|[1-9][0-9]*)$/;
 const U64_MAX = (1n << 64n) - 1n;
 const utf8 = new TextDecoder('utf-8', { fatal: true });
@@ -23,7 +39,7 @@ function parseSenderId(requestId) {
 
 export async function runHost(options = {}) {
   const { input = process.stdin, output = process.stdout, error = process.stderr,
-    generation = crypto.randomUUID(), dispatch } = options ?? {};
+    generation = crypto.randomUUID(), dispatch, serviceFactory, openClient, onFatal } = options ?? {};
   const dispatchFn = dispatch
     ?? ((command, args) => import('./bridge.mjs').then((mod) => mod.handleBridgeCommand(command, args)));
 
@@ -39,6 +55,65 @@ export async function runHost(options = {}) {
     const has = (stream, name) => typeof stream?.[name] === 'function';
 
     const diagnose = (message) => { try { error.write(`host: ${message}\n`); } catch { /* stderr gone; still terminate */ } };
+    // Lazily created native-chat service singleton. Nothing starts at ready,
+    // discovery or ping: the module is imported and the service is created
+    // only when the first native command arrives. `serviceFactory` injects
+    // fake services for lifecycle tests; production lazily imports
+    // ./native-chat.mjs, which the host never synthesizes when absent.
+    let nativeService = null;
+    let nativeServicePromise = null;
+    let nativeClosePromise = null;
+    function closeNative(reason) {
+      if (!nativeClosePromise) {
+        nativeClosePromise = (async () => {
+          if (!nativeServicePromise && !nativeService) return;
+          let service = nativeService;
+          if (!service) {
+            try { service = await nativeServicePromise; }
+            catch { return; } // never became available; nothing to close
+          }
+          if (!service || typeof service.close !== 'function') return;
+          let timer;
+          const gate = new Promise((_, reject) => {
+            timer = setTimeout(() => reject(new Error(`timed out after ${NATIVE_CLOSE_TIMEOUT_MS}ms`)), NATIVE_CLOSE_TIMEOUT_MS);
+          });
+          try { await Promise.race([service.close(), gate]); }
+          catch (err) { diagnose(`native chat service close failed (${reason}): ${err?.message ?? err}`); }
+          finally { clearTimeout(timer); }
+        })();
+      }
+      return nativeClosePromise;
+    }
+    async function getNativeService() {
+      if (nativeService) return nativeService;
+      if (!nativeServicePromise) {
+        const factory = serviceFactory ?? (async (ctx) => {
+          const mod = await import('./native-chat.mjs');
+          return mod.createNativeChatService(ctx);
+        });
+        nativeServicePromise = Promise.resolve()
+          .then(() => factory({ generation, onFatal: ownerFatal, openClient }))
+          .then(
+            (service) => { nativeService = service; return service; },
+            (err) => { nativeServicePromise = null; throw err; },
+          );
+      }
+      return nativeServicePromise;
+    }
+    // Owner-fatal path: the service lost its producer or reached unknown
+    // state, so this host can no longer serve anything. Notify the injected
+    // owner callback when present — the real entry point exits nonzero and
+    // closes stdout there so Rust sees EOF and its poisoned Job terminates
+    // the whole tree — then settle the host (which closes the service).
+    async function ownerFatal(reason) {
+      if (done) return;
+      diagnose(`native chat fatal: ${reason ?? 'unknown failure'}`);
+      if (typeof onFatal === 'function') {
+        try { await onFatal(reason); }
+        catch (err) { diagnose(`fatal callback failed: ${err?.message ?? err}`); }
+      }
+      finish();
+    }
     const detach = () => {
       for (const cancel of [...drainWaiters]) { drainWaiters.delete(cancel); try { cancel(); } catch { /* settling */ } }
       if (has(input, 'removeListener')) {
@@ -53,7 +128,15 @@ export async function runHost(options = {}) {
       }
       if (has(input, 'pause')) { try { input.pause(); } catch { /* best effort */ } }
     };
-    const finish = () => { if (done) return; done = true; detach(); resolve(); };
+    // Every settle path funnels through here, so normal shutdown, EOF and
+    // output faults also close an active native service (bounded). A cleanup
+    // failure is diagnosed explicitly; the Rust job owner stays the fallback.
+    const finish = () => {
+      if (done) return;
+      done = true;
+      detach();
+      void closeNative('stop').then(() => resolve(), () => resolve());
+    };
     const fail = (message) => { if (!done) diagnose(message); finish(); };
     const onOutputError = (err) => fail(`output error: ${err?.message ?? err}`);
     const onOutputClose = () => fail('output closed');
@@ -100,7 +183,21 @@ export async function runHost(options = {}) {
 
     async function runCommand(env) {
       if (env.command === 'ping') { await sendResult(env.requestId, { ok: true, pid: process.pid }); return; }
-      if (env.command === 'shutdown') { await sendResult(env.requestId, { ok: true }); finish(); return; }
+      if (env.command === 'shutdown') { await closeNative('shutdown'); await sendResult(env.requestId, { ok: true }); finish(); return; }
+      if (NATIVE_COMMANDS.has(env.command)) {
+        // Native slice: invalid UI requests are ordinary COMMAND_FAILED, not
+        // owner-fatal. Only the service's own onFatal (lost producer/unknown
+        // state) settles the host. The browser bridge never sees these.
+        let data;
+        try {
+          const service = await getNativeService();
+          if (!service || typeof service.handle !== 'function') throw new Error('native chat service is unavailable');
+          data = await service.handle(env.command, env.args);
+        }
+        catch (err) { await sendError(env.requestId, 'COMMAND_FAILED', err?.message ?? String(err)); return; }
+        await sendResult(env.requestId, data);
+        return;
+      }
       let data;
       try { data = await dispatchFn(env.command, env.args); }
       catch (err) { await sendError(env.requestId, 'COMMAND_FAILED', err?.message ?? String(err)); return; }
@@ -249,7 +346,17 @@ const invokedAsEntryPoint = (() => {
 })();
 
 if (invokedAsEntryPoint) {
-  runHost().then(() => {
+  runHost({
+    // Real owner-fatal: exit nonzero and close stdout so the Rust owner sees
+    // EOF, poisons the connection and terminates the owned job tree.
+    // process.exit stays on this executable-entry path only; unit tests
+    // inject their own callback through runHost options.
+    onFatal: (reason) => {
+      try { process.stderr.write(`host: fatal ${reason ?? 'unknown failure'}\n`); } catch { /* best effort */ }
+      try { process.stdout.destroy(); } catch { /* best effort */ }
+      process.exit(1);
+    },
+  }).then(() => {
     try { process.stdin.destroy(); } catch { /* best effort */ }
   }).catch((err) => {
     try { process.stderr.write(`host: fatal ${err?.message ?? err}\n`); } catch { /* best effort */ }

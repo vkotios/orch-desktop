@@ -16,7 +16,18 @@ use tokio::time::{timeout, timeout_at, Instant};
 
 const MAX_HANDSHAKE: Duration = Duration::from_secs(10);
 const STDERR_TAIL_BYTES: usize = 4096;
-const NATIVE_COMMANDS: [&str; 3] = ["ping", "discover_harnesses", "orch_dashboard"];
+const NATIVE_COMMANDS: [&str; 10] = [
+    "ping",
+    "discover_harnesses",
+    "orch_dashboard",
+    "native_chat_validate_project",
+    "native_chat_prepare_project",
+    "direct_chat_send",
+    "native_chat_poll",
+    "native_chat_respond",
+    "direct_chat_cancel",
+    "native_chat_close",
+];
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
@@ -69,7 +80,7 @@ pub(crate) struct HostRuntime {
     health: Health,
     timeouts: Timeouts,
     stderr: Arc<StdMutex<Vec<u8>>>,
-    conn: Mutex<Conn>,
+    conn: Arc<Mutex<Conn>>,
 }
 
 /// Exclusive connection access. While `armed`, request bytes may be on the wire:
@@ -219,12 +230,55 @@ impl HostRuntime {
                 return Err(format!("bundled host handshake failed: {why}{note}{}", tail_note(&stderr)));
             }
         };
+        let conn = Arc::new(Mutex::new(conn));
+        // Parent-exit watchdog: one bounded, nonblocking task per host. When
+        // the Node parent exits unexpectedly, the entire owned job is
+        // terminated within ~1s even when no frontend call observes the exit
+        // (with a lost renderer consumer there may be no next RPC). Weak
+        // references only, so the watcher never keeps the runtime, the job
+        // or the child alive past app shutdown or drop; `try_lock` never
+        // waits on the serial RPC mutex, `try_wait` is nonblocking and
+        // caches the status, and stdout is never touched here.
+        let watch_job = Arc::downgrade(&job);
+        let watch_conn = Arc::downgrade(&conn);
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                let (Some(job), Some(conn)) = (watch_job.upgrade(), watch_conn.upgrade()) else {
+                    break;
+                };
+                let Ok(mut guard) = conn.try_lock() else {
+                    continue;
+                };
+                if guard.closed.is_some() {
+                    break;
+                }
+                let exited = match guard.child.try_wait() {
+                    Ok(Some(_)) => true,
+                    Ok(None) => false,
+                    // Unknown liveness fails closed: terminate the tree.
+                    Err(_) => true,
+                };
+                if !exited {
+                    continue;
+                }
+                let termination = job.terminate();
+                let _ = guard.child.start_kill();
+                guard.stdin = None;
+                let message = match termination {
+                    Ok(()) => "host process exited; owned job terminated".to_string(),
+                    Err(e) => format!("host process exited or liveness unknown; owned job cleanup failed: {e}; tree state unknown"),
+                };
+                guard.closed.get_or_insert(message);
+                break;
+            }
+        });
         Ok(HostRuntime {
             job,
             health: Health { pid, generation },
             timeouts: t,
             stderr,
-            conn: Mutex::new(conn),
+            conn,
         })
     }
 

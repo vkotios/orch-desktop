@@ -16,7 +16,8 @@ const NODE_LIMIT = 150 * 1024 * 1024;
 const LICENSE_LIMIT = 5 * 1024 * 1024;
 const HEX64 = /^[0-9a-f]{64}$/;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-const SERVER_MODULES = ['host.mjs', 'protocol.mjs', 'bridge.mjs'];
+const SERVER_MODULES = ['host.mjs', 'protocol.mjs', 'bridge.mjs', 'native-rpc.mjs', 'codex-client.mjs', 'event-mailbox.mjs', 'native-chat.mjs'];
+const ACP_TS_MODULES = ['packages/acp-client/src/codex-app-server.ts'];
 const OUTPUT_NAMES = new Set(['.runtime', 'runtime-test-output']);
 const STAGE_PREFIX = '.runtime-stage-';
 const BACKUP_PREFIX = '.runtime-backup-';
@@ -216,6 +217,7 @@ export async function prepareRuntime(options = {}) {
     const serverDir = path.join(sourceRoot, 'apps', 'desktop', 'server');
     const orchSrc = path.join(sourceRoot, 'orch', 'src');
     for (const name of SERVER_MODULES) await copySingle(path.join(serverDir, name), path.join(app, 'apps', 'desktop', 'server', name), `server/${name}`);
+    for (const rel of ACP_TS_MODULES) await copySingle(path.join(sourceRoot, rel), path.join(app, rel), rel);
     await copyTree(orchSrc, path.join(app, 'orch', 'src'), (rel) => rel.endsWith('.mjs'), 'orch/src');
     await copySingle(path.join(sourceRoot, 'orch', 'roster.example.json'), path.join(app, 'orch', 'roster.example.json'), 'orch/roster.example.json');
     await copySingle(path.join(sourceRoot, 'model-catalog.json'), path.join(app, 'model-catalog.json'), 'model-catalog.json');

@@ -140,7 +140,7 @@ export interface OrchCommandResult<T = any> {
   error?: string | null;
 }
 
-function isTauriRuntime(): boolean {
+export function isTauriRuntime(): boolean {
   return (
     typeof window !== "undefined" &&
     ("__TAURI_INTERNALS__" in window || "__TAURI__" in window)
@@ -207,4 +207,179 @@ export function subscribeStreamEvents(
     es.removeEventListener("cho:stream", listener as EventListener);
     es.close();
   };
+}
+
+/* ============================================================================
+ * Native Codex chat (Tauri shell, first milestone).
+ *
+ * The native view talks to the exact backend contract through fixed Tauri
+ * commands. Each command takes a single `{ args: payload }` object — never the
+ * loose legacy `cho:stream` branch, which carries no native events. Outside
+ * the Tauri runtime the same payload shape goes through the bridge.
+ * ========================================================================== */
+
+export type NativeRole = "implement" | "review";
+export type NativeEffort = "low" | "medium" | "high" | "xhigh";
+export type NativeOutcomeKind =
+  | "completed"
+  | "failed"
+  | "interrupted"
+  | "unknown";
+export type NativeDecision = "accept" | "decline" | "cancel";
+
+export interface NativeModelInfo {
+  id: string;
+  name: string;
+  isDefault: boolean;
+}
+
+export interface NativeValidateResult {
+  generation: string;
+  path: string;
+  name: string;
+  projectToken: string;
+}
+
+export interface NativePrepareResult {
+  generation: string;
+  projectToken: string;
+  path: string;
+  name: string;
+  models: NativeModelInfo[];
+}
+
+export interface NativeSendAck {
+  generation: string;
+  sessionId: string;
+  turnId: string;
+  nativeThreadId: string;
+  nativeTurnId: string;
+}
+
+/**
+ * One event drained from the backend mailbox. Every event carries the host
+ * generation plus the UI session/turn it belongs to; events for the active
+ * native turn additionally carry the actual native thread/turn ids once known.
+ */
+export interface NativePollEvent {
+  generation: string;
+  kind:
+    | "message_delta"
+    | "tool_call"
+    | "status"
+    | "approval"
+    | "approval_resolved"
+    | "turn_complete"
+    | "error";
+  sessionId?: string;
+  turnId?: string;
+  harness?: string;
+  nativeThreadId?: string;
+  nativeTurnId?: string;
+  text?: string;
+  toolCallId?: string;
+  toolTitle?: string;
+  toolStatus?: string;
+  nativeOutcome?: NativeOutcomeKind;
+  approvalId?: string;
+  approvalType?: "command" | "file";
+  decisions?: NativeDecision[];
+}
+
+export interface NativePollResult {
+  generation: string;
+  events: NativePollEvent[];
+}
+
+/** Fixed native transport: `invoke(command, { args: payload })` only. */
+async function invokeNative<T>(
+  command: string,
+  payload: Record<string, unknown>,
+): Promise<T> {
+  if (isTauriRuntime()) {
+    return tauriInvoke<T>(command, { args: payload });
+  }
+  return callHost<T>(command, payload);
+}
+
+export function nativeChatValidateProject(
+  path: string,
+): Promise<NativeValidateResult> {
+  return invokeNative<NativeValidateResult>("native_chat_validate_project", {
+    path,
+  });
+}
+
+export function nativeChatPrepareProject(
+  projectToken: string,
+): Promise<NativePrepareResult> {
+  return invokeNative<NativePrepareResult>("native_chat_prepare_project", {
+    projectToken,
+    trusted: true,
+  });
+}
+
+export interface NativeSendArgs {
+  generation: string;
+  projectToken: string;
+  sessionId: string;
+  turnId: string;
+  model: string;
+  prompt: string;
+  role: NativeRole;
+  effort: NativeEffort;
+}
+
+export function nativeChatSend(args: NativeSendArgs): Promise<NativeSendAck> {
+  return invokeNative<NativeSendAck>("direct_chat_send", { ...args });
+}
+
+export function nativeChatPoll(
+  generation: string,
+  projectToken: string,
+): Promise<NativePollResult> {
+  return invokeNative<NativePollResult>("native_chat_poll", {
+    generation,
+    projectToken,
+  });
+}
+
+export interface NativeRespondArgs {
+  generation: string;
+  projectToken: string;
+  sessionId: string;
+  turnId: string;
+  approvalId: string;
+  decision: NativeDecision;
+}
+
+export function nativeChatRespond(
+  args: NativeRespondArgs,
+): Promise<unknown> {
+  return invokeNative<unknown>("native_chat_respond", { ...args });
+}
+
+export interface NativeCancelArgs {
+  generation: string;
+  projectToken: string;
+  sessionId: string;
+  turnId: string;
+}
+
+export function nativeChatCancel(
+  args: NativeCancelArgs,
+): Promise<{ cancelling: boolean }> {
+  return invokeNative<{ cancelling: boolean }>("direct_chat_cancel", {
+    ...args,
+  });
+}
+
+export function nativeChatClose(
+  generation: string,
+  projectToken: string,
+): Promise<unknown> {
+  return invokeNative<unknown>("native_chat_close", {
+    generation,
+    projectToken,
+  });
 }

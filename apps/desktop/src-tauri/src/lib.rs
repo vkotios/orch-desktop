@@ -1,6 +1,8 @@
 mod host_job;
 mod host_runtime;
 mod host_wire;
+#[cfg(test)]
+mod host_runtime_test;
 
 use host_runtime::{HostConfig, HostRuntime};
 use serde_json::{json, Value};
@@ -70,6 +72,51 @@ async fn orch_dashboard(app: AppHandle) -> Result<Value, String> {
     route(&app, "orch_dashboard").await
 }
 
+// Fixed native-chat slice: each command carries its literal host command
+// name, takes the real UI args payload (never an empty object), and rejects
+// a non-object at the route before anything is written to the host.
+async fn route_with_args(app: &AppHandle, command: &str, args: Value) -> Result<Value, String> {
+    if (!args.is_object()) {
+        return Err(format!("native command {command} requires an object args payload"));
+    }
+    host(app).await?.request(command, args).await
+}
+
+#[tauri::command]
+async fn native_chat_validate_project(app: AppHandle, args: Value) -> Result<Value, String> {
+    route_with_args(&app, "native_chat_validate_project", args).await
+}
+
+#[tauri::command]
+async fn native_chat_prepare_project(app: AppHandle, args: Value) -> Result<Value, String> {
+    route_with_args(&app, "native_chat_prepare_project", args).await
+}
+
+#[tauri::command]
+async fn direct_chat_send(app: AppHandle, args: Value) -> Result<Value, String> {
+    route_with_args(&app, "direct_chat_send", args).await
+}
+
+#[tauri::command]
+async fn native_chat_poll(app: AppHandle, args: Value) -> Result<Value, String> {
+    route_with_args(&app, "native_chat_poll", args).await
+}
+
+#[tauri::command]
+async fn native_chat_respond(app: AppHandle, args: Value) -> Result<Value, String> {
+    route_with_args(&app, "native_chat_respond", args).await
+}
+
+#[tauri::command]
+async fn direct_chat_cancel(app: AppHandle, args: Value) -> Result<Value, String> {
+    route_with_args(&app, "direct_chat_cancel", args).await
+}
+
+#[tauri::command]
+async fn native_chat_close(app: AppHandle, args: Value) -> Result<Value, String> {
+    route_with_args(&app, "native_chat_close", args).await
+}
+
 // Debug-only: report host startup/health on stdout, then exit through the normal lifecycle.
 fn smoke_requested() -> bool {
     cfg!(debug_assertions) && std::env::args().any(|a| a == "--native-host-smoke")
@@ -109,7 +156,17 @@ pub fn run() {
             });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![discover_harnesses, orch_dashboard])
+        .invoke_handler(tauri::generate_handler![
+            discover_harnesses,
+            orch_dashboard,
+            native_chat_validate_project,
+            native_chat_prepare_project,
+            direct_chat_send,
+            native_chat_poll,
+            native_chat_respond,
+            direct_chat_cancel,
+            native_chat_close
+        ])
         .build(tauri::generate_context!())
         .expect("error while building CHO Desktop");
     app.run(|handle, event| {

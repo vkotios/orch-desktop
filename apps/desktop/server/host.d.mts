@@ -1,11 +1,27 @@
 // Type declarations for ./host.mjs. They must agree exactly with the
 // runtime implementation; do not widen them with catchalls.
 import type { JsonObject } from './protocol.d.mts';
+import type { openCodexClient } from './codex-client.d.mts';
 
 export type HostDispatch = (
   command: string,
   args: JsonObject,
 ) => Promise<unknown>;
+
+export type HostFatalCallback = (reason: unknown) => void | Promise<void>;
+
+export interface HostNativeService {
+  handle(command: string, args: JsonObject): Promise<unknown>;
+  close(): Promise<void>;
+}
+
+export interface HostServiceContext {
+  generation: string;
+  onFatal: HostFatalCallback;
+  openClient?: typeof openCodexClient;
+}
+
+export type HostServiceFactory = (context: HostServiceContext) => HostNativeService | Promise<HostNativeService>;
 
 export interface HostRunOptions {
   input?: NodeJS.ReadableStream;
@@ -13,6 +29,9 @@ export interface HostRunOptions {
   error?: NodeJS.WritableStream;
   generation?: string;
   dispatch?: HostDispatch;
+  serviceFactory?: HostServiceFactory;
+  openClient?: typeof openCodexClient;
+  onFatal?: HostFatalCallback;
 }
 
 // Runs the persistent v1 host until input EOF/error, a malformed frame,
