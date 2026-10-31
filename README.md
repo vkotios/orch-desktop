@@ -2,16 +2,16 @@
 
 **CHO-desktop** combines the multi-harness desktop shell architecture of [`RapidAI/grok-build-desktop`](https://github.com/RapidAI/grok-build-desktop) with the multi-agent coordination engine of [`vkotios/cli-agentic-coordinator`](https://github.com/vkotios/cli-agentic-coordinator) (`orch`).
 
-The product brings direct CLI conversations and the `orch` coordination dashboard into one desktop workspace. The current delivery is a prototype with a verified Windows native-host foundation; the two modes are still being completed:
+The product brings direct CLI conversations and the `orch` coordination dashboard into one desktop workspace. The current delivery is a Windows native Codex preview; product and release work continues:
 
-1. **Direct CLI conversations:** the browser prototype includes subscription CLI adapters and streamed-event normalization. Native continuing sessions, tools, approvals and cancellation need the planned capability checks and integration.
-2. **Coordinator studio:** the browser prototype exposes orchestration workflows. The native shell currently supports harness discovery and dashboard reads; mutating commands remain outside the admitted native route.
+1. **Direct CLI conversations:** the native preview uses the installed Codex CLI and saved ChatGPT sign-in. It supports streamed continuing conversations, tool status, once-only permissions and cancellation after explicit project selection. Chats remain in memory while the window is open.
+2. **Coordinator studio:** the browser prototype exposes orchestration workflows. The native host supports discovery and dashboard reads, while the current native conversation view focuses on Codex. Mutating coordinator commands remain outside the admitted native route.
 
 The implementation builds on the existing coordinator and adapter code. Supported product behavior and release acceptance are tracked in the specification and status below.
 
 ## Desktop implementation status
 
-The Windows x64 native host foundation is implemented: the app owns its bundled Node process and supports harness discovery and dashboard reads. Continuing native conversations, permissions, durable recovery and installer acceptance are still in progress. The browser preview retains prototype workflows. See the [product specification](docs/PRODUCT_SPEC.md) and [verified implementation status](docs/IMPLEMENTATION_STATUS.md) for the current boundary.
+The Windows x64 debug executable and its bundled Node runtime build successfully. Actual runtime fixtures cover continuing Codex turns, an approved read, a rejected write and interruption followed by continuation. The native onboarding window has been visually inspected; the complete rendered conversation flow is still awaiting verification. Claude integration, durable recovery, installer/upgrade and clean-machine release acceptance remain open. The browser preview retains prototype workflows. See the [product specification](docs/PRODUCT_SPEC.md) and [verified implementation status](docs/IMPLEMENTATION_STATUS.md) for the current boundary.
 
 ## Workspace Layout & Quick Commands
 

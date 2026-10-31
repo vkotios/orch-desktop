@@ -1,6 +1,6 @@
 # CHO Desktop implementation status
 
-Updated: 2026-10-30. Integration branch: `codex/cho-v01-foundation`.
+Updated: 2026-10-31. Integration branch: `codex/cho-v01-foundation`; native conversation candidate remains isolated pending final acceptance.
 
 Product contract: [specification](PRODUCT_SPEC.md). Sequence: [plan](IMPLEMENTATION_PLAN.md). Sonnet findings: [validated dispositions](reviews/FINDINGS_DISPOSITION.md). Current package: [CHO-02 protocol and host](work-packages/CHO-02.md). Current spike: [CHO-04 controller capabilities](work-packages/CHO-04.md); Codex fixture checks pass, Claude remains open.
 
@@ -65,12 +65,20 @@ The installed Codex CLI 0.156.1 app-server passed owned native fixtures for stre
 
 The shared package now has a separate app-server event mapper with native thread/turn correlation, tool lifecycle including declined results, and distinct completed/failed/interrupted outcomes. It retains the existing exec normalizer. All 108 package tests (23 shared, 85 desktop), type checking and web build pass. Replaying captured native notifications through the candidate preserves 60 text deltas, two declined command results and two interrupted turns. The whole mapper and tests passed independent different-family review after controller-confirmed fixes.
 
-This is a pure event adapter and native protocol spike. The application has not switched its conversation transport to it. Native Claude behavior, live clarification, the pipe peer, product permissions, durable storage and installed conversation acceptance remain open. Rust/native-host source is unchanged from the previous verified milestone.
+That checkpoint was a pure event adapter and native protocol spike. The following native candidate now uses the mapper through the bundled host.
+
+## First native Codex conversation candidate
+
+Source checkpoint `060d909` implements explicit canonical project trust, live model choices from the installed Codex CLI, streamed continuing chats, tool status, once-only offered approvals and cancellation. The native view uses the approved graphite appearance; browser prototype workflows remain available separately. Chats and trust are deliberately in memory. Native session identity is retained without transcript replay, stale callbacks/decisions are rejected, and a missing event consumer stops the producer after a 30-second lease. Rust process ownership also handles idle host failure without waiting for another UI call.
+
+Controller verification: 220 package tests (23 shared, 197 desktop), type checking, web build, 12 locked Rust tests and locked Windows debug build pass. A copied artifact starts outside the checkout without global Node, with poisoned Node options removed, then exits with the owned host gone. Final staged runtime checks pass a reviewed read accepted once, successful tool completion, a cancelled write with no file created, interruption and same-thread continuation retaining the fixture marker. Requested gpt-6-sol/low is recorded separately from unknown independently served identity.
+
+The built onboarding and project trust prompt are visually inspected. The full rendered conversation flow is still pending the manual trust step. Independent final review and this UI evidence remain acceptance gates for main-branch integration. This work combines Muse implementations with the owner's authorised GPT-6.1 Terra high API subagents after Muse's weekly quota was exhausted; those API tasks are recorded separately from actual orch CLI runs. Both larger local Aider trials produced no edits after using their reasoning output budgets; their results do not qualify larger implementation workloads.
 
 ## Remaining work and holds
 
-- The bundled-host debug milestone passes. Installed-artifact and rendered-window acceptance remain open; native controller conversations and mutating commands are not yet admitted.
-- Next: qualify Claude's native session/tool/approval/cancellation behavior and live clarification; implement the bounded Codex pipe peer and product permission flow, then wire the first streamed native conversation. Keep CHO-03 native-reference storage provisional and complete M1 distribution evidence.
+- The bundled-host and native Codex runtime fixtures pass. Complete the rendered conversation check and independent final review on the isolated candidate before integration. Installed-artifact acceptance remains open; mutating coordinator commands are not admitted.
+- Next: qualify Claude's native session/tool/approval/cancellation behavior and live clarification. Keep CHO-03 native-reference storage provisional and complete M1 distribution evidence.
 - Full npm audit identifies 3 vulnerable development-tool packages around Vitest/mocker/tinypool (one moderate, two critical). The production-only audit reports 0. Qualify the major test-tool upgrade before publication; do not force-update the dependency graph blindly.
 - Source publication still needs provenance/license and public-example cleanup, release/privacy/security documentation and content checks. The remote still points to the coordinator repository. No push, remote change or publication occurred.
 - Unified launcher is intentionally loopback-only. Direct Vite retains the explicit environment override, while LAN product access remains outside v0.1. Verify native dev URL resolution with the Rust/WebView smoke.

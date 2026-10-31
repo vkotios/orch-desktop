@@ -1,6 +1,6 @@
 # CHO-04 — Controller capability spike and first transport slice
 
-Updated: 2026-10-30. Status: partial; no session storage schema freeze yet.
+Updated: 2026-10-31. Status: native Codex preview implemented; rendered conversation verification and the second controller remain open. No session storage schema freeze yet.
 
 Authority: [implementation plan](../IMPLEMENTATION_PLAN.md), [product specification](../PRODUCT_SPEC.md). The bundled host foundation is recorded in [CHO-02](CHO-02.md).
 
@@ -43,13 +43,25 @@ The shared package now exports normalizeCodexAppServerEvent alongside its unchan
 
 Verification: 108 package tests (23 shared, 85 desktop), root typecheck and web build pass. Captured native notifications replayed through the candidate preserve 60 text deltas, two declined command results and two interrupted turns. Different-model review and controller verification confirmed the compatibility correction against both generated schemas and an actual native declined event.
 
-The mapper is pure and stateless. It validates the fields it consumes, not the complete provider schema. It owns no process, RPC request, event cursor, approval or session storage. The installed application has not switched to this adapter yet. Rust and native-host source remain unchanged from their previous qualification.
+The mapper is pure and stateless. It validates the fields it consumes, not the complete provider schema. It owns no process, RPC request, event cursor, approval or session storage. The following native conversation slice uses it through an owned service and bounded event mailbox.
+
+## First native Codex conversation candidate
+
+Source checkpoint: `060d909`, Windows x64 debug artifact. Explicit project validation and trust precede opening the installed Codex app-server with saved ChatGPT access and its actual model catalogue. The graphite native view supports in-memory chats, streamed text, tool status, offered once-only permission decisions and Stop. It preserves actual thread/turn identity without sending the transcript again. Unsupported clarification requests interrupt the turn with a visible error; Claude and coordinator mutations are not exposed as working native features.
+
+The private native pipe has bounded framing, request queues and event delivery. Turn acknowledgement remains separate from activation and completion. Stale connection callbacks and stale approval decisions cannot grant access. One provider turn runs at a time. A missing polling consumer expires its lease after 30 seconds and stops the owned producer. Rust owns the host and descendants in a Windows Job Object; an idle watchdog also handles host exit without requiring another frontend call.
+
+Controller verification passes 220 package tests (23 shared, 197 desktop), type checking, web build, 12 locked Rust tests and the locked native debug build. The Rust suite includes the actual production runtime watcher with an owned heartbeat descendant, rather than a mirrored cleanup implementation. The copied debug artifact starts outside the checkout without global Node and with poisoned Node environment variables, then exits with its owned host gone.
+
+Actual final staged runtime checks pass an exact fixture-file read accepted once, successful mapped tool result, cancelled write with a declined result and no created file, explicit interruption and same-thread continuation retaining the read marker. The owned thread was archived and client closed. Requested model was gpt-6-sol at low effort; independently served identity remains unknown. These live checks supplement deterministic permission, lifecycle, queue and frontend-state regressions.
+
+The native onboarding and canonical project trust prompt have been visually inspected. Complete rendered conversation verification is pending the manual project trust step; runtime fixtures do not substitute for that UI evidence. This is a debug preview, not an installed release or a clean-machine qualification.
 
 ## Next bounded slices
 
 1. Qualify Claude's continuing-session, streamed-tool, approval, clarification and cancellation behavior in an owned native fixture. Keep saved subscription access and private credentials separate from public receipts.
-2. Implement the Codex pipe peer and its native-thread/turn state transitions using fake streams first: bounded framing and pending requests, native activation, terminal outcomes, cancellation, server requests, stale/duplicate decisions and disconnected unknown outcomes.
-3. Bind permission and clarification requests to the owned process generation, native request, thread and turn. Default to no execution on disconnect, restart or stale decisions; no automatic replay or persistent grants.
-4. Integrate the first native streamed conversation through the bundled host and desktop transport, then complete installed-artifact M1 evidence. Keep CHO-03 native-reference storage contracts provisional until both controller spikes establish their actual requirements.
+2. Complete rendered conversation acceptance on the built native candidate, then installed-artifact M1 evidence. Keep debug, installed and clean-machine claims separate.
+3. Qualify live clarification and deliberately supported permission extensions. The current preview interrupts unsupported requests; do not add automatic replay or persistent grants.
+4. Keep CHO-03 native-reference storage contracts provisional until both controller spikes establish their actual requirements. Add durable conversation and recovery behavior through its own reviewed slice.
 
-CHO-04 remains in progress. Native app integration, the second controller, clarification, durable recovery, UI rendering and installer/release acceptance are not completed by this slice.
+CHO-04 remains in progress. The native Codex implementation does not complete the second controller, clarification, durable recovery, full rendered conversation or installer/release acceptance.
