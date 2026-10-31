@@ -566,6 +566,68 @@ describe("approval requests", () => {
   });
 });
 
+describe("queued approval decisions with a real peer", () => {
+  async function setup() {
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const chunks = [];
+    output.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+    let hooks;
+    const fatals = [];
+    const peer = createNativeRpc({ input, output, onRequest: (m) => hooks.onRequest(m), onNotification: (m) => hooks.onNotification(m), onFatal: (e) => fatals.push(e) });
+    const client = new FakeClient();
+    client.respond = (id, result) => peer.respond(id, result);
+    client.retire = (id) => peer.retire(id);
+    client.close = async () => { peer.close(); };
+    const svc = createNativeChatService({ generation: GEN, onFatal: (e) => fatals.push(e), openClient: async (opts) => { hooks = opts; return client; } });
+    const v = await svc.handle("native_chat_validate_project", { path: tempDir() });
+    await svc.handle("native_chat_prepare_project", { projectToken: v.projectToken, trusted: true });
+    await svc.handle("direct_chat_send", sendFor(v.projectToken));
+    input.write(frame({ method: "turn/started", params: { threadId: "th-1", turn: { id: "tu-1" } } }));
+    const approval = () => input.write(frame({ id: 0, method: "item/commandExecution/requestApproval", params: { threadId: "th-1", turnId: "tu-1", itemId: "i", availableDecisions: ["accept", "decline"] } }));
+    const lines = () => Buffer.concat(chunks).toString("utf8").split("\n").filter(Boolean).map((s) => JSON.parse(s));
+    return { input, output, peer, svc, token: v.projectToken, fatals, approval, lines };
+  }
+
+  for (const boundary of ["terminal", "resolved", "cancel"]) {
+    it(`retires a queued decision on ${boundary} and rejects duplicate answers`, async () => {
+      const h = await setup();
+      const originalWrite = h.output.write.bind(h.output);
+      h.output.write = (chunk, cb) => { originalWrite(chunk, cb); return false; };
+      await h.peer.notify("block", {});
+      h.approval();
+      const [ask] = (await pollFor(h.svc, h.token)).events;
+      const args = { generation: GEN, projectToken: h.token, sessionId: "s1", turnId: "u1", approvalId: ask.approvalId, decision: "accept" };
+      const response = h.svc.handle("native_chat_respond", args);
+      response.catch(() => {});
+      await expect(h.svc.handle("native_chat_respond", args)).rejects.toThrow(/already-answered/);
+      if (boundary === "terminal") h.input.write(frame({ method: "turn/completed", params: { threadId: "th-1", turn: { id: "tu-1", status: "interrupted" } } }));
+      if (boundary === "resolved") h.input.write(frame({ method: "serverRequest/resolved", params: { requestId: 0 } }));
+      if (boundary === "cancel") await h.svc.handle("direct_chat_cancel", { generation: GEN, projectToken: h.token, sessionId: "s1", turnId: "u1" });
+      await expect(response).rejects.toMatchObject({ code: "NOT_SENT" });
+      h.output.write = originalWrite;
+      h.output.emit("drain");
+      expect(h.lines()).toEqual([{ method: "block", params: {} }]);
+      expect(h.fatals).toHaveLength(0);
+      await h.svc.close();
+    });
+  }
+
+  it("preserves a reused native id when an earlier response continuation settles", async () => {
+    const h = await setup();
+    h.approval();
+    const [first] = (await pollFor(h.svc, h.token)).events;
+    const pending = h.svc.handle("native_chat_respond", { generation: GEN, projectToken: h.token, sessionId: "s1", turnId: "u1", approvalId: first.approvalId, decision: "accept" });
+    h.approval(); // same id is legal after the first response was written
+    const [second] = (await pollFor(h.svc, h.token)).events;
+    await pending;
+    await h.svc.handle("native_chat_respond", { generation: GEN, projectToken: h.token, sessionId: "s1", turnId: "u1", approvalId: second.approvalId, decision: "decline" });
+    expect(h.lines()).toEqual([{ id: 0, result: { decision: "accept" } }, { id: 0, result: { decision: "decline" } }]);
+    expect(h.fatals).toHaveLength(0);
+    await h.svc.close();
+  });
+});
+
 describe("consumer lease", () => {
   async function active() {
     const h = await prepared();

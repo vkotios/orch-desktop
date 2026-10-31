@@ -274,13 +274,18 @@ export function createNativeChatService(options) {
       fatalize(new Error("native approval request offered no supported decisions"));
       return;
     }
+    // The peer admits reuse only after the earlier response was handed to
+    // the transport. Its promise continuation may not have run yet.
+    for (const [approvalId, rec] of state.approvals) {
+      if (rec.responding && rec.requestId === id) state.approvals.delete(approvalId);
+    }
     if (state.approvals.size >= MAX_PENDING_APPROVALS) {
       retireInbound(id);
       fatalize(new Error("too many pending native approvals"));
       return;
     }
     const approvalId = crypto.randomUUID();
-    state.approvals.set(approvalId, { approvalId, sessionId: a.sessionId, turnId: a.turnId, nativeThreadId: params.threadId, nativeTurnId: params.turnId, nativeItemId: params.itemId, requestId: id, connectionId: state.prepared.client.connectionId, decisions });
+    state.approvals.set(approvalId, { approvalId, sessionId: a.sessionId, turnId: a.turnId, nativeThreadId: params.threadId, nativeTurnId: params.turnId, nativeItemId: params.itemId, requestId: id, connectionId: state.prepared.client.connectionId, decisions, responding: false });
     enqueue({ kind: "approval", approvalId, approvalType: method === "item/fileChange/requestApproval" ? "file" : "command", text: approvalText(params, params.itemId), decisions, nativeItemId: params.itemId, generation, harness: "codex", sessionId: a.sessionId, turnId: a.turnId, nativeThreadId: params.threadId, nativeTurnId: params.turnId });
   }
   function handleUnsupportedRequest(id, method) {
@@ -466,12 +471,16 @@ export function createNativeChatService(options) {
     if (typeof args.approvalId !== "string" || args.approvalId.length === 0) throw new Error("native_chat_respond requires an approvalId");
     if (!DECISIONS.has(args.decision)) throw new Error("native_chat_respond decision must be accept, decline, or cancel");
     const rec = state.approvals.get(args.approvalId);
-    if (rec === undefined) throw new Error("unknown or already-answered approval");
+    if (rec === undefined || rec.responding) throw new Error("unknown or already-answered approval");
     if (rec.sessionId !== args.sessionId || rec.turnId !== args.turnId) throw new Error("approval does not belong to this session turn");
     if (rec.connectionId !== state.prepared.client.connectionId) throw new Error("approval belongs to a closed connection");
     if (!rec.decisions.includes(args.decision)) throw new Error(`decision ${args.decision} was not offered for this approval`);
-    state.approvals.delete(args.approvalId); // consumed once, before awaiting the response
-    await state.prepared.client.respond(rec.requestId, { decision: args.decision });
+    rec.responding = true; // consume once, but retain identity for retirement while queued
+    try {
+      await state.prepared.client.respond(rec.requestId, { decision: args.decision });
+    } finally {
+      if (state.approvals.get(args.approvalId) === rec) state.approvals.delete(args.approvalId);
+    }
     return { generation, approvalId: args.approvalId, acknowledged: true };
   }
 
