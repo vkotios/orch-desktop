@@ -219,7 +219,8 @@ export function subscribeStreamEvents(
  * ========================================================================== */
 
 export type NativeRole = "implement" | "review";
-export type NativeEffort = "low" | "medium" | "high" | "xhigh";
+export type NativeController = "codex" | "claude";
+export type NativeEffort = "low" | "medium" | "high" | "xhigh" | "max";
 export type NativeOutcomeKind =
   | "completed"
   | "failed"
@@ -231,9 +232,12 @@ export interface NativeModelInfo {
   id: string;
   name: string;
   isDefault: boolean;
+  resolvedModel?: string;
+  supportedEfforts?: NativeEffort[];
 }
 
 export interface NativeValidateResult {
+  controller?: NativeController;
   generation: string;
   path: string;
   name: string;
@@ -241,6 +245,7 @@ export interface NativeValidateResult {
 }
 
 export interface NativePrepareResult {
+  controller?: NativeController;
   generation: string;
   projectToken: string;
   path: string;
@@ -248,13 +253,25 @@ export interface NativePrepareResult {
   models: NativeModelInfo[];
 }
 
-export interface NativeSendAck {
+interface NativeAckBase {
   generation: string;
   sessionId: string;
   turnId: string;
+}
+
+export interface NativeCodexSendAck extends NativeAckBase {
+  controller?: "codex";
   nativeThreadId: string;
   nativeTurnId: string;
 }
+
+export interface NativeClaudeSendAck extends NativeAckBase {
+  controller: "claude";
+  submitted: true;
+  requestedNativeSessionId: string;
+  requestedNativeUserMessageId: string;
+}
+export type NativeSendAck = NativeCodexSendAck | NativeClaudeSendAck;
 
 /**
  * One event drained from the backend mailbox. Every event carries the host
@@ -274,15 +291,19 @@ export interface NativePollEvent {
   sessionId?: string;
   turnId?: string;
   harness?: string;
+  controller?: NativeController;
   nativeThreadId?: string;
   nativeTurnId?: string;
+  nativeSessionId?: string;
+  nativeUserMessageId?: string;
+  nativeMessageId?: string;
   text?: string;
   toolCallId?: string;
   toolTitle?: string;
   toolStatus?: string;
   nativeOutcome?: NativeOutcomeKind;
   approvalId?: string;
-  approvalType?: "command" | "file";
+  approvalType?: "command" | "file" | "tool";
   decisions?: NativeDecision[];
 }
 
@@ -304,17 +325,21 @@ async function invokeNative<T>(
 
 export function nativeChatValidateProject(
   path: string,
+  controller: NativeController = "codex",
 ): Promise<NativeValidateResult> {
   return invokeNative<NativeValidateResult>("native_chat_validate_project", {
     path,
+    controller,
   });
 }
 
 export function nativeChatPrepareProject(
   projectToken: string,
+  controller: NativeController = "codex",
 ): Promise<NativePrepareResult> {
   return invokeNative<NativePrepareResult>("native_chat_prepare_project", {
     projectToken,
+    controller,
     trusted: true,
   });
 }
@@ -327,7 +352,7 @@ export interface NativeSendArgs {
   model: string;
   prompt: string;
   role: NativeRole;
-  effort: NativeEffort;
+  effort?: NativeEffort;
 }
 
 export function nativeChatSend(args: NativeSendArgs): Promise<NativeSendAck> {

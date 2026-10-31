@@ -26,6 +26,7 @@
 .native-empty h1, .native-welcome h1 { font-size: 25px; font-weight: 600; }
 .native-empty p, .native-welcome p { color: var(--muted); line-height: 1.5; }
 .native-empty form, .native-empty label { display: grid; gap: 9px; }
+.native-empty select { width: 100%; padding: 9px 10px; }
 .native-path-row { display: flex; gap: 8px; }
 .native-shell input, .native-shell select, .native-shell textarea { font: inherit; color: var(--text); background: var(--input); border: 1px solid var(--border); border-radius: 7px; }
 .native-path-row input { flex: 1; min-width: 0; padding: 10px; }

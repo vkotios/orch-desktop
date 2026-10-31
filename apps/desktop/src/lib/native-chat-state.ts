@@ -1,5 +1,6 @@
 import type {
   NativeEffort,
+  NativeController,
   NativeModelInfo,
   NativeOutcomeKind,
   NativePollEvent,
@@ -41,11 +42,16 @@ export interface NativeChatMessage {
   isStreaming: boolean;
   nativeThreadId?: string;
   nativeTurnId?: string;
+  nativeSessionId?: string;
+  nativeUserMessageId?: string;
+  nativeMessageId?: string;
+  requestedNativeSessionId?: string;
+  requestedNativeUserMessageId?: string;
 }
 
 export interface NativeApprovalRequest {
   approvalId: string;
-  approvalType: "command" | "file";
+  approvalType: "command" | "file" | "tool";
   text: string;
   decisions: Array<"accept" | "decline" | "cancel">;
   sessionId: string;
@@ -54,10 +60,11 @@ export interface NativeApprovalRequest {
 
 export interface NativeUiSession {
   id: string;
+  controller: NativeController;
   title: string;
   model: string;
   role: NativeRole;
-  effort: NativeEffort;
+  effort?: NativeEffort;
   messages: NativeChatMessage[];
   approvals: NativeApprovalRequest[];
   activeTurnId: string | null;
@@ -65,6 +72,8 @@ export interface NativeUiSession {
   cancelling: boolean;
   nativeThreadId: string | null;
   nativeTurnId: string | null;
+  nativeSessionId: string | null;
+  requestedNativeSessionId: string | null;
   /** Model/role lock once the native thread exists (first send). */
   threadStarted: boolean;
   unavailable: boolean;
@@ -78,10 +87,12 @@ export function createNativeUiSession(
   id: string,
   model: string,
   role: NativeRole = "implement",
-  effort: NativeEffort = "medium",
+  effort: NativeEffort | undefined = "medium",
+  controller: NativeController = "codex",
 ): NativeUiSession {
   return {
     id,
+    controller,
     title: "New chat",
     model,
     role,
@@ -93,6 +104,8 @@ export function createNativeUiSession(
     cancelling: false,
     nativeThreadId: null,
     nativeTurnId: null,
+    nativeSessionId: null,
+    requestedNativeSessionId: null,
     threadStarted: false,
     unavailable: false,
   };
@@ -182,7 +195,26 @@ export function applyNativeAck(
   if (ack.generation !== generation || ack.sessionId !== session.id) return session;
   const message = session.messages.find((m) => m.id === ack.turnId && m.role === "assistant");
   if (!message) return session;
+  if (ack.controller === "claude") {
+    const mismatch = session.controller !== "claude" || ack.submitted !== true ||
+      !ack.requestedNativeSessionId || !ack.requestedNativeUserMessageId ||
+      (session.requestedNativeSessionId && session.requestedNativeSessionId !== ack.requestedNativeSessionId) ||
+      (session.nativeSessionId && session.nativeSessionId !== ack.requestedNativeSessionId) ||
+      (message.nativeSessionId && message.nativeSessionId !== ack.requestedNativeSessionId) ||
+      (message.nativeUserMessageId && message.nativeUserMessageId !== ack.requestedNativeUserMessageId) ||
+      (message.requestedNativeSessionId && message.requestedNativeSessionId !== ack.requestedNativeSessionId) ||
+      (message.requestedNativeUserMessageId && message.requestedNativeUserMessageId !== ack.requestedNativeUserMessageId);
+    if (mismatch) {
+      const note = "The host acknowledged a different provider turn.";
+      return markNativeUnavailable(updateAssistant(session, ack.turnId, (m) => ({ ...m, outcome: "unknown", outcomeNote: note, isError: true, isStreaming: false })), note);
+    }
+    const bound = updateAssistant(session, ack.turnId, (m) => ({ ...m,
+      requestedNativeSessionId: ack.requestedNativeSessionId,
+      requestedNativeUserMessageId: ack.requestedNativeUserMessageId }));
+    return { ...bound, requestedNativeSessionId: ack.requestedNativeSessionId, threadStarted: true };
+  }
   if (
+    session.controller !== "codex" ||
     (session.nativeThreadId && session.nativeThreadId !== ack.nativeThreadId) ||
     (message.nativeThreadId && message.nativeThreadId !== ack.nativeThreadId) ||
     (message.nativeTurnId && message.nativeTurnId !== ack.nativeTurnId)
@@ -225,6 +257,29 @@ export function applyNativeUiEvent(
   const turnId = event.turnId;
   const message = session.messages.find((m) => m.id === turnId && m.role === "assistant");
   if (!message) return session;
+  const controller = event.controller ?? "codex";
+  if (controller !== session.controller) return markNativeUnavailable(session, "Conflicting native controller.");
+  if (controller === "claude") {
+    if (event.nativeThreadId || event.nativeTurnId ||
+        (event.nativeSessionId && session.nativeSessionId && event.nativeSessionId !== session.nativeSessionId) ||
+        (event.nativeSessionId && session.requestedNativeSessionId && event.nativeSessionId !== session.requestedNativeSessionId) ||
+        (event.nativeSessionId && message.requestedNativeSessionId && event.nativeSessionId !== message.requestedNativeSessionId) ||
+        (event.nativeSessionId && message.nativeSessionId && event.nativeSessionId !== message.nativeSessionId) ||
+        (event.nativeUserMessageId && message.requestedNativeUserMessageId && event.nativeUserMessageId !== message.requestedNativeUserMessageId) ||
+        (event.nativeUserMessageId && message.nativeUserMessageId && event.nativeUserMessageId !== message.nativeUserMessageId)) {
+      return markNativeUnavailable(session, "Conflicting native conversation identity.");
+    }
+    if (event.nativeSessionId || event.nativeUserMessageId || event.nativeMessageId) {
+      session = updateAssistant(session, turnId, (m) => ({ ...m,
+        nativeSessionId: event.nativeSessionId ?? m.nativeSessionId,
+        nativeUserMessageId: event.nativeUserMessageId ?? m.nativeUserMessageId,
+        nativeMessageId: event.nativeMessageId ?? m.nativeMessageId }));
+      session = { ...session, nativeSessionId: event.nativeSessionId ?? session.nativeSessionId,
+        threadStarted: session.threadStarted || Boolean(event.nativeSessionId) };
+    }
+  } else if (event.nativeSessionId || event.nativeUserMessageId || event.nativeMessageId) {
+    return markNativeUnavailable(session, "Conflicting native controller identity.");
+  }
   if ((event.nativeThreadId && session.nativeThreadId && event.nativeThreadId !== session.nativeThreadId) ||
       (event.nativeThreadId && message.nativeThreadId && event.nativeThreadId !== message.nativeThreadId) ||
       (event.nativeTurnId && message.nativeTurnId && event.nativeTurnId !== message.nativeTurnId)) {

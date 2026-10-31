@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
-import type { NativeOutcomeKind, NativePollEvent, NativeSendAck } from "./api";
+import type { NativeClaudeSendAck, NativeCodexSendAck, NativeOutcomeKind, NativePollEvent } from "./api";
 import { applyNativeAck, applyNativePollBatch, applyNativeUiEvent, beginNativeTurn,
   createNativeUiSession, failNativeTurn, markNativeCancelling, markNativeUnavailable } from "./native-chat-state";
 
 const generation = "g1";
 const event = (kind: NativePollEvent["kind"], extra: Partial<NativePollEvent> = {}): NativePollEvent =>
   ({ generation, sessionId: "s1", turnId: "t1", kind, ...extra });
-const ack = (extra: Partial<NativeSendAck> = {}): NativeSendAck =>
+const ack = (extra: Partial<NativeCodexSendAck> = {}): NativeCodexSendAck =>
   ({ generation, sessionId: "s1", turnId: "t1", nativeThreadId: "thread", nativeTurnId: "turn", ...extra });
 const started = () => beginNativeTurn(createNativeUiSession("s1", "model"), "t1", "hello");
 
@@ -82,5 +82,65 @@ describe("native conversation state", () => {
     expect(lost).toMatchObject({ busy: false, unavailable: true });
     expect(lost.messages[1]).toMatchObject({ outcome: "unknown", isStreaming: false });
     expect(beginNativeTurn(lost, "t2", "again")).toBe(lost);
+  });
+});
+
+describe("Claude conversation identities", () => {
+  const claudeStart = () => beginNativeTurn(createNativeUiSession("s1", "model", "review", "medium", "claude"), "t1", "hello");
+  const pending = (extra: Partial<NativeClaudeSendAck> = {}): NativeClaudeSendAck => ({
+    generation, controller: "claude", sessionId: "s1", turnId: "t1", submitted: true,
+    requestedNativeSessionId: "native-session", requestedNativeUserMessageId: "native-user", ...extra,
+  });
+  const observed = (kind: NativePollEvent["kind"], extra: Partial<NativePollEvent> = {}): NativePollEvent =>
+    event(kind, { controller: "claude", nativeSessionId: "native-session", nativeUserMessageId: "native-user", ...extra });
+
+  it("keeps requested identity separate until a correlated event arrives", () => {
+    let s = applyNativeAck(claudeStart(), pending(), generation);
+    expect(s).toMatchObject({ nativeSessionId: null, requestedNativeSessionId: "native-session", busy: true, threadStarted: true });
+    expect(s.messages[1]).not.toHaveProperty("nativeSessionId");
+    s = applyNativeUiEvent(s, observed("message_delta", { text: "hi", nativeMessageId: "assistant" }), generation);
+    expect(s.messages[1]).toMatchObject({ text: "hi", nativeSessionId: "native-session", nativeUserMessageId: "native-user", nativeMessageId: "assistant" });
+    expect(s.messages[1]).not.toHaveProperty("nativeTurnId");
+  });
+
+  it("validates terminal-before-ACK without resurrecting and detects a conflicting ACK", () => {
+    const terminal = applyNativeUiEvent(claudeStart(), observed("turn_complete", { nativeOutcome: "completed" }), generation);
+    const settled = applyNativeAck(terminal, pending(), generation);
+    expect(settled).toMatchObject({ busy: false, activeTurnId: null, unavailable: false, threadStarted: true });
+    expect(settled.messages[1].outcome).toBe("completed");
+    const mismatch = applyNativeAck(terminal, pending({ requestedNativeUserMessageId: "wrong" }), generation);
+    expect(mismatch.unavailable).toBe(true);
+    expect(mismatch.messages[1].outcome).toBe("unknown");
+  });
+
+  it("fails closed on conflicting observed IDs and ignores stale turns and generations", () => {
+    let s = applyNativeAck(claudeStart(), pending(), generation);
+    expect(applyNativeUiEvent(s, observed("message_delta", { generation: "old", text: "stale" }), generation)).toBe(s);
+    expect(applyNativeUiEvent(s, observed("message_delta", { turnId: "old", text: "stale" }), generation)).toBe(s);
+    s = applyNativeUiEvent(s, observed("message_delta", { nativeUserMessageId: "other", text: "wrong" }), generation);
+    expect(s).toMatchObject({ unavailable: true, busy: false });
+    expect(s.messages[1]).toMatchObject({ text: "", outcome: "unknown" });
+  });
+
+  it("does not let a late ACK bind a new turn's identity", () => {
+    let s = applyNativeUiEvent(claudeStart(), observed("turn_complete", { nativeOutcome: "completed" }), generation);
+    s = beginNativeTurn(s, "t2", "next");
+    s = applyNativeAck(s, pending(), generation);
+    expect(s).toMatchObject({ activeTurnId: "t2", busy: true, nativeSessionId: "native-session" });
+    expect(s.messages[3]).not.toHaveProperty("requestedNativeUserMessageId");
+  });
+
+  it("rejects a different session on a continuing chat and ignores stale ACKs", () => {
+    let s = applyNativeAck(claudeStart(), pending(), generation);
+    expect(applyNativeAck(s, pending({ generation: "old" }), generation)).toBe(s);
+    s = applyNativeUiEvent(s, observed("turn_complete", { nativeOutcome: "completed" }), generation);
+    s = beginNativeTurn(s, "t2", "next");
+    s = applyNativeAck(s, pending({ turnId: "t2", requestedNativeSessionId: "foreign", requestedNativeUserMessageId: "new-user" }), generation);
+    expect(s).toMatchObject({ unavailable: true, busy: false });
+  });
+
+  it("supports tool approval without inventing granted choices", () => {
+    const s = applyNativeUiEvent(claudeStart(), observed("approval", { approvalId: "a", approvalType: "tool", decisions: [] }), generation);
+    expect(s.approvals[0]).toMatchObject({ approvalType: "tool", decisions: [] });
   });
 });
