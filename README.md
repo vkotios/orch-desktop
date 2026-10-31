@@ -11,7 +11,7 @@ The implementation builds on the existing coordinator and adapter code. Supporte
 
 ## Desktop implementation status
 
-The Windows x64 debug executable and its bundled Node runtime build successfully. Actual runtime fixtures cover continuing Codex turns, an approved read, a rejected write and interruption followed by continuation. The native onboarding window has been visually inspected; the complete rendered conversation flow is still awaiting verification. Claude integration, durable recovery, installer/upgrade and clean-machine release acceptance remain open. The browser preview retains prototype workflows. See the [product specification](docs/PRODUCT_SPEC.md) and [verified implementation status](docs/IMPLEMENTATION_STATUS.md) for the current boundary.
+The Windows x64 debug executable and its bundled Node runtime build successfully. Actual runtime fixtures cover continuing Codex turns, an approved read, a rejected write and interruption followed by continuation. The built native window also passes rendered conversation checks: visible streamed text, context retained across turns, Stop reaching an interrupted outcome and successful continuation afterward. Claude integration, durable recovery, installer/upgrade and clean-machine release acceptance remain open. The browser preview retains prototype workflows. See the [product specification](docs/PRODUCT_SPEC.md) and [verified implementation status](docs/IMPLEMENTATION_STATUS.md) for the current boundary.
 
 ## Workspace Layout & Quick Commands
 

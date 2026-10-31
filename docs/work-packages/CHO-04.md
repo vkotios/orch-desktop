@@ -1,6 +1,6 @@
 # CHO-04 — Controller capability spike and first transport slice
 
-Updated: 2026-10-31. Status: native Codex preview implemented; rendered conversation verification and the second controller remain open. No session storage schema freeze yet.
+Updated: 2026-10-31. Status: first native Codex debug conversation implemented and verified, including the rendered window. The second controller remains open. No session storage schema freeze yet.
 
 Authority: [implementation plan](../IMPLEMENTATION_PLAN.md), [product specification](../PRODUCT_SPEC.md). The bundled host foundation is recorded in [CHO-02](CHO-02.md).
 
@@ -45,7 +45,7 @@ Verification: 108 package tests (23 shared, 85 desktop), root typecheck and web 
 
 The mapper is pure and stateless. It validates the fields it consumes, not the complete provider schema. It owns no process, RPC request, event cursor, approval or session storage. The following native conversation slice uses it through an owned service and bounded event mailbox.
 
-## First native Codex conversation candidate
+## First native Codex conversation
 
 Source checkpoint: `d6814d3`, Windows x64 debug artifact. Explicit project validation and trust precede opening the installed Codex app-server with saved ChatGPT access and its actual model catalogue. The graphite native view supports in-memory chats, streamed text, tool status, offered once-only permission decisions and Stop. It preserves actual thread/turn identity without sending the transcript again. Unsupported clarification requests interrupt the turn with a visible error; Claude and coordinator mutations are not exposed as working native features.
 
@@ -55,13 +55,13 @@ Controller verification passes 224 package tests (23 shared, 201 desktop), type 
 
 Actual final staged runtime checks pass an exact fixture-file read accepted once, successful mapped tool result, cancelled write with a declined result and no created file, explicit interruption and same-thread continuation retaining the read marker. The owned thread was archived and client closed. Requested model was gpt-6-sol at low effort; independently served identity remains unknown. These live checks supplement deterministic permission, lifecycle, queue and frontend-state regressions.
 
-The native onboarding and canonical project trust prompt have been visually inspected. Complete rendered conversation verification is pending the manual project trust step; runtime fixtures do not substitute for that UI evidence. This is a debug preview, not an installed release or a clean-machine qualification.
+The built Windows view also passes actual rendered acceptance after the owner manually trusted the synthetic project. The first turn and a continuation completed with the same marker without repeating it in the second prompt. A bounded long response visibly streamed formatted text and code; Stop showed a pending state followed by the native interrupted outcome. A subsequent turn completed with the original marker, confirming the chat remained usable. UI model was gpt-6-sol, medium effort; access was left at the owner's trusted selection. Permission round trips remain independently verified by the actual packaged runtime fixtures, not by automated clicks on security prompts. This is a debug preview, not an installed release or a clean-machine qualification.
 
 ## Next bounded slices
 
 1. Qualify Claude's continuing-session, streamed-tool, approval, clarification and cancellation behavior in an owned native fixture. Keep saved subscription access and private credentials separate from public receipts.
-2. Complete rendered conversation acceptance on the built native candidate, then installed-artifact M1 evidence. Keep debug, installed and clean-machine claims separate.
+2. Complete installed-artifact M1 evidence. The built debug view's text/continuation/Stop acceptance passes; keep debug, installed and clean-machine claims separate.
 3. Qualify live clarification and deliberately supported permission extensions. The current preview interrupts unsupported requests; do not add automatic replay or persistent grants.
 4. Keep CHO-03 native-reference storage contracts provisional until both controller spikes establish their actual requirements. Add durable conversation and recovery behavior through its own reviewed slice.
 
-CHO-04 remains in progress. The native Codex implementation does not complete the second controller, clarification, durable recovery, full rendered conversation or installer/release acceptance.
+CHO-04 remains in progress. The native Codex implementation and focused rendered conversation check do not complete the second controller, clarification, durable recovery, broader UI polish or installer/release acceptance.
