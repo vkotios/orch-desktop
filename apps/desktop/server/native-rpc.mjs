@@ -228,13 +228,19 @@ export function createNativeRpc(options) {
       try {
         accepted = output.write(node.bytes, (err) => onWriteSettled(err));
       } catch (err) {
-        // Synchronous transport refusal: the frame was never admitted.
+        // A synchronous throw may follow a partial handover, so a request
+        // given to write here counts as written: teardown fails it
+        // OUTCOME_UNKNOWN, never NOT_SENT.
+        if (node.entry !== null) node.entry.written = true;
         fatal(err instanceof Error ? err : new Error(String(err)));
         return;
       }
       state.queue.shift();
       if (node.entry !== null) node.entry.written = true;
-      else node.resolve();
+      else {
+        if (node.responseId !== undefined) state.pendingIn.delete(node.responseId);
+        node.resolve();
+      }
       if (accepted === false) state.waitingDrain = true;
     }
   }
@@ -316,7 +322,7 @@ export function createNativeRpc(options) {
 
   function respond(id, result) {
     if (state.closed) return Promise.reject(closedError("native RPC peer is closed"));
-    if (!state.pendingIn.has(id)) {
+    if (state.pendingIn.get(id) !== false) {
       return Promise.reject(notSent("unknown or already-answered inbound request id"));
     }
     if (result === undefined) return Promise.reject(notSent("respond result must not be undefined"));
@@ -329,11 +335,12 @@ export function createNativeRpc(options) {
     if (state.queue.length >= NATIVE_RPC_MAX_OUTGOING_FRAMES) {
       return Promise.reject(notSent("outgoing frame queue is full"));
     }
-    // Reserve the single response for this id up front: a duplicate respond
-    // refuses without writing even while the first frame is still queued.
-    state.pendingIn.delete(id);
+    // Reserve the id until the response frame is actually handed to the
+    // transport: a duplicate respond refuses without writing, a duplicate
+    // inbound receive poisons, and legal reuse waits for dispatch.
+    state.pendingIn.set(id, true);
     return new Promise((resolve, reject) => {
-      state.queue.push({ bytes, entry: null, resolve, reject });
+      state.queue.push({ bytes, entry: null, resolve, reject, responseId: id });
       pump();
     });
   }
@@ -393,6 +400,9 @@ export function createNativeRpc(options) {
       // Unknown or duplicate correlation: only a live request may settle,
       // anything else poisons the peer.
       if (!entry) throw new Error("native RPC response matches no pending request");
+      // A result may settle only a request actually handed to the
+      // transport; answering a queued-unsent request is a protocol fault.
+      if (!entry.written) throw new Error("native RPC response matches a request that was never sent");
       state.pendingOut.delete(frame.id);
       clearTimeout(entry.timer);
       if ("error" in frame) entry.reject(remoteError(frame.error.code, frame.error.message));
@@ -407,7 +417,7 @@ export function createNativeRpc(options) {
     if (state.pendingIn.size >= NATIVE_RPC_MAX_PENDING_INBOUND) {
       throw new Error("too many pending inbound requests");
     }
-    state.pendingIn.set(frame.id, true);
+    state.pendingIn.set(frame.id, false);
     if (typeof onRequest === "function") onRequest({ id: frame.id, method: frame.method, params: frame.params });
   }
 
@@ -433,21 +443,40 @@ export function createNativeRpc(options) {
     if (state.closed) return;
     try {
       const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk), "utf8");
-      state.tail = state.tail.length === 0 ? bytes : Buffer.concat([state.tail, bytes]);
-      let newline = state.tail.indexOf(LF_BYTE);
-      while (newline >= 0) {
-        const line = Buffer.from(state.tail.subarray(0, newline + 1));
-        state.tail = state.tail.subarray(newline + 1);
+      // Cursor over the carried prefix plus the new chunk: combine only
+      // the bytes needed for one bounded frame, never the whole chunk, so
+      // a coalesced chunk of individually valid frames may exceed the bound
+      // while an incomplete oversize frame fails before any giant concat.
+      let head = state.tail.length === 0 ? null : state.tail;
+      state.tail = Buffer.alloc(0);
+      let pos = 0;
+      while (pos < bytes.length) {
+        const newline = bytes.indexOf(LF_BYTE, pos);
+        if (newline < 0) {
+          const carried = head === null ? 0 : head.length;
+          if (carried + (bytes.length - pos) > MAX_FRAME_BYTES) {
+            throw new Error(`native RPC frame exceeds ${MAX_FRAME_BYTES} bytes`);
+          }
+          state.tail = head === null
+            ? Buffer.from(bytes.subarray(pos))
+            : Buffer.concat([head, bytes.subarray(pos)]);
+          return;
+        }
+        const carried = head === null ? 0 : head.length;
+        if (carried + (newline - pos + 1) > MAX_FRAME_BYTES) {
+          throw new Error(`native RPC frame exceeds ${MAX_FRAME_BYTES} bytes`);
+        }
+        const line = head === null
+          ? Buffer.from(bytes.subarray(pos, newline + 1))
+          : Buffer.concat([head, bytes.subarray(pos, newline + 1)]);
+        head = null;
+        pos = newline + 1;
         handleLine(line);
         if (state.closed) return;
-        newline = state.tail.indexOf(LF_BYTE);
       }
-      // Copy the tail once per chunk so a consumed giant chunk is released
-      // while only bounded incomplete bytes are retained.
-      state.tail = state.tail.length === 0 ? Buffer.alloc(0) : Buffer.from(state.tail);
-      if (state.tail.length > MAX_FRAME_BYTES) {
-        throw new Error(`native RPC frame exceeds ${MAX_FRAME_BYTES} bytes`);
-      }
+      // Fully consumed with no remainder; restore an unconsumed carry,
+      // which is only possible for an empty chunk.
+      if (head !== null) state.tail = head;
     } catch (err) {
       fatal(err instanceof Error ? err : new Error(String(err)));
     }
