@@ -17,6 +17,33 @@ describe("Claude stream normalization", () => {
     expect(map(delta, { sessionId: "session-1", userMessageId: "user-1" })[0]).not.toHaveProperty("nativeMessageId");
   });
 
+  it("maps a UUID-less continuation only under the actor's verified stream anchor", () => {
+    const continuation = { type: "stream_event", session_id: "session-1", parent_tool_use_id: null,
+      event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: " streamed" } } };
+    const anchored = { sessionId: "session-1", userMessageId: "user-1", streamMessageId: "message-1" };
+    expect(map(continuation, anchored)).toEqual([expect.objectContaining({ kind: "message_delta", text: " streamed", nativeMessageId: "message-1" })]);
+    expect(map(continuation, { sessionId: "session-1", userMessageId: "user-1", messageId: "message-1" })).toEqual([]);
+    expect(map(continuation, { ...anchored, streamMessageId: "" })).toEqual([]);
+    expect(map({ ...continuation, session_id: "other" }, anchored)).toEqual([]);
+    expect(map({ ...continuation, session_id: undefined }, anchored)).toEqual([]);
+    expect(map({ ...continuation, parent_tool_use_id: "subagent" }, anchored)).toEqual([]);
+    expect(map({ ...continuation, parent_tool_use_id: undefined }, anchored)).toEqual([]);
+    expect(map(continuation, { ...anchored, messageId: "other" })).toEqual([]);
+  });
+
+  it("requires the complete correct UUID pair whenever either field is present, even with an anchor", () => {
+    const continuation = { type: "stream_event", session_id: "session-1", parent_tool_use_id: null,
+      event: { type: "content_block_delta", delta: { type: "text_delta", text: "hello" } } };
+    const anchored = { sessionId: "session-1", userMessageId: "user-1", streamMessageId: "message-1" };
+    for (const fields of [
+      { user_message_uuid: "user-1" }, { user_message_uuids: ["user-1"] },
+      { user_message_uuid: undefined, user_message_uuids: undefined },
+      { user_message_uuid: "wrong", user_message_uuids: ["user-1"] },
+      { user_message_uuid: "user-1", user_message_uuids: ["user-1", "other"] },
+    ]) expect(map({ ...continuation, ...fields }, anchored)).toEqual([]);
+    expect(map({ ...continuation, user_message_uuid: "user-1", user_message_uuids: ["user-1"] }, anchored)[0]).toMatchObject({ text: "hello", nativeMessageId: "message-1" });
+  });
+
   it.each([
     { session_id: undefined }, { session_id: "other" },
     { user_message_uuid: undefined }, { user_message_uuid: "other" },
@@ -38,6 +65,23 @@ describe("Claude stream normalization", () => {
     expect(events[0]).toMatchObject({ kind: "tool_call", toolCallId: "tool-1", toolTitle: "Read", toolStatus: "inProgress", nativeMessageId: "assistant-1" });
     expect(events.some((e) => e.kind === "message_delta" || e.kind === "model_verified")).toBe(false);
     expect(map({ ...correlated, type: "assistant", message: { content: [{ type: "tool_use", id: "x", name: "Read" }] } })).toEqual([]);
+  });
+
+  it("maps an uncorrelated continuation assistant only with its matching verified stream anchor", () => {
+    const assistant = { type: "assistant", session_id: "session-1", parent_tool_use_id: null,
+      message: { id: "message-2", content: [{ type: "text", text: "already streamed" }, { type: "tool_use", id: "tool-2", name: "Read" }] } };
+    const anchored = { sessionId: "session-1", userMessageId: "user-1", streamMessageId: "message-2" };
+    expect(map(assistant, anchored)).toEqual([expect.objectContaining({ kind: "tool_call", toolCallId: "tool-2", nativeMessageId: "message-2" })]);
+    expect(map(assistant, { ...anchored, streamMessageId: "other" })).toEqual([]);
+    expect(map(assistant, { sessionId: "session-1", userMessageId: "user-1", messageId: "message-2" })).toEqual([]);
+    expect(map({ ...assistant, session_id: "other" }, anchored)).toEqual([]);
+    expect(map({ ...assistant, parent_tool_use_id: "subagent" }, anchored)).toEqual([]);
+    expect(map({ ...assistant, parent_tool_use_id: undefined }, anchored)).toEqual([]);
+    for (const fields of [
+      { user_message_uuid: "user-1" }, { user_message_uuids: ["user-1"] },
+      { user_message_uuid: undefined, user_message_uuids: undefined },
+      { user_message_uuid: "wrong", user_message_uuids: ["user-1"] },
+    ]) expect(map({ ...assistant, ...fields }, anchored)).toEqual([]);
   });
 
   it("accepts only known tool results and recognizes the native denial metadata array", () => {

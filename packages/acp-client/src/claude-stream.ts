@@ -4,6 +4,8 @@ export interface ClaudeStreamContext {
   sessionId: string;
   userMessageId: string;
   messageId?: string;
+  /** Actor-verified current message_start; cleared when that stream ends. */
+  streamMessageId?: string;
   toolUseIds?: ReadonlySet<string>;
 }
 
@@ -52,21 +54,35 @@ export function normalizeClaudeStreamEvent(
   const type = raw.type;
 
   if (type === 'stream_event') {
-    if (!checkCorrelation(raw, ctx)) return [];
+    if (ctx.streamMessageId !== undefined && !nonempty(ctx.streamMessageId)) return [];
+    if (nonempty(ctx.streamMessageId) && nonempty(ctx.messageId) && ctx.streamMessageId !== ctx.messageId) return [];
+    const hasUuid = Object.hasOwn(raw, 'user_message_uuid') || Object.hasOwn(raw, 'user_message_uuids');
+    if (hasUuid) {
+      if (!checkCorrelation(raw, ctx)) return [];
+    } else if (raw.session_id !== ctx.sessionId || raw.parent_tool_use_id !== null || !nonempty(ctx.streamMessageId)) {
+      return [];
+    }
     const ev = raw.event;
     if (!isPlainObject(ev) || ev.type !== 'content_block_delta') return [];
     const delta = ev.delta;
     if (!isPlainObject(delta) || delta.type !== 'text_delta') return [];
     if (typeof delta.text !== 'string') return [];
     const out: ClaudeStreamEvent = { ...base(uiSessionId, ctx), kind: 'message_delta', text: delta.text };
-    if (nonempty(ctx.messageId)) out.nativeMessageId = ctx.messageId;
+    if (nonempty(ctx.streamMessageId)) out.nativeMessageId = ctx.streamMessageId;
+    else if (nonempty(ctx.messageId)) out.nativeMessageId = ctx.messageId;
     return [out];
   }
 
   if (type === 'assistant') {
-    if (!checkCorrelation(raw, ctx)) return [];
     const msg = raw.message;
     if (!isPlainObject(msg) || !nonempty(msg.id)) return [];
+    const hasUuid = Object.hasOwn(raw, 'user_message_uuid') || Object.hasOwn(raw, 'user_message_uuids');
+    if (hasUuid) {
+      if (!checkCorrelation(raw, ctx)) return [];
+    } else if (raw.session_id !== ctx.sessionId || raw.parent_tool_use_id !== null ||
+        !nonempty(ctx.streamMessageId) || msg.id !== ctx.streamMessageId) {
+      return [];
+    }
     const content = msg.content;
     if (!Array.isArray(content)) return [];
     const results: ClaudeStreamEvent[] = [];
