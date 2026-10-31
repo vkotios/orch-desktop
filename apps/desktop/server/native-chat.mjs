@@ -126,6 +126,11 @@ export function createNativeChatService(options) {
   function interruptOnce(a) {
     if (a.interruptSent) return;
     a.interruptSent = true;
+    clearTimer(a);
+    a.timer = setTimeout(() => {
+      if (state.active === a) fatalize(new Error("native turn did not terminate within 15s after interrupt"));
+    }, ACTIVATION_TIMEOUT_MS);
+    a.timer.unref?.();
     sendInterrupt(a);
   }
   function sendInterrupt(a) {
@@ -134,9 +139,9 @@ export function createNativeChatService(options) {
     let pending;
     try {
       pending = client.request("turn/interrupt", { threadId: a.nativeThreadId, turnId: a.nativeTurnId });
-    } catch (err) { queueError(a, `interrupt failed: ${messageOf(err)}`); return; }
+    } catch (err) { if (state.active === a) fatalize(new Error(`interrupt failed: ${messageOf(err)}`)); return; }
     Promise.resolve(pending).then(undefined, (err) => {
-      try { queueError(a, `interrupt failed: ${messageOf(err)}`); } catch (fatal) { fatalize(fatal); }
+      if (state.active === a) fatalize(new Error(`interrupt failed: ${messageOf(err)}`));
     });
   }
   // Invalidate every pending UI approval (single active turn owns them all):
@@ -148,18 +153,16 @@ export function createNativeChatService(options) {
     }
     state.approvals.clear();
   }
-  // Explicit local turn fault: release active state and displayed approvals,
-  // queue a visible error, optionally interrupt. Never retries, never invents
-  // a native outcome.
-  function failActiveTurn(a, text, interrupt) {
+  // Only a known not-admitted failure may release the turn locally.
+  function failActiveTurn(a, text) {
     if (state.active === a) state.active = null;
     clearTimer(a);
     a.stash.length = 0;
     invalidateApprovals();
     queueError(a, text);
-    if (interrupt === true) sendInterrupt(a);
   }
   function settleTerminal(a) {
+    a.terminal = true;
     if (state.active === a) state.active = null;
     clearTimer(a);
     a.stash.length = 0;
@@ -186,8 +189,13 @@ export function createNativeChatService(options) {
   }
   // Provisional bind from turn/started; false means a conflicting turn id.
   function bindActivation(a, nativeTurnId) {
+    if (a.ackTurnId !== null && a.ackTurnId !== nativeTurnId) {
+      fatalize(new Error("native turn ACK does not match the activated turn"));
+      return false;
+    }
     if (a.nativeTurnId !== null) return a.nativeTurnId === nativeTurnId;
     a.nativeTurnId = nativeTurnId;
+    a.activated = true;
     clearTimer(a);
     flushStash(a);
     if (state.active === a && a.cancelPending) interruptOnce(a);
@@ -197,7 +205,7 @@ export function createNativeChatService(options) {
     const a = state.active;
     if (a === null || a.nativeThreadId === null || params.threadId !== a.nativeThreadId) return;
     const nativeTurnId = nonEmptyString(isPlainObject(params.turn) ? params.turn.id : null);
-    if (nativeTurnId !== null) bindActivation(a, nativeTurnId);
+    if (nativeTurnId !== null && !bindActivation(a, nativeTurnId)) fatalize(new Error("native turn ACK does not match the activated turn"));
   }
   function handleNotification(message) {
     const method = message?.method;
@@ -212,8 +220,12 @@ export function createNativeChatService(options) {
     const turnId = eventTurnId(method, params);
     if (turnId === null) return;
     if (a.nativeTurnId === null) {
-      if (a.stash.length >= MAX_EARLY_STASH) { failActiveTurn(a, "native turn overflowed the pre-activation event buffer", true); return; }
+      if (a.stash.length >= MAX_EARLY_STASH) { fatalize(new Error("native turn overflowed the pre-activation event buffer")); return; }
       a.stash.push({ method, params }); // early but valid; replayed at bind, never lost
+      if (method === "turn/completed" && turnId === a.ackTurnId) {
+        a.nativeTurnId = turnId;
+        flushStash(a);
+      }
       return;
     }
     if (turnId !== a.nativeTurnId) return; // old turn on a reused thread is not rebound
@@ -255,7 +267,10 @@ export function createNativeChatService(options) {
       enqueue({ kind: "error", text: boundText(`unsupported native request with no active turn: ${method}`, MAX_ERROR_TEXT), generation, harness: "codex" });
       return;
     }
-    failActiveTurn(a, `unsupported native request: ${method}`, true);
+    queueError(a, `unsupported native request: ${method}`);
+    invalidateApprovals();
+    if (a.activated) interruptOnce(a);
+    else a.cancelPending = true;
   }
   function handleRequest(message) {
     const id = message?.id;
@@ -351,13 +366,14 @@ export function createNativeChatService(options) {
     }
     session.admitted.add(args.turnId);
     const client = prepared.client;
-    const a = { sessionId: args.sessionId, turnId: args.turnId, nativeThreadId: session.nativeThreadId, nativeTurnId: null, cancelPending: false, interruptSent: false, timer: null, stash: [] };
+    const a = { sessionId: args.sessionId, turnId: args.turnId, nativeThreadId: session.nativeThreadId, nativeTurnId: null, ackTurnId: null, activated: false, terminal: false, cancelPending: false, interruptSent: false, timer: null, stash: [] };
     state.active = a; // pending before any provider request so early events bind here
     const timer = setTimeout(() => {
-      try { if (state.active === a) failActiveTurn(a, "native turn did not activate within 15s", true); } catch (err) { fatalize(err); }
+      if (state.active === a) fatalize(new Error("native turn did not activate within 15s"));
     }, ACTIVATION_TIMEOUT_MS);
     try { timer.unref?.(); } catch { /* timer fakes may lack unref */ }
     a.timer = timer;
+    let turnRequested = false;
     try {
       if (session.nativeThreadId === null) {
         const threadResult = await client.request("thread/start", { model: args.model, modelProvider: "openai", cwd: prepared.path, sandbox: args.role === "review" ? "read-only" : "workspace-write", approvalPolicy: "untrusted", config: { mcp_servers: {} } });
@@ -366,17 +382,41 @@ export function createNativeChatService(options) {
         session.nativeThreadId = threadId; session.role = args.role; session.model = args.model;
         a.nativeThreadId = threadId;
       }
+      if (state.active !== a) throw new Error("native chat service is closed");
+      turnRequested = true;
       const turnResult = await client.request("turn/start", { threadId: a.nativeThreadId, input: [{ type: "text", text: args.prompt }], effort: args.effort });
+      if (state.active !== a && !a.terminal) throw new Error("native chat service is closed or turn was superseded");
       const ackTurnId = extractTurnId(turnResult);
-      if (ackTurnId === null) throw new Error("native turn/start did not acknowledge turn.id");
-      if (state.active === a) { // a pre-ACK terminal settles first and is never resurrected
-        if (a.nativeTurnId === null) { a.nativeTurnId = ackTurnId; clearTimer(a); flushStash(a); }
-        else if (a.nativeTurnId !== ackTurnId) { failActiveTurn(a, "native turn ACK does not match the activated turn", false); throw new Error("native turn ACK does not match the activated turn"); }
-        if (state.active === a && a.cancelPending) interruptOnce(a);
+      if (ackTurnId === null) {
+        const error = new Error("native turn/start did not acknowledge turn.id");
+        if (a.terminal) fatalize(error);
+        throw error;
+      }
+      if (a.nativeTurnId !== null && a.nativeTurnId !== ackTurnId) {
+        const error = new Error("native turn ACK does not match the activated turn");
+        fatalize(error);
+        throw error;
+      }
+      if (state.dead || state.closed) throw new Error("native chat service is closed");
+      a.ackTurnId = ackTurnId;
+      if (state.active === a && a.nativeTurnId === null) {
+        const earlyTerminal = a.stash.find((raw) => raw.method === "turn/completed");
+        if (earlyTerminal && eventTurnId(earlyTerminal.method, earlyTerminal.params) !== ackTurnId) {
+          const error = new Error("native turn ACK does not match the terminal turn");
+          fatalize(error);
+          throw error;
+        }
+        if (earlyTerminal) {
+          a.nativeTurnId = ackTurnId;
+          flushStash(a);
+        }
       }
       return { generation, sessionId: args.sessionId, turnId: args.turnId, nativeThreadId: a.nativeThreadId, nativeTurnId: a.nativeTurnId ?? ackTurnId };
     } catch (err) {
-      if (state.active === a) failActiveTurn(a, `chat send failed: ${messageOf(err)}`, false);
+      if (state.active === a) {
+        if (!turnRequested || err?.code === "REMOTE_ERROR" || err?.code === "NOT_SENT") failActiveTurn(a, `chat send failed: ${messageOf(err)}`);
+        else fatalize(new Error(`chat send failed: ${messageOf(err)}`));
+      }
       throw err instanceof Error ? err : new Error(String(err));
     }
   }
@@ -415,7 +455,7 @@ export function createNativeChatService(options) {
     const a = state.active;
     if (a === null || a.sessionId !== args.sessionId || a.turnId !== args.turnId) throw new Error("no matching active turn to cancel");
     invalidateApprovals();
-    if (a.nativeThreadId !== null && a.nativeTurnId !== null) interruptOnce(a);
+    if (a.activated) interruptOnce(a);
     else a.cancelPending = true; // ACK is not activation: interrupt once the real turn binds
     return { generation, sessionId: args.sessionId, turnId: args.turnId, cancelling: true };
   }

@@ -207,6 +207,7 @@ describe("send validation and threads", () => {
     expect(h.client.requests.filter((r) => r.method === "thread/start")).toHaveLength(1);
     expect(h.client.requests.at(-1).params.input).toEqual([{ type: "text", text: "second" }]);
     await expect(h.svc.handle("direct_chat_send", sendFor(h.token, { prompt: "replay" }))).rejects.toThrow(/already admitted/);
+    completeTurn(h.client, "th-1", "tu-2", "completed");
     await expect(h.svc.handle("direct_chat_send", sendFor(h.token, { turnId: "u3", role: "review" }))).rejects.toThrow(/immutable/);
   });
 
@@ -228,15 +229,12 @@ describe("send validation and threads", () => {
     completeTurn(h.client, "th-1", "tu-1", "completed");
   });
 
-  it("fails send when the provider never returns a turn id, without keeping the turn", async () => {
+  it("fails closed when the provider never returns a turn id", async () => {
     const h = await prepared();
     h.client.turnImpl = async () => ({ nope: true });
     await expect(h.svc.handle("direct_chat_send", sendFor(h.token))).rejects.toThrow(/turn.id/);
-    const events = await pollFor(h.svc, h.token);
-    expect(events.events.some((e) => e.kind === "error")).toBe(true);
-    h.client.turnImpl = null;
-    const retry = await h.svc.handle("direct_chat_send", sendFor(h.token, { turnId: "u2" }));
-    expect(retry.nativeThreadId).toBe("th-1"); // thread survives a failed send
+    expect(h.fatals).toHaveLength(1);
+    await expect(h.svc.handle("direct_chat_send", sendFor(h.token, { turnId: "u2" }))).rejects.toThrow(/closed/);
   });
 });
 
@@ -267,11 +265,8 @@ describe("races and terminal outcomes", () => {
     h.client.note("turn/started", { threadId: "th-1", turn: { id: "tu-real" } });
     h.client.resolveTurn("tu-other");
     await expect(sent).rejects.toThrow(/ACK does not match/);
-    const { events } = await pollFor(h.svc, h.token);
-    expect(events.some((e) => e.kind === "error")).toBe(true);
-    h.client.deferTurns = false;
-    const retry = await h.svc.handle("direct_chat_send", sendFor(h.token, { turnId: "u2" }));
-    expect(retry.nativeTurnId).toBe("tu-2");
+    expect(h.fatals).toHaveLength(1);
+    await expect(h.svc.handle("direct_chat_send", sendFor(h.token, { turnId: "u2" }))).rejects.toThrow(/closed/);
   });
 
   it("settles a terminal that arrives before the ACK without resurrecting", async () => {
@@ -290,6 +285,20 @@ describe("races and terminal outcomes", () => {
     h.client.deferTurns = false;
     const next = await h.svc.handle("direct_chat_send", sendFor(h.token, { turnId: "u2" }));
     expect(next.nativeThreadId).toBe("th-1");
+  });
+
+  it("fails closed on a mismatched ACK even after a terminal", async () => {
+    const h = await prepared();
+    h.client.deferTurns = true;
+    const sent = h.svc.handle("direct_chat_send", sendFor(h.token));
+    sent.catch(() => {});
+    await tick();
+    h.client.note("turn/started", { threadId: "th-1", turn: { id: "tu-real" } });
+    completeTurn(h.client, "th-1", "tu-real", "completed");
+    h.client.resolveTurn("tu-other");
+    await expect(sent).rejects.toThrow(/ACK does not match/);
+    expect(h.fatals).toHaveLength(1);
+    await expect(h.svc.handle("direct_chat_send", sendFor(h.token, { turnId: "u2" }))).rejects.toThrow(/closed/);
   });
 
   it("reports failed and interrupted distinctly and releases the turn", async () => {
@@ -329,25 +338,22 @@ describe("races and terminal outcomes", () => {
     const sent = h.svc.handle("direct_chat_send", sendFor(h.token));
     sent.catch(() => {});
     await vi.advanceTimersByTimeAsync(15_000);
-    const polled = await pollFor(h.svc, h.token);
-    expect(polled.events.some((e) => e.kind === "error" && /activate/.test(e.text))).toBe(true);
+    expect(h.fatals[0].message).toMatch(/activate/);
     h.client.resolveTurn("tu-late");
-    await expect(sent).resolves.toMatchObject({ nativeTurnId: "tu-late" });
-    const retryP = h.svc.handle("direct_chat_send", sendFor(h.token, { turnId: "u2" }));
-    retryP.catch(() => {});
-    h.client.resolveTurn("tu-2");
-    await expect(retryP).resolves.toMatchObject({ nativeTurnId: "tu-2" });
+    await expect(sent).rejects.toThrow(/closed/);
+    await expect(h.svc.handle("direct_chat_send", sendFor(h.token, { turnId: "u2" }))).rejects.toThrow(/closed/);
 
     const h2 = await prepared();
     h2.client.deferTurns = true;
     const pending = h2.svc.handle("direct_chat_send", sendFor(h2.token));
     pending.catch(() => {});
+    await vi.advanceTimersByTimeAsync(0); // enter turn/start before closing the project
     await h2.svc.handle("native_chat_close", { generation: GEN, projectToken: h2.token });
     expect(h2.client.closes).toBe(1);
     await vi.advanceTimersByTimeAsync(60_000);
     expect(h2.fatals).toHaveLength(0);
     h2.client.resolveTurn("tu-z");
-    await expect(pending).resolves.toMatchObject({ nativeTurnId: "tu-z" });
+    await expect(pending).rejects.toThrow(/closed/);
   });
 });
 
@@ -464,6 +470,50 @@ describe("approval requests", () => {
 });
 
 describe("cancel", () => {
+  it("does not interrupt on ACK alone and retains the activation deadline", async () => {
+    vi.useFakeTimers();
+    const h = await prepared();
+    const sent = await h.svc.handle("direct_chat_send", sendFor(h.token));
+    await h.svc.handle("direct_chat_cancel", { generation: GEN, projectToken: h.token, sessionId: "s1", turnId: "u1" });
+    expect(h.client.requests.filter((r) => r.method === "turn/interrupt")).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(h.fatals[0].message).toMatch(/activate/);
+    expect(sent.nativeTurnId).toBe("tu-1");
+  });
+
+  it("fails closed when interrupt fails, but ignores a late failure after terminal", async () => {
+    const h = await prepared();
+    const sent = await h.svc.handle("direct_chat_send", sendFor(h.token));
+    h.client.note("turn/started", { threadId: "th-1", turn: { id: sent.nativeTurnId } });
+    h.client.interruptImpl = () => Promise.reject(new Error("interrupt broken"));
+    await h.svc.handle("direct_chat_cancel", { generation: GEN, projectToken: h.token, sessionId: "s1", turnId: "u1" });
+    await tick();
+    expect(h.fatals[0].message).toMatch(/interrupt broken/);
+    await expect(h.svc.handle("direct_chat_send", sendFor(h.token, { turnId: "u2" }))).rejects.toThrow(/closed/);
+
+    const next = await prepared();
+    let rejectInterrupt;
+    next.client.interruptImpl = () => new Promise((_, reject) => { rejectInterrupt = reject; });
+    const first = await next.svc.handle("direct_chat_send", sendFor(next.token));
+    next.client.note("turn/started", { threadId: "th-1", turn: { id: first.nativeTurnId } });
+    await next.svc.handle("direct_chat_cancel", { generation: GEN, projectToken: next.token, sessionId: "s1", turnId: "u1" });
+    completeTurn(next.client, "th-1", first.nativeTurnId, "interrupted");
+    await next.svc.handle("direct_chat_send", sendFor(next.token, { turnId: "u2" }));
+    rejectInterrupt(new Error("late"));
+    await tick();
+    expect(next.fatals).toHaveLength(0);
+  });
+
+  it("clears the termination timer on terminal", async () => {
+    vi.useFakeTimers();
+    const h = await prepared();
+    const sent = await h.svc.handle("direct_chat_send", sendFor(h.token));
+    h.client.note("turn/started", { threadId: "th-1", turn: { id: sent.nativeTurnId } });
+    await h.svc.handle("direct_chat_cancel", { generation: GEN, projectToken: h.token, sessionId: "s1", turnId: "u1" });
+    completeTurn(h.client, "th-1", sent.nativeTurnId, "interrupted");
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(h.fatals).toHaveLength(0);
+  });
   it("waits for activation when cancelling early and never reports stopped", async () => {
     const h = await prepared();
     h.client.deferTurns = true;
@@ -509,6 +559,8 @@ describe("unsupported requests, overflow, and close", () => {
     expect(h.client.responded).toHaveLength(0);
     expect(h.client.retired).toContain(9);
     expect(h.client.requests.at(-1).method).toBe("turn/interrupt");
+    await expect(h.svc.handle("direct_chat_send", sendFor(h.token, { turnId: "u2" }))).rejects.toThrow(/already active/);
+    completeTurn(h.client, "th-1", sent.nativeTurnId, "interrupted");
     const retry = await h.svc.handle("direct_chat_send", sendFor(h.token, { turnId: "u2" }));
     expect(retry.nativeThreadId).toBe("th-1");
   });
