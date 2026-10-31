@@ -119,6 +119,65 @@ function completeTurn(client, threadId, turnId, status, errorMessage) {
 }
 
 describe("validate/prepare trust", () => {
+  it("closes a client opened after project close without installing it", async () => {
+    const client = new FakeClient();
+    let resolveOpen;
+    const svc = createNativeChatService({ generation: GEN, onFatal: () => {}, openClient: () => new Promise((resolve) => { resolveOpen = resolve; }) });
+    const v = await svc.handle("native_chat_validate_project", { path: tempDir() });
+    const preparing = svc.handle("native_chat_prepare_project", { projectToken: v.projectToken, trusted: true });
+    preparing.catch(() => {});
+    await svc.handle("native_chat_close", { generation: GEN });
+    resolveOpen(client);
+    await expect(preparing).rejects.toThrow(/closed or superseded/);
+    expect(client.closes).toBe(1);
+    await expect(svc.handle("direct_chat_send", sendFor(v.projectToken))).rejects.toThrow(/no prepared project/);
+  });
+
+  it("reports failure to clean up a client opened after close", async () => {
+    const client = new FakeClient();
+    client.closeImpl = async () => { throw new Error("late cleanup failed"); };
+    const fatals = [];
+    let resolveOpen;
+    const svc = createNativeChatService({ generation: GEN, onFatal: (err) => fatals.push(err), openClient: () => new Promise((resolve) => { resolveOpen = resolve; }) });
+    const v = await svc.handle("native_chat_validate_project", { path: tempDir() });
+    const preparing = svc.handle("native_chat_prepare_project", { projectToken: v.projectToken, trusted: true });
+    preparing.catch(() => {});
+    await svc.handle("native_chat_close", { generation: GEN });
+    resolveOpen(client);
+    await expect(preparing).rejects.toThrow(/late cleanup failed/);
+    expect(fatals[0].message).toMatch(/late cleanup failed/);
+  });
+
+  it("ignores old client callbacks after a new project reuses native IDs", async () => {
+    const clients = [];
+    const fatals = [];
+    const svc = createNativeChatService({ generation: GEN, onFatal: (err) => fatals.push(err), openClient: async (opts) => {
+      const client = new FakeClient();
+      client.handlers = opts;
+      clients.push(client);
+      return client;
+    } });
+    const dir = tempDir();
+    const first = await svc.handle("native_chat_validate_project", { path: dir });
+    await svc.handle("native_chat_prepare_project", { projectToken: first.projectToken, trusted: true });
+    await svc.handle("native_chat_close", { generation: GEN, projectToken: first.projectToken });
+    const second = await svc.handle("native_chat_validate_project", { path: dir });
+    await svc.handle("native_chat_prepare_project", { projectToken: second.projectToken, trusted: true });
+    await svc.handle("direct_chat_send", sendFor(second.projectToken));
+    clients[1].note("turn/started", { threadId: "th-1", turn: { id: "tu-1" } });
+    clients[1].req(0, "item/commandExecution/requestApproval", { threadId: "th-1", turnId: "tu-1", itemId: "item" });
+    const [ask] = (await pollFor(svc, second.projectToken)).events;
+    clients[0].note("serverRequest/resolved", { requestId: 0 });
+    clients[0].note("turn/completed", { threadId: "th-1", turn: { id: "tu-1", status: "completed" } });
+    clients[0].req(0, "item/commandExecution/requestApproval", { threadId: "th-1", turnId: "tu-1", itemId: "item" });
+    clients[0].handlers.onFatal(new Error("stale fatal"));
+    expect((await pollFor(svc, second.projectToken)).events).toHaveLength(0);
+    expect(fatals).toHaveLength(0);
+    await svc.handle("native_chat_respond", { generation: GEN, projectToken: second.projectToken, sessionId: "s1", turnId: "u1", approvalId: ask.approvalId, decision: "decline" });
+    expect(clients[1].responded).toEqual([{ id: 0, result: { decision: "decline" } }]);
+    await expect(svc.handle("direct_chat_send", sendFor(second.projectToken, { turnId: "u2" }))).rejects.toThrow(/already active/);
+  });
+
   it("requires an absolute existing directory and returns the canonical path", async () => {
     const { svc } = makeService();
     const file = join(tempDir(), "f");
@@ -424,24 +483,62 @@ describe("approval requests", () => {
     expect(ack.acknowledged).toBe(true);
   });
 
-  it("ignores foreign approvals and rejects stale or cross-turn answers", async () => {
+  it("fails closed on foreign approvals and rejects stale or cross-turn answers", async () => {
     const h = await activeTurn();
     h.client.req(5, "item/commandExecution/requestApproval", approvalParams({ turnId: "tu-other", itemId: "evil" }));
-    h.client.req(6, "item/commandExecution/requestApproval", approvalParams({ threadId: "th-other", itemId: "evil" }));
-    expect((await pollFor(h.svc, h.token)).events).toHaveLength(0);
-    expect(h.client.retired).toEqual(expect.arrayContaining([5, 6]));
+    expect(h.fatals).toHaveLength(1);
+    expect(h.client.retired).toContain(5);
     expect(h.client.responded).toHaveLength(0);
-    h.client.req(7, "item/commandExecution/requestApproval", approvalParams({ itemId: "mine" }));
-    const { events } = await pollFor(h.svc, h.token);
-    await expect(h.svc.handle("native_chat_respond", {
-      generation: GEN, projectToken: h.token, sessionId: "s1", turnId: "other-turn",
+    const h2 = await activeTurn();
+    h2.client.req(7, "item/commandExecution/requestApproval", approvalParams({ itemId: "mine" }));
+    const { events } = await pollFor(h2.svc, h2.token);
+    await expect(h2.svc.handle("native_chat_respond", {
+      generation: GEN, projectToken: h2.token, sessionId: "s1", turnId: "other-turn",
       approvalId: events[0].approvalId, decision: "accept",
     })).rejects.toThrow(/does not belong/);
-    completeTurn(h.client, "th-1", "tu-1", "completed");
-    await expect(h.svc.handle("native_chat_respond", {
-      generation: GEN, projectToken: h.token, sessionId: "s1", turnId: "u1",
+    completeTurn(h2.client, "th-1", "tu-1", "completed");
+    await expect(h2.svc.handle("native_chat_respond", {
+      generation: GEN, projectToken: h2.token, sessionId: "s1", turnId: "u1",
       approvalId: events[0].approvalId, decision: "accept",
     })).rejects.toThrow(/already-answered/);
+  });
+
+  it("filters persistent grants and fails closed when choices are empty or unsupported", async () => {
+    const h = await activeTurn();
+    h.client.req(0, "item/commandExecution/requestApproval", approvalParams({ availableDecisions: ["acceptForSession", "accept", "accept", "decline"] }));
+    const [ask] = (await pollFor(h.svc, h.token)).events;
+    expect(ask.decisions).toEqual(["accept", "decline"]);
+    for (const choices of [[], ["acceptForSession"], null]) {
+      const x = await activeTurn();
+      x.client.req(0, "item/commandExecution/requestApproval", approvalParams({ availableDecisions: choices }));
+      expect(x.fatals).toHaveLength(1);
+      expect(x.client.responded).toHaveLength(0);
+      expect(x.client.retired).toContain(0);
+    }
+  });
+
+  it("fails closed on an approval before activation even when ACK arrived", async () => {
+    const h = await prepared();
+    await h.svc.handle("direct_chat_send", sendFor(h.token));
+    h.client.req(0, "item/commandExecution/requestApproval", approvalParams());
+    expect(h.fatals).toHaveLength(1);
+    expect(h.client.responded).toHaveLength(0);
+  });
+
+  it("only resolves numeric id 0 on the exact notification method", async () => {
+    const h = await activeTurn();
+    h.client.req(0, "item/commandExecution/requestApproval", approvalParams());
+    h.client.req("0", "item/commandExecution/requestApproval", approvalParams());
+    const asks = (await pollFor(h.svc, h.token)).events;
+    h.client.note("other/resolved", { requestId: 0 });
+    expect((await pollFor(h.svc, h.token)).events).toHaveLength(0);
+    h.client.note("serverRequest/resolved", { requestId: 0 });
+    expect((await pollFor(h.svc, h.token)).events).toEqual([expect.objectContaining({ approvalId: asks[0].approvalId })]);
+    await h.svc.handle("native_chat_respond", { generation: GEN, projectToken: h.token, sessionId: "s1", turnId: "u1", approvalId: asks[1].approvalId, decision: "decline" });
+    expect(h.client.responded).toEqual([{ id: "0", result: { decision: "decline" } }]);
+    h.client.req(10, "serverRequest/resolved", { requestId: 0 });
+    expect(h.client.responded).toHaveLength(1);
+    expect(h.client.requests.at(-1).method).toBe("turn/interrupt");
   });
 
   it("invalidates pending approvals on terminal and on provider resolution", async () => {

@@ -44,7 +44,7 @@ function isPlainObject(v) {
 const isValidId = (v) => typeof v === "string" && v.length >= 1 && v.length <= MAX_ID_CHARS;
 const messageOf = (e) => (e instanceof Error ? e.message : String(e));
 const boundText = (v, n) => { const s = String(v ?? ""); return s.length > n ? s.slice(0, n) : s; };
-const isResolvedMethod = (m) => m === "serverRequest/resolved" || /(^|\/)resolved$/.test(m);
+const isResolvedMethod = (m) => m === "serverRequest/resolved";
 const nonEmptyString = (v) => (typeof v === "string" && v.length > 0 ? v : null);
 
 // turn/completed carries the turn as params.turn.id; other events use turnId.
@@ -78,7 +78,7 @@ export function createNativeChatService(options) {
   }));
 
   const mailbox = createEventMailbox();
-  const state = { closed: false, dead: false, challenge: null, prepared: null, sessions: new Map(), active: null, approvals: new Map() };
+  const state = { closed: false, dead: false, challenge: null, prepared: null, context: null, sessions: new Map(), active: null, approvals: new Map() };
 
   function notifyOwner(err) {
     try { onFatal(err); } catch { /* owner callback must not break teardown */ }
@@ -107,7 +107,8 @@ export function createNativeChatService(options) {
     } catch { /* a full queue never suppresses the owner notification */ }
     const client = state.prepared?.client ?? null;
     if (typeof client?.close === "function") {
-      try { Promise.resolve(client.close()).catch(() => {}); } catch { /* best effort */ }
+      try { Promise.resolve(client.close()).catch((err) => notifyOwner(err instanceof Error ? err : new Error(String(err)))); }
+      catch (err) { notifyOwner(err instanceof Error ? err : new Error(String(err))); }
     }
     notifyOwner(error);
   }
@@ -246,16 +247,24 @@ export function createNativeChatService(options) {
   function handleApprovalRequest(id, method, params) {
     const a = state.active;
     const shaped = isPlainObject(params) && nonEmptyString(params.threadId) !== null && nonEmptyString(params.turnId) !== null && nonEmptyString(params.itemId) !== null;
-    if (!shaped || a === null || params.threadId !== a.nativeThreadId || a.nativeTurnId === null || params.turnId !== a.nativeTurnId) {
-      retireInbound(id); // foreign or pre-activation: forget, never answer, never show
+    if (!shaped || a === null || !a.activated || params.threadId !== a.nativeThreadId || params.turnId !== a.nativeTurnId) {
+      retireInbound(id);
+      fatalize(new Error("invalid, foreign, or pre-activation native approval request"));
+      return;
+    }
+    const hasChoices = Object.hasOwn(params, "availableDecisions");
+    const decisions = !hasChoices ? ["accept", "decline", "cancel"] :
+      Array.isArray(params.availableDecisions) ? [...new Set(params.availableDecisions.filter((d) => DECISIONS.has(d)))] : [];
+    if (decisions.length === 0) {
+      retireInbound(id);
+      fatalize(new Error("native approval request offered no supported decisions"));
       return;
     }
     if (state.approvals.size >= MAX_PENDING_APPROVALS) {
-      try { Promise.resolve(state.prepared.client.respond(id, { decision: "decline" })).catch(() => {}); } catch { /* safe decline failed */ }
+      retireInbound(id);
+      fatalize(new Error("too many pending native approvals"));
       return;
     }
-    const offered = Array.isArray(params.availableDecisions) ? params.availableDecisions.filter((d) => typeof d === "string" && d.length > 0).slice(0, 8) : [];
-    const decisions = offered.length > 0 ? offered : ["accept", "decline", "cancel"];
     const approvalId = crypto.randomUUID();
     state.approvals.set(approvalId, { approvalId, sessionId: a.sessionId, turnId: a.turnId, nativeThreadId: params.threadId, nativeTurnId: params.turnId, nativeItemId: params.itemId, requestId: id, connectionId: state.prepared.client.connectionId, decisions });
     enqueue({ kind: "approval", approvalId, approvalType: method === "item/fileChange/requestApproval" ? "file" : "command", text: approvalText(params, params.itemId), decisions, nativeItemId: params.itemId, generation, harness: "codex", sessionId: a.sessionId, turnId: a.turnId, nativeThreadId: params.threadId, nativeTurnId: params.turnId });
@@ -264,7 +273,7 @@ export function createNativeChatService(options) {
     retireInbound(id);
     const a = state.active;
     if (a === null) {
-      enqueue({ kind: "error", text: boundText(`unsupported native request with no active turn: ${method}`, MAX_ERROR_TEXT), generation, harness: "codex" });
+      fatalize(new Error(`unsupported native request with no active turn: ${method}`));
       return;
     }
     queueError(a, `unsupported native request: ${method}`);
@@ -275,12 +284,7 @@ export function createNativeChatService(options) {
   function handleRequest(message) {
     const id = message?.id;
     const method = message?.method;
-    if (typeof method !== "string") { retireInbound(id); return; }
-    if (isResolvedMethod(method)) {
-      try { Promise.resolve(state.prepared?.client?.respond(id, {})).catch(() => {}); } catch { /* best effort */ }
-      handleResolved(isPlainObject(message?.params) ? message.params : null);
-      return;
-    }
+    if (typeof method !== "string") { retireInbound(id); fatalize(new Error("malformed native request")); return; }
     if (APPROVALS.has(method)) { handleApprovalRequest(id, method, message?.params); return; }
     handleUnsupportedRequest(id, method); // incl. clarification: visible, interrupt/fail, never autoaccept
   }
@@ -319,20 +323,28 @@ export function createNativeChatService(options) {
     const pending = state.challenge;
     if (pending === null || pending.projectToken !== args.projectToken) throw new Error("stale or unknown project challenge; validate the project first");
     if (Date.now() > pending.expiresAt) { state.challenge = null; throw new Error("project challenge expired; validate the project again"); }
-    if (state.prepared !== null) throw new Error("a project is already prepared; close it before preparing another");
+    if (state.prepared !== null || state.context !== null) throw new Error("a project is already prepared or preparing; close it before preparing another");
     state.challenge = null; // consumed once, success or failure
     const canonical = canonicalize(pending.path);
     if (canonical !== pending.path) throw new Error("project path changed since validation; validate the project again");
+    const context = {};
+    state.context = context;
+    const current = () => state.context === context && !state.closed && !state.dead;
     let client;
     try {
       client = await openClient({
         workspace: canonical,
-        onNotification: (m) => { try { handleNotification(m); } catch (err) { fatalize(err); } },
-        onRequest: (m) => { try { handleRequest(m); } catch (err) { fatalize(err); } },
-        onFatal: (err) => { fatalize(err); },
+        onNotification: (m) => { if (current()) { try { handleNotification(m); } catch (err) { fatalize(err); } } },
+        onRequest: (m) => { if (current()) { try { handleRequest(m); } catch (err) { fatalize(err); } } },
+        onFatal: (err) => { if (current()) fatalize(err); },
       });
     } catch (err) {
+      if (state.context === context) state.context = null;
       throw new Error(`preparing project failed: ${messageOf(err)}`); // no retained trust or client
+    }
+    if (!current()) {
+      await closeClient(client);
+      throw new Error("preparing project was closed or superseded");
     }
     const models = (Array.isArray(client.models) ? client.models : [])
       .filter((m) => isPlainObject(m) && typeof m.id === "string" && m.id.length > 0)
@@ -385,6 +397,7 @@ export function createNativeChatService(options) {
       if (state.active !== a) throw new Error("native chat service is closed");
       turnRequested = true;
       const turnResult = await client.request("turn/start", { threadId: a.nativeThreadId, input: [{ type: "text", text: args.prompt }], effort: args.effort });
+      if (state.prepared !== prepared) throw new Error("native chat service is closed or turn was superseded");
       if (state.active !== a && !a.terminal) throw new Error("native chat service is closed or turn was superseded");
       const ackTurnId = extractTurnId(turnResult);
       if (ackTurnId === null) {
@@ -440,7 +453,7 @@ export function createNativeChatService(options) {
     if (rec === undefined) throw new Error("unknown or already-answered approval");
     if (rec.sessionId !== args.sessionId || rec.turnId !== args.turnId) throw new Error("approval does not belong to this session turn");
     if (rec.connectionId !== state.prepared.client.connectionId) throw new Error("approval belongs to a closed connection");
-    if (rec.decisions.length > 0 && !rec.decisions.includes(args.decision)) throw new Error(`decision ${args.decision} was not offered for this approval`);
+    if (!rec.decisions.includes(args.decision)) throw new Error(`decision ${args.decision} was not offered for this approval`);
     state.approvals.delete(args.approvalId); // consumed once, before awaiting the response
     await state.prepared.client.respond(rec.requestId, { decision: args.decision });
     return { generation, approvalId: args.approvalId, acknowledged: true };
@@ -461,6 +474,7 @@ export function createNativeChatService(options) {
   }
 
   function resetProject() {
+    state.context = null;
     if (state.active !== null) { const a = state.active; state.active = null; clearTimer(a); }
     state.approvals.clear();
     state.sessions.clear();
