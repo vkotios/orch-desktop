@@ -21,11 +21,13 @@ class Child extends EventEmitter {
   kill = vi.fn(() => { this.end(); return true; });
   closeOnEnd = true;
   closed = false;
+  echoResponses = false;
   constructor(public auth: boolean, public reply = true) {
     super();
     this.stdin = new Writable({ write: (chunk, _enc, callback) => {
       const value = JSON.parse(chunk.toString());
       this.writes.push(value);
+      if (this.echoResponses && value.type === "control_response") this.emitFrame(value);
       if (this.reply && value.type === "control_request") queueMicrotask(() => this.emitFrame({ type: "control_response", response: { subtype: "success", request_id: value.request_id, response: value.request.subtype === "initialize" ? { pid: this.pid, account: { apiProvider: "firstParty" }, models: [{ value: "default", displayName: "Default", resolvedModel: "actual", supportedEffortLevels: ["low", "high"] }] } : {} } }));
       callback();
     }, final: (callback) => { callback(); if (this.closeOnEnd) queueMicrotask(() => this.end()); } });
@@ -138,6 +140,21 @@ describe("owned Claude client", () => {
     expect(client.closed).toBe(true);
     expect(onFatal).toHaveBeenCalledTimes(1);
     await expect(client.sendUser({ uuid: messageId, prompt: "x" })).rejects.toMatchObject({ code: "CLOSED" });
+    await client.close();
+  });
+
+  it("ignores replayed permission responses, including reentrant allow and deny", async () => {
+    const h = fixture(); const onFatal = vi.fn(); const onEvent = vi.fn(); const onRequest = vi.fn();
+    const client = await openClaudeClient({ ...h.options, model: "default", sessionId: session, role: "review", onFatal, onEvent, onRequest });
+    const child = h.children[1]; child.echoResponses = true;
+    for (const [id, decision] of [["a", { behavior: "allow", updatedInput: { path: "fixture" } }], ["b", { behavior: "deny", message: "declined", interrupt: true }]] as const) {
+      child.emitFrame({ type: "control_request", request_id: id, request: { subtype: "can_use_tool", tool_name: "Read" } });
+      await expect(client.respond(id, decision)).resolves.toBeUndefined();
+    }
+    expect(onRequest).toHaveBeenCalledTimes(2);
+    expect(onEvent).not.toHaveBeenCalled();
+    expect(onFatal).not.toHaveBeenCalled();
+    expect(client.closed).toBe(false);
     await client.close();
   });
 

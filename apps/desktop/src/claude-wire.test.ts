@@ -86,6 +86,34 @@ describe("Claude wire codec through native RPC", () => {
     expect(h.onFatal).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    { behavior: "allow", updatedInput: { path: "fixture" } },
+    { behavior: "deny", message: "declined", interrupt: true },
+  ])("treats a reentrant permission response echo as informational", async (decision) => {
+    const h = harness();
+    h.input.write(frame({ type: "control_request", request_id: "tool-1", request: { subtype: "can_use_tool" } }));
+    const original = h.output.write.bind(h.output);
+    vi.spyOn(h.output, "write").mockImplementation(((chunk: unknown, cb: unknown) => {
+      const result = original(chunk as any, cb as any);
+      h.input.write(chunk as any); // replay can arrive before respond settles
+      return result;
+    }) as any);
+    await expect(h.peer.respond("tool-1", decision)).resolves.toBeUndefined();
+    expect(h.onNotification).toHaveBeenCalledWith({ method: "claude/control_response_echo", params: { requestId: "tool-1" } });
+    expect(h.onRequest).toHaveBeenCalledTimes(1);
+    expect(h.onFatal).not.toHaveBeenCalled();
+    h.peer.close();
+  });
+
+  it("rejects malformed permission echoes and still faults on ordinary unknown responses", () => {
+    for (const result of [{ behavior: "allow", updatedInput: {}, updatedPermissions: [] }, { behavior: "deny", message: "no", interrupt: "yes" }, {}]) {
+      const h = harness();
+      h.input.write(frame({ type: "control_response", response: { subtype: "success", request_id: "unknown", response: result } }));
+      expect(h.onFatal).toHaveBeenCalledTimes(1);
+      expect(h.peer.closed).toBe(true);
+    }
+  });
+
   it("bounds the actual and transformed envelopes in both directions", async () => {
     const oversized = "x".repeat(MAX_FRAME_BYTES);
     const h = harness();

@@ -190,6 +190,7 @@ export async function openClaudeClient(options) {
     peer = createNativeRpc({ input: main.child.stdout, output: main.child.stdin, codec: claudeWireCodec, timeoutMs: REQUEST_MS,
       onFatal: fatal,
       onNotification: ({ method, params }) => {
+        if (method === "claude/control_response_echo") return;
         if (method === "claude/control_cancel_request") {
           const id = params.requestId;
           peer.retire(id);

@@ -43,6 +43,15 @@ export const claudeWireCodec = Object.freeze({
       requireId(response.request_id);
       if (response.subtype === "success") {
         if (response.response != null && !plain(response.response)) throw new Error("invalid Claude control response result");
+        const payload = response.response;
+        if (plain(payload) && (payload.behavior === "allow" || payload.behavior === "deny")) {
+          const keys = Object.keys(payload);
+          if (Object.keys(response).some((key) => key !== "subtype" && key !== "request_id" && key !== "response")) throw new Error("invalid Claude permission response echo");
+          const allow = payload.behavior === "allow" && plain(payload.updatedInput) && keys.every((key) => key === "behavior" || key === "updatedInput");
+          const deny = payload.behavior === "deny" && typeof payload.message === "string" && (payload.interrupt === undefined || typeof payload.interrupt === "boolean") && keys.every((key) => key === "behavior" || key === "message" || key === "interrupt");
+          if (!allow && !deny) throw new Error("invalid Claude permission response echo");
+          return { method: "claude/control_response_echo", params: { requestId: response.request_id } };
+        }
         return { id: response.request_id, result: response.response ?? {} };
       }
       if (response.subtype === "error" && typeof response.error === "string") {
