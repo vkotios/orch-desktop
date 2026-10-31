@@ -21,7 +21,9 @@
 // is a response. `ready`-style notifications never resolve RPC requests.
 // `onNotification`/`onRequest` run synchronously with no internal queue: a
 // throw from either is fatal. Only `respond` answers a server request, at
-// most once per inbound id.
+// most once per inbound id. `retire` forgets one pending inbound id without
+// answering it (queued-unsent response dropped as NOT_SENT); the owner calls
+// it only after an out-of-band resolution or a confirmed terminal/cancel.
 //
 // Limits: at most 8 pending outbound requests, 8 pending inbound server
 // requests, and 16 queued (not yet handed to the transport) outgoing frames
@@ -364,6 +366,27 @@ export function createNativeRpc(options) {
     });
   }
 
+  // Forgets exactly one pending inbound server request, type-preserving
+  // (numeric 0 is distinct from "0" via the map key). Removes its
+  // queued-unsent response frame, if any, and rejects that response with
+  // NOT_SENT so it is never written late. Written frames and unrelated ids
+  // are untouched. The caller invokes this only after the provider resolved
+  // the request out of band (serverRequest/resolved) or a confirmed native
+  // terminal/cancellation invalidated it; otherwise unanswered server
+  // requests reserve their slot forever and exhaust the inbound bound.
+  function retire(id) {
+    if (!state.pendingIn.has(id)) return false;
+    state.pendingIn.delete(id);
+    const index = state.queue.findIndex(
+      (node) => node.entry === null && node.responseId !== undefined && node.responseId === id,
+    );
+    if (index >= 0) {
+      const [node] = state.queue.splice(index, 1);
+      node.reject(notSent(`response for inbound request ${String(id)} retired before reaching the transport`));
+    }
+    return true;
+  }
+
   function close(reason) {
     if (state.closed) return;
     tearDown(reason === undefined ? "closed by owner" : `closed by owner: ${reason}`);
@@ -529,6 +552,7 @@ export function createNativeRpc(options) {
     request,
     notify,
     respond,
+    retire,
     close,
     get closed() {
       return state.closed;

@@ -445,6 +445,7 @@ export async function openCodexClient(options) {
     request: (method, params) => (state.closed ? Promise.reject(closedError()) : peer.request(method, params)),
     notify: (method, params) => (state.closed ? Promise.reject(closedError()) : peer.notify(method, params)),
     respond: (id, result) => (state.closed ? Promise.reject(closedError()) : peer.respond(id, result)),
+    retire: (id) => (state.closed ? false : peer.retire(id)),
     close: () => doClose(),
     get closed() {
       return state.closed;

@@ -1,0 +1,466 @@
+// Native first-conversation chat service (CHO-04).
+//
+// Owner-authorised backend for one usable native Codex conversation over the
+// owned saved-ChatGPT app-server connection. Importing or calling the factory
+// starts nothing; only `native_chat_prepare_project` opens the client (via
+// injected `openClient` in tests, else `openCodexClient`). Trust is explicit
+// and canonical only: one opaque challenge per validation (5min TTL, no
+// persistence, no cwd fallback), consumed once by preparation. At most 8 UI
+// sessions and one active provider turn app-wide. turn/start carries only the
+// current prompt, never history. ACK is not activation: early events stash
+// until turn/started binds, terminals before ACK settle without resurrection,
+// and a 15s activation deadline faults explicitly.
+
+import fs from "node:fs";
+import path from "node:path";
+import crypto from "node:crypto";
+import { createEventMailbox } from "./event-mailbox.mjs";
+import { openCodexClient } from "./codex-client.mjs";
+import { normalizeCodexAppServerEvent } from "../../../packages/acp-client/src/codex-app-server.ts";
+
+const CHALLENGE_TTL_MS = 5 * 60 * 1000;
+const ACTIVATION_TIMEOUT_MS = 15_000;
+const MAX_SESSIONS = 8;
+const MAX_ADMITTED_TURNS = 256;
+const MAX_PENDING_APPROVALS = 8;
+const MAX_ID_CHARS = 128;
+const MAX_PROMPT_CHARS = 65536;
+const MAX_APPROVAL_TEXT = 4096;
+const MAX_ERROR_TEXT = 2048;
+const MAX_EARLY_STASH = 64;
+
+const ROLES = new Set(["implement", "review"]);
+const EFFORTS = new Set(["low", "medium", "high", "xhigh"]);
+const DECISIONS = new Set(["accept", "decline", "cancel"]);
+const MAPPED = new Set(["item/agentMessage/delta", "item/started", "item/completed", "turn/completed"]);
+const APPROVALS = new Set(["item/commandExecution/requestApproval", "item/fileChange/requestApproval"]);
+const TERMINAL = new Set(["completed", "failed", "interrupted"]);
+
+function isPlainObject(v) {
+  if (v === null || typeof v !== "object" || Array.isArray(v)) return false;
+  const p = Object.getPrototypeOf(v);
+  return p === Object.prototype || p === null;
+}
+const isValidId = (v) => typeof v === "string" && v.length >= 1 && v.length <= MAX_ID_CHARS;
+const messageOf = (e) => (e instanceof Error ? e.message : String(e));
+const boundText = (v, n) => { const s = String(v ?? ""); return s.length > n ? s.slice(0, n) : s; };
+const isResolvedMethod = (m) => m === "serverRequest/resolved" || /(^|\/)resolved$/.test(m);
+const nonEmptyString = (v) => (typeof v === "string" && v.length > 0 ? v : null);
+
+// turn/completed carries the turn as params.turn.id; other events use turnId.
+function eventTurnId(method, params) {
+  if (method === "turn/completed") return nonEmptyString(isPlainObject(params.turn) ? params.turn.id : null);
+  return nonEmptyString(params.turnId);
+}
+function extractThreadId(r) {
+  if (!isPlainObject(r)) return null;
+  return nonEmptyString(isPlainObject(r.thread) ? r.thread.id : null) ?? nonEmptyString(r.threadId);
+}
+function extractTurnId(r) {
+  if (!isPlainObject(r)) return null;
+  return nonEmptyString(isPlainObject(r.turn) ? r.turn.id : null) ?? nonEmptyString(r.turnId) ?? nonEmptyString(r.id);
+}
+function approvalText(params, itemId) {
+  const parts = [];
+  if (params.command !== undefined) parts.push(typeof params.command === "string" ? params.command : JSON.stringify(params.command));
+  if (nonEmptyString(params.reason) !== null) parts.push(params.reason);
+  if (parts.length === 0) parts.push(`approval for item ${itemId}`);
+  return boundText(parts.join("\n"), MAX_APPROVAL_TEXT);
+}
+
+export function createNativeChatService(options) {
+  const generation = options?.generation;
+  if (typeof generation !== "string" || generation.length === 0) throw new TypeError("createNativeChatService requires a nonempty generation");
+  const onFatal = options?.onFatal;
+  if (typeof onFatal !== "function") throw new TypeError("createNativeChatService requires an onFatal callback");
+  const openClient = options?.openClient ?? ((o) => openCodexClient({
+    workspace: o.workspace, onNotification: o.onNotification, onRequest: o.onRequest, onFatal: o.onFatal,
+  }));
+
+  const mailbox = createEventMailbox();
+  const state = { closed: false, dead: false, challenge: null, prepared: null, sessions: new Map(), active: null, approvals: new Map() };
+
+  function notifyOwner(err) {
+    try { onFatal(err); } catch { /* owner callback must not break teardown */ }
+  }
+  function clearTimer(a) {
+    if (a?.timer != null) { clearTimeout(a.timer); a.timer = null; }
+  }
+  // Whole-service terminal fault: drop the turn and displayable approvals,
+  // stop the producer, and always notify the owner even when the queue is full.
+  function fatalize(raw) {
+    const error = raw instanceof Error ? raw : new Error(String(raw));
+    if (state.dead || state.closed) return;
+    state.dead = true;
+    const a = state.active;
+    state.active = null;
+    clearTimer(a);
+    state.approvals.clear();
+    try {
+      const event = { kind: "error", text: boundText(`native chat fatal: ${messageOf(error)}`, MAX_ERROR_TEXT), nativeOutcome: "unknown", generation, harness: "codex" };
+      if (a !== null) {
+        event.sessionId = a.sessionId; event.turnId = a.turnId;
+        if (a.nativeThreadId !== null) event.nativeThreadId = a.nativeThreadId;
+        if (a.nativeTurnId !== null) event.nativeTurnId = a.nativeTurnId;
+      }
+      mailbox.push(event);
+    } catch { /* a full queue never suppresses the owner notification */ }
+    const client = state.prepared?.client ?? null;
+    if (typeof client?.close === "function") {
+      try { Promise.resolve(client.close()).catch(() => {}); } catch { /* best effort */ }
+    }
+    notifyOwner(error);
+  }
+  function enqueue(event) {
+    try { mailbox.push(event); } catch (err) { fatalize(new Error(`native event queue overflow: ${messageOf(err)}`)); throw err; }
+  }
+  function queueError(a, text) {
+    const event = { kind: "error", text: boundText(text, MAX_ERROR_TEXT), generation, harness: "codex", sessionId: a.sessionId, turnId: a.turnId };
+    if (a.nativeThreadId !== null) event.nativeThreadId = a.nativeThreadId;
+    if (a.nativeTurnId !== null) event.nativeTurnId = a.nativeTurnId;
+    enqueue(event);
+  }
+  function retireInbound(id) {
+    try { return state.prepared?.client?.retire?.(id) === true; } catch { return false; }
+  }
+  function interruptOnce(a) {
+    if (a.interruptSent) return;
+    a.interruptSent = true;
+    sendInterrupt(a);
+  }
+  function sendInterrupt(a) {
+    const client = state.prepared?.client ?? null;
+    if (client === null || a.nativeThreadId === null || a.nativeTurnId === null) return;
+    let pending;
+    try {
+      pending = client.request("turn/interrupt", { threadId: a.nativeThreadId, turnId: a.nativeTurnId });
+    } catch (err) { queueError(a, `interrupt failed: ${messageOf(err)}`); return; }
+    Promise.resolve(pending).then(undefined, (err) => {
+      try { queueError(a, `interrupt failed: ${messageOf(err)}`); } catch (fatal) { fatalize(fatal); }
+    });
+  }
+  // Invalidate every pending UI approval (single active turn owns them all):
+  // retire the native request and queue one approval_resolved each.
+  function invalidateApprovals() {
+    for (const [, rec] of state.approvals) {
+      retireInbound(rec.requestId);
+      enqueue({ kind: "approval_resolved", approvalId: rec.approvalId, generation, harness: "codex", sessionId: rec.sessionId, turnId: rec.turnId, nativeThreadId: rec.nativeThreadId, nativeTurnId: rec.nativeTurnId });
+    }
+    state.approvals.clear();
+  }
+  // Explicit local turn fault: release active state and displayed approvals,
+  // queue a visible error, optionally interrupt. Never retries, never invents
+  // a native outcome.
+  function failActiveTurn(a, text, interrupt) {
+    if (state.active === a) state.active = null;
+    clearTimer(a);
+    a.stash.length = 0;
+    invalidateApprovals();
+    queueError(a, text);
+    if (interrupt === true) sendInterrupt(a);
+  }
+  function settleTerminal(a) {
+    if (state.active === a) state.active = null;
+    clearTimer(a);
+    a.stash.length = 0;
+    invalidateApprovals();
+  }
+  function deliverMapped(a, mapped) {
+    let terminal = false;
+    for (const item of mapped) {
+      if (item.kind === "model_verified") continue; // the selected model is never verified here
+      if (typeof item.nativeOutcome === "string" && TERMINAL.has(item.nativeOutcome)) terminal = true;
+      enqueue({ ...item, generation, turnId: a.turnId });
+    }
+    if (terminal) settleTerminal(a);
+  }
+  function flushStash(a) {
+    if (a.stash.length === 0 || a.nativeTurnId === null) return;
+    for (const raw of a.stash.splice(0, a.stash.length)) {
+      if (eventTurnId(raw.method, raw.params) !== a.nativeTurnId) continue;
+      const mapped = normalizeCodexAppServerEvent(a.sessionId, { threadId: a.nativeThreadId, turnId: a.nativeTurnId }, { method: raw.method, params: raw.params });
+      if (mapped.length === 0) continue;
+      deliverMapped(a, mapped);
+      if (state.active !== a) return;
+    }
+  }
+  // Provisional bind from turn/started; false means a conflicting turn id.
+  function bindActivation(a, nativeTurnId) {
+    if (a.nativeTurnId !== null) return a.nativeTurnId === nativeTurnId;
+    a.nativeTurnId = nativeTurnId;
+    clearTimer(a);
+    flushStash(a);
+    if (state.active === a && a.cancelPending) interruptOnce(a);
+    return true;
+  }
+  function handleTurnStarted(params) {
+    const a = state.active;
+    if (a === null || a.nativeThreadId === null || params.threadId !== a.nativeThreadId) return;
+    const nativeTurnId = nonEmptyString(isPlainObject(params.turn) ? params.turn.id : null);
+    if (nativeTurnId !== null) bindActivation(a, nativeTurnId);
+  }
+  function handleNotification(message) {
+    const method = message?.method;
+    if (typeof method !== "string") return;
+    const params = message?.params;
+    if (isResolvedMethod(method)) { handleResolved(isPlainObject(params) ? params : null); return; }
+    if (!isPlainObject(params)) return;
+    if (method === "turn/started") { handleTurnStarted(params); return; }
+    if (!MAPPED.has(method)) return;
+    const a = state.active;
+    if (a === null || a.nativeThreadId === null || params.threadId !== a.nativeThreadId) return;
+    const turnId = eventTurnId(method, params);
+    if (turnId === null) return;
+    if (a.nativeTurnId === null) {
+      if (a.stash.length >= MAX_EARLY_STASH) { failActiveTurn(a, "native turn overflowed the pre-activation event buffer", true); return; }
+      a.stash.push({ method, params }); // early but valid; replayed at bind, never lost
+      return;
+    }
+    if (turnId !== a.nativeTurnId) return; // old turn on a reused thread is not rebound
+    const mapped = normalizeCodexAppServerEvent(a.sessionId, { threadId: a.nativeThreadId, turnId: a.nativeTurnId }, { method, params });
+    if (mapped.length > 0) deliverMapped(a, mapped);
+  }
+  function handleResolved(params) {
+    if (params == null) return;
+    for (const [approvalId, rec] of state.approvals) {
+      if (rec.requestId === params.requestId) { // === keeps numeric 0 distinct from "0"
+        state.approvals.delete(approvalId);
+        retireInbound(params.requestId);
+        enqueue({ kind: "approval_resolved", approvalId: rec.approvalId, generation, harness: "codex", sessionId: rec.sessionId, turnId: rec.turnId, nativeThreadId: rec.nativeThreadId, nativeTurnId: rec.nativeTurnId });
+        return;
+      }
+    }
+  }
+  function handleApprovalRequest(id, method, params) {
+    const a = state.active;
+    const shaped = isPlainObject(params) && nonEmptyString(params.threadId) !== null && nonEmptyString(params.turnId) !== null && nonEmptyString(params.itemId) !== null;
+    if (!shaped || a === null || params.threadId !== a.nativeThreadId || a.nativeTurnId === null || params.turnId !== a.nativeTurnId) {
+      retireInbound(id); // foreign or pre-activation: forget, never answer, never show
+      return;
+    }
+    if (state.approvals.size >= MAX_PENDING_APPROVALS) {
+      try { Promise.resolve(state.prepared.client.respond(id, { decision: "decline" })).catch(() => {}); } catch { /* safe decline failed */ }
+      return;
+    }
+    const offered = Array.isArray(params.availableDecisions) ? params.availableDecisions.filter((d) => typeof d === "string" && d.length > 0).slice(0, 8) : [];
+    const decisions = offered.length > 0 ? offered : ["accept", "decline", "cancel"];
+    const approvalId = crypto.randomUUID();
+    state.approvals.set(approvalId, { approvalId, sessionId: a.sessionId, turnId: a.turnId, nativeThreadId: params.threadId, nativeTurnId: params.turnId, nativeItemId: params.itemId, requestId: id, connectionId: state.prepared.client.connectionId, decisions });
+    enqueue({ kind: "approval", approvalId, approvalType: method === "item/fileChange/requestApproval" ? "file" : "command", text: approvalText(params, params.itemId), decisions, nativeItemId: params.itemId, generation, harness: "codex", sessionId: a.sessionId, turnId: a.turnId, nativeThreadId: params.threadId, nativeTurnId: params.turnId });
+  }
+  function handleUnsupportedRequest(id, method) {
+    retireInbound(id);
+    const a = state.active;
+    if (a === null) {
+      enqueue({ kind: "error", text: boundText(`unsupported native request with no active turn: ${method}`, MAX_ERROR_TEXT), generation, harness: "codex" });
+      return;
+    }
+    failActiveTurn(a, `unsupported native request: ${method}`, true);
+  }
+  function handleRequest(message) {
+    const id = message?.id;
+    const method = message?.method;
+    if (typeof method !== "string") { retireInbound(id); return; }
+    if (isResolvedMethod(method)) {
+      try { Promise.resolve(state.prepared?.client?.respond(id, {})).catch(() => {}); } catch { /* best effort */ }
+      handleResolved(isPlainObject(message?.params) ? message.params : null);
+      return;
+    }
+    if (APPROVALS.has(method)) { handleApprovalRequest(id, method, message?.params); return; }
+    handleUnsupportedRequest(id, method); // incl. clarification: visible, interrupt/fail, never autoaccept
+  }
+
+  function requireLive() {
+    if (state.closed || state.dead) throw new Error("native chat service is closed");
+  }
+  function requireGeneration(args) {
+    if (!isPlainObject(args) || args.generation !== generation) throw new Error(`stale generation ${String(args?.generation)}`);
+  }
+  function requireToken(args) {
+    if (state.prepared === null) throw new Error("no prepared project; validate and prepare a project first");
+    if (!isPlainObject(args) || args.projectToken !== state.prepared.projectToken) throw new Error("unknown project token");
+  }
+  function canonicalize(dir) {
+    let stat = null;
+    try { stat = fs.statSync(dir); } catch { stat = null; }
+    if (stat === null || !stat.isDirectory()) throw new Error(`project path is not an existing directory: ${dir}`);
+    try { return fs.realpathSync(dir); } catch { throw new Error(`project path cannot be resolved: ${dir}`); }
+  }
+
+  function cmdValidateProject(args) {
+    requireLive();
+    if (!isPlainObject(args) || typeof args.path !== "string" || args.path.length === 0) throw new Error("native_chat_validate_project requires a path string");
+    if (!path.isAbsolute(args.path)) throw new Error(`project path must be absolute: ${args.path}`);
+    const canonical = canonicalize(args.path);
+    const projectToken = crypto.randomUUID();
+    state.challenge = { projectToken, path: canonical, name: path.basename(canonical) || canonical, expiresAt: Date.now() + CHALLENGE_TTL_MS };
+    return { generation, path: canonical, name: state.challenge.name, projectToken };
+  }
+
+  async function cmdPrepareProject(args) {
+    requireLive();
+    if (!isPlainObject(args) || typeof args.projectToken !== "string" || args.projectToken.length === 0) throw new Error("native_chat_prepare_project requires a projectToken");
+    if (args.trusted !== true) throw new Error("native_chat_prepare_project requires explicit trusted:true");
+    const pending = state.challenge;
+    if (pending === null || pending.projectToken !== args.projectToken) throw new Error("stale or unknown project challenge; validate the project first");
+    if (Date.now() > pending.expiresAt) { state.challenge = null; throw new Error("project challenge expired; validate the project again"); }
+    if (state.prepared !== null) throw new Error("a project is already prepared; close it before preparing another");
+    state.challenge = null; // consumed once, success or failure
+    const canonical = canonicalize(pending.path);
+    if (canonical !== pending.path) throw new Error("project path changed since validation; validate the project again");
+    let client;
+    try {
+      client = await openClient({
+        workspace: canonical,
+        onNotification: (m) => { try { handleNotification(m); } catch (err) { fatalize(err); } },
+        onRequest: (m) => { try { handleRequest(m); } catch (err) { fatalize(err); } },
+        onFatal: (err) => { fatalize(err); },
+      });
+    } catch (err) {
+      throw new Error(`preparing project failed: ${messageOf(err)}`); // no retained trust or client
+    }
+    const models = (Array.isArray(client.models) ? client.models : [])
+      .filter((m) => isPlainObject(m) && typeof m.id === "string" && m.id.length > 0)
+      .map((m) => Object.freeze({ id: m.id, name: nonEmptyString(m.name) ?? m.id, isDefault: m.isDefault === true }));
+    state.prepared = { projectToken: pending.projectToken, path: canonical, name: pending.name, models: Object.freeze(models), client, connectionId: client.connectionId };
+    return { generation, projectToken: pending.projectToken, path: canonical, name: pending.name, models: models.map((m) => ({ ...m })) };
+  }
+
+  async function cmdSend(args) {
+    requireLive();
+    requireGeneration(args);
+    requireToken(args);
+    if (!isValidId(args.sessionId)) throw new Error("direct_chat_send requires a bounded nonempty sessionId");
+    if (!isValidId(args.turnId)) throw new Error("direct_chat_send requires a bounded nonempty turnId");
+    if (typeof args.prompt !== "string" || args.prompt.length === 0 || args.prompt.length > MAX_PROMPT_CHARS) throw new Error("direct_chat_send requires a nonempty prompt of at most 65536 chars");
+    if (!ROLES.has(args.role)) throw new Error("direct_chat_send role must be implement or review");
+    if (!EFFORTS.has(args.effort)) throw new Error("direct_chat_send effort must be low, medium, high, or xhigh");
+    const prepared = state.prepared;
+    if (!prepared.models.some((m) => m.id === args.model)) throw new Error(`unknown model ${String(args.model)} for the prepared project`);
+    let session = state.sessions.get(args.sessionId);
+    if (session === undefined) {
+      if (state.sessions.size >= MAX_SESSIONS) throw new Error("too many chat sessions (max 8); start a new chat after closing");
+      session = { sessionId: args.sessionId, role: null, model: null, nativeThreadId: null, admitted: new Set() };
+      state.sessions.set(args.sessionId, session);
+    }
+    if (session.admitted.has(args.turnId)) throw new Error(`turnId was already admitted for session ${args.sessionId}`);
+    if (session.admitted.size >= MAX_ADMITTED_TURNS) throw new Error("turn history exhausted (max 256); start a new chat");
+    if (state.active !== null) throw new Error("another provider turn is already active");
+    if (session.nativeThreadId !== null && (session.role !== args.role || session.model !== args.model)) {
+      throw new Error("session role/model are immutable after the native thread was created; start a new chat");
+    }
+    session.admitted.add(args.turnId);
+    const client = prepared.client;
+    const a = { sessionId: args.sessionId, turnId: args.turnId, nativeThreadId: session.nativeThreadId, nativeTurnId: null, cancelPending: false, interruptSent: false, timer: null, stash: [] };
+    state.active = a; // pending before any provider request so early events bind here
+    const timer = setTimeout(() => {
+      try { if (state.active === a) failActiveTurn(a, "native turn did not activate within 15s", true); } catch (err) { fatalize(err); }
+    }, ACTIVATION_TIMEOUT_MS);
+    try { timer.unref?.(); } catch { /* timer fakes may lack unref */ }
+    a.timer = timer;
+    try {
+      if (session.nativeThreadId === null) {
+        const threadResult = await client.request("thread/start", { model: args.model, modelProvider: "openai", cwd: prepared.path, sandbox: args.role === "review" ? "read-only" : "workspace-write", approvalPolicy: "untrusted", config: { mcp_servers: {} } });
+        const threadId = extractThreadId(threadResult);
+        if (threadId === null) throw new Error("native thread/start did not return result.thread.id");
+        session.nativeThreadId = threadId; session.role = args.role; session.model = args.model;
+        a.nativeThreadId = threadId;
+      }
+      const turnResult = await client.request("turn/start", { threadId: a.nativeThreadId, input: [{ type: "text", text: args.prompt }], effort: args.effort });
+      const ackTurnId = extractTurnId(turnResult);
+      if (ackTurnId === null) throw new Error("native turn/start did not acknowledge turn.id");
+      if (state.active === a) { // a pre-ACK terminal settles first and is never resurrected
+        if (a.nativeTurnId === null) { a.nativeTurnId = ackTurnId; clearTimer(a); flushStash(a); }
+        else if (a.nativeTurnId !== ackTurnId) { failActiveTurn(a, "native turn ACK does not match the activated turn", false); throw new Error("native turn ACK does not match the activated turn"); }
+        if (state.active === a && a.cancelPending) interruptOnce(a);
+      }
+      return { generation, sessionId: args.sessionId, turnId: args.turnId, nativeThreadId: a.nativeThreadId, nativeTurnId: a.nativeTurnId ?? ackTurnId };
+    } catch (err) {
+      if (state.active === a) failActiveTurn(a, `chat send failed: ${messageOf(err)}`, false);
+      throw err instanceof Error ? err : new Error(String(err));
+    }
+  }
+
+  function cmdPoll(args) {
+    requireLive();
+    requireGeneration(args);
+    requireToken(args);
+    return { generation, events: mailbox.drain() };
+  }
+
+  async function cmdRespond(args) {
+    requireLive();
+    requireGeneration(args);
+    requireToken(args);
+    if (!isValidId(args.sessionId)) throw new Error("native_chat_respond requires a bounded nonempty sessionId");
+    if (!isValidId(args.turnId)) throw new Error("native_chat_respond requires a bounded nonempty turnId");
+    if (typeof args.approvalId !== "string" || args.approvalId.length === 0) throw new Error("native_chat_respond requires an approvalId");
+    if (!DECISIONS.has(args.decision)) throw new Error("native_chat_respond decision must be accept, decline, or cancel");
+    const rec = state.approvals.get(args.approvalId);
+    if (rec === undefined) throw new Error("unknown or already-answered approval");
+    if (rec.sessionId !== args.sessionId || rec.turnId !== args.turnId) throw new Error("approval does not belong to this session turn");
+    if (rec.connectionId !== state.prepared.client.connectionId) throw new Error("approval belongs to a closed connection");
+    if (rec.decisions.length > 0 && !rec.decisions.includes(args.decision)) throw new Error(`decision ${args.decision} was not offered for this approval`);
+    state.approvals.delete(args.approvalId); // consumed once, before awaiting the response
+    await state.prepared.client.respond(rec.requestId, { decision: args.decision });
+    return { generation, approvalId: args.approvalId, acknowledged: true };
+  }
+
+  function cmdCancel(args) {
+    requireLive();
+    requireGeneration(args);
+    requireToken(args);
+    if (!isValidId(args.sessionId)) throw new Error("direct_chat_cancel requires a bounded nonempty sessionId");
+    if (!isValidId(args.turnId)) throw new Error("direct_chat_cancel requires a bounded nonempty turnId");
+    const a = state.active;
+    if (a === null || a.sessionId !== args.sessionId || a.turnId !== args.turnId) throw new Error("no matching active turn to cancel");
+    invalidateApprovals();
+    if (a.nativeThreadId !== null && a.nativeTurnId !== null) interruptOnce(a);
+    else a.cancelPending = true; // ACK is not activation: interrupt once the real turn binds
+    return { generation, sessionId: args.sessionId, turnId: args.turnId, cancelling: true };
+  }
+
+  function resetProject() {
+    if (state.active !== null) { const a = state.active; state.active = null; clearTimer(a); }
+    state.approvals.clear();
+    state.sessions.clear();
+    state.challenge = null;
+    const client = state.prepared?.client ?? null;
+    state.prepared = null;
+    return client;
+  }
+
+  async function closeClient(client) {
+    if (client === null) return;
+    try { await client.close(); } catch (err) { const error = err instanceof Error ? err : new Error(String(err)); notifyOwner(error); throw error; }
+  }
+
+  async function cmdClose(args) {
+    requireLive();
+    requireGeneration(args);
+    if (state.prepared !== null && (!isPlainObject(args) || args.projectToken !== state.prepared.projectToken)) throw new Error("unknown project token");
+    await closeClient(resetProject());
+    return { generation, closed: true };
+  }
+
+  async function handle(command, args) {
+    switch (command) {
+      case "native_chat_validate_project": return cmdValidateProject(args);
+      case "native_chat_prepare_project": return cmdPrepareProject(args);
+      case "direct_chat_send": return cmdSend(args);
+      case "native_chat_poll": return cmdPoll(args);
+      case "native_chat_respond": return cmdRespond(args);
+      case "direct_chat_cancel": return cmdCancel(args);
+      case "native_chat_close": return cmdClose(args);
+      default: throw new Error(`unknown command ${String(command)}`);
+    }
+  }
+
+  async function close() {
+    if (state.closed) return;
+    state.closed = true;
+    await closeClient(resetProject());
+  }
+
+  return { handle, close };
+}

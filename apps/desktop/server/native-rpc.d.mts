@@ -44,6 +44,7 @@ export interface NativeRpcPeer {
   request(method: string, params?: unknown): Promise<unknown>;
   notify(method: string, params?: unknown): Promise<void>;
   respond(id: string | number, result: unknown): Promise<void>;
+  retire(id: string | number): boolean;
   close(reason?: string): void;
   readonly closed: boolean;
 }
