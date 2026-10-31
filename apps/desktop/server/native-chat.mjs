@@ -65,7 +65,7 @@ function approvalText(params, itemId) {
   const parts = [];
   if (params.command !== undefined) parts.push(typeof params.command === "string" ? params.command : JSON.stringify(params.command));
   if (nonEmptyString(params.reason) !== null) parts.push(params.reason);
-  if (parts.length === 0) parts.push(`approval for item ${itemId}`);
+  if (parts.length === 0) parts.push("Review the requested action before approving or declining.");
   return boundText(parts.join("\n"), MAX_APPROVAL_TEXT);
 }
 
