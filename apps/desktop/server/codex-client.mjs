@@ -188,6 +188,16 @@ export async function openCodexClient(options) {
   function failSticky(error) {
     if (state.closed) return;
     state.closed = true;
+    // Common owned-child signal: whichever fatal path (peer or stdio) runs
+    // first takes it exactly once here; later paths return above. Skipped
+    // once an exit/close was observed. Tree cleanup stays with the host job.
+    if (state.exitInfo === null && !state.sawClose) {
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        // Best effort; close observes the outcome.
+      }
+    }
     if (state.peer !== null) {
       try {
         state.peer.close("codex client fatal");
@@ -219,15 +229,6 @@ export async function openCodexClient(options) {
 
   function onPeerFatal(err) {
     if (state.closing || state.closed) return;
-    // A stdout fault can leave the child alive: signal the owned process so
-    // nothing is orphaned here. Tree cleanup stays with the host job owner.
-    if (state.exitInfo === null && !state.sawClose) {
-      try {
-        child.kill("SIGKILL");
-      } catch {
-        // Best effort; close observes the outcome.
-      }
-    }
     failSticky(new Error(`Codex connection failed: ${err?.message ?? err}; ${stderrContext()}`));
   }
 
