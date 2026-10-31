@@ -57,6 +57,10 @@ async function makeSourceRoot(extra: Record<string, string> = {}, root = ""): Pr
     "apps/desktop/server/codex-client.mjs": "export const codexClient = 1;\n",
     "apps/desktop/server/event-mailbox.mjs": "export const eventMailbox = 1;\n",
     "apps/desktop/server/native-chat.mjs": "export const nativeChat = 1;\n",
+    "apps/desktop/server/claude-wire.mjs": "export const wire = 1;\n",
+    "apps/desktop/server/claude-client.mjs": "export const claudeClient = 1;\n",
+    "apps/desktop/server/claude-chat-actor.mjs": "export const actor = 1;\n",
+    "packages/acp-client/src/claude-stream.ts": "export const claudeStream = 1;\n",
     "packages/acp-client/src/codex-app-server.ts": "export const codexAppServer = 1;\n",
     "apps/desktop/server/notes.txt": "not staged\n",
     "orch/src/index.mjs": "export const x = 1;\n",
@@ -121,8 +125,9 @@ describe("prepareRuntime", () => {
     expect(await readFile(join(outputDir, "app", "apps", "desktop", "server", "native-chat.mjs"), "utf8")).toBe("export const nativeChat = 1;\n");
     expect(await readFile(join(outputDir, "app", "packages", "acp-client", "src", "codex-app-server.ts"), "utf8")).toBe("export const codexAppServer = 1;\n");
     const expected = ["LICENSE.node", "node.exe", "runtime-manifest.json"];
-    for (const name of ["bridge.mjs", "host.mjs", "protocol.mjs", "native-rpc.mjs", "codex-client.mjs", "event-mailbox.mjs", "native-chat.mjs"]) expected.push(join("app", "apps", "desktop", "server", name));
+    for (const name of ["bridge.mjs", "host.mjs", "protocol.mjs", "native-rpc.mjs", "codex-client.mjs", "event-mailbox.mjs", "native-chat.mjs", "claude-wire.mjs", "claude-client.mjs", "claude-chat-actor.mjs"]) expected.push(join("app", "apps", "desktop", "server", name));
     expected.push(join("app", "packages", "acp-client", "src", "codex-app-server.ts"));
+    expected.push(join("app", "packages", "acp-client", "src", "claude-stream.ts"));
     expected.push(join("app", "model-catalog.json"), join("app", "orch", "roster.example.json"), join("app", "orch", "src", "index.mjs"), join("app", "orch", "src", "nested", "deep.mjs"));
     expect(await listRelative(outputDir)).toEqual(expected.sort());
   });

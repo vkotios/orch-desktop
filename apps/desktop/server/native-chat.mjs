@@ -78,6 +78,9 @@ export function createNativeChatService(options) {
     workspace: o.workspace, onNotification: o.onNotification, onRequest: o.onRequest, onFatal: o.onFatal,
   }));
 
+  const openClaude = options?.openClaudeClient ?? (async (o) => (await import("./claude-client.mjs")).openClaudeClient(o));
+  const createClaudeActor = options?.createClaudeActor ?? (async (o) => (await import("./claude-chat-actor.mjs")).createClaudeChatActor(o));
+
   const mailbox = createEventMailbox();
   const state = { closed: false, dead: false, challenge: null, prepared: null, context: null, sessions: new Map(), active: null, approvals: new Map() };
 
@@ -109,6 +112,7 @@ export function createNativeChatService(options) {
     clearLease(a);
     state.approvals.clear();
     try {
+      if (state.prepared?.controller === "claude" || state.context?.controller === "claude") throw new Error("actor owns Claude outcomes");
       const event = { kind: "error", text: boundText(`native chat fatal: ${messageOf(error)}`, MAX_ERROR_TEXT), nativeOutcome: "unknown", generation, harness: "codex" };
       if (a !== null) {
         event.sessionId = a.sessionId; event.turnId = a.turnId;
@@ -117,7 +121,8 @@ export function createNativeChatService(options) {
       }
       mailbox.push(event);
     } catch { /* a full queue never suppresses the owner notification */ }
-    const client = state.prepared?.client ?? null;
+    if (state.context) state.context.cancelled = true;
+    const client = state.prepared?.actor ?? state.prepared?.client ?? null;
     if (typeof client?.close === "function") {
       try { Promise.resolve(client.close()).catch((err) => notifyOwner(err instanceof Error ? err : new Error(String(err)))); }
       catch (err) { notifyOwner(err instanceof Error ? err : new Error(String(err))); }
@@ -329,10 +334,12 @@ export function createNativeChatService(options) {
     requireLive();
     if (!isPlainObject(args) || typeof args.path !== "string" || args.path.length === 0) throw new Error("native_chat_validate_project requires a path string");
     if (!path.isAbsolute(args.path)) throw new Error(`project path must be absolute: ${args.path}`);
+    const controller = args.controller ?? "codex";
+    if (controller !== "codex" && controller !== "claude") throw new Error("unknown native controller");
     const canonical = canonicalize(args.path);
     const projectToken = crypto.randomUUID();
-    state.challenge = { projectToken, path: canonical, name: path.basename(canonical) || canonical, expiresAt: Date.now() + CHALLENGE_TTL_MS };
-    return { generation, path: canonical, name: state.challenge.name, projectToken };
+    state.challenge = { controller, projectToken, path: canonical, name: path.basename(canonical) || canonical, expiresAt: Date.now() + CHALLENGE_TTL_MS };
+    return { generation, controller, path: canonical, name: state.challenge.name, projectToken };
   }
 
   async function cmdPrepareProject(args) {
@@ -341,41 +348,68 @@ export function createNativeChatService(options) {
     if (args.trusted !== true) throw new Error("native_chat_prepare_project requires explicit trusted:true");
     const pending = state.challenge;
     if (pending === null || pending.projectToken !== args.projectToken) throw new Error("stale or unknown project challenge; validate the project first");
+    if (args.controller !== undefined && args.controller !== pending.controller) throw new Error("controller does not match project challenge");
     if (Date.now() > pending.expiresAt) { state.challenge = null; throw new Error("project challenge expired; validate the project again"); }
-    if (state.prepared !== null || state.context !== null) throw new Error("a project is already prepared or preparing; close it before preparing another");
-    state.challenge = null; // consumed once, success or failure
+    if (state.prepared !== null || state.context !== null || state.closing) throw new Error("a project is already prepared or preparing; close it before preparing another");
+    state.challenge = null;
     const canonical = canonicalize(pending.path);
     if (canonical !== pending.path) throw new Error("project path changed since validation; validate the project again");
-    const context = {};
+    let finish;
+    const context = { controller: pending.controller, cancelled: false, cleanupError: null, done: new Promise((resolve) => { finish = resolve; }) };
     state.context = context;
-    const current = () => state.context === context && !state.closed && !state.dead;
-    let client;
+    const current = () => state.context === context && !context.cancelled && !state.closed && !state.dead;
+    let owned = null;
     try {
-      client = await openClient({
-        workspace: canonical,
-        onNotification: (m) => { if (current()) { try { handleNotification(m); } catch (err) { fatalize(err); } } },
-        onRequest: (m) => { if (current()) { try { handleRequest(m); } catch (err) { fatalize(err); } } },
-        onFatal: (err) => { if (current()) fatalize(err); },
-      });
+      if (pending.controller === "claude") {
+        owned = await openClaude({ workspace: canonical, metadataOnly: true, onFatal: (err) => { if (current()) fatalize(err); } });
+        if (!current()) throw new Error("preparing project was closed or superseded");
+        const models = (Array.isArray(owned.models) ? owned.models : []).map((m) => ({ ...m, ...(m.supportedEfforts ? { supportedEfforts: [...m.supportedEfforts] } : {}) }));
+        // A prepared project is never exposed while its metadata process is live.
+        const metadata = owned;
+        owned = null;
+        try { await closeClient(metadata); }
+        catch (err) { context.cleanupError = err; state.dead = true; throw err; }
+        if (!current()) throw new Error("preparing project was closed or superseded");
+        owned = await createClaudeActor({ workspace: canonical, generation, models,
+          onEvent: (event) => { if (current()) { try { enqueue(event); } catch { /* enqueue fatalizes */ } } },
+          onFatal: (err) => { if (current()) fatalize(err); },
+          ...(options?.openClaudeClient ? { openClient: options.openClaudeClient } : {}),
+        });
+        if (!current()) throw new Error("preparing project was closed or superseded");
+        state.prepared = { controller: "claude", projectToken: pending.projectToken, path: canonical, name: pending.name, models, actor: owned };
+      } else {
+        owned = await openClient({
+          workspace: canonical,
+          onNotification: (m) => { if (current()) { try { handleNotification(m); } catch (err) { fatalize(err); } } },
+          onRequest: (m) => { if (current()) { try { handleRequest(m); } catch (err) { fatalize(err); } } },
+          onFatal: (err) => { if (current()) fatalize(err); },
+        });
+        if (!current()) throw new Error("preparing project was closed or superseded");
+        const models = (Array.isArray(owned.models) ? owned.models : [])
+          .filter((m) => isPlainObject(m) && typeof m.id === "string" && m.id.length > 0)
+          .map((m) => Object.freeze({ id: m.id, name: nonEmptyString(m.name) ?? m.id, isDefault: m.isDefault === true }));
+        state.prepared = { controller: "codex", projectToken: pending.projectToken, path: canonical, name: pending.name, models: Object.freeze(models), client: owned, connectionId: owned.connectionId };
+      }
+      owned = null; // transferred to prepared project
+      const models = state.prepared.models.map((m) => ({ ...m, ...(m.supportedEfforts ? { supportedEfforts: [...m.supportedEfforts] } : {}) }));
+      return { generation, controller: pending.controller, projectToken: pending.projectToken, path: canonical, name: pending.name, models };
     } catch (err) {
-      if (state.context === context) state.context = null;
-      throw new Error(`preparing project failed: ${messageOf(err)}`); // no retained trust or client
+      if (owned !== null) {
+        try { await closeClient(owned); } catch (cleanupErr) { context.cleanupError = cleanupErr; state.dead = true; throw cleanupErr; }
+      }
+      if (!current() && state.context === context && !context.cancelled) context.cancelled = true;
+      throw new Error(`preparing project failed: ${messageOf(err)}`);
+    } finally {
+      if (state.context === context && state.prepared === null && !context.cancelled) state.context = null;
+      finish();
     }
-    if (!current()) {
-      await closeClient(client);
-      throw new Error("preparing project was closed or superseded");
-    }
-    const models = (Array.isArray(client.models) ? client.models : [])
-      .filter((m) => isPlainObject(m) && typeof m.id === "string" && m.id.length > 0)
-      .map((m) => Object.freeze({ id: m.id, name: nonEmptyString(m.name) ?? m.id, isDefault: m.isDefault === true }));
-    state.prepared = { projectToken: pending.projectToken, path: canonical, name: pending.name, models: Object.freeze(models), client, connectionId: client.connectionId };
-    return { generation, projectToken: pending.projectToken, path: canonical, name: pending.name, models: models.map((m) => ({ ...m })) };
   }
 
   async function cmdSend(args) {
     requireLive();
     requireGeneration(args);
     requireToken(args);
+    if (state.prepared.controller === "claude") return state.prepared.actor.send(args);
     if (!isValidId(args.sessionId)) throw new Error("direct_chat_send requires a bounded nonempty sessionId");
     if (!isValidId(args.turnId)) throw new Error("direct_chat_send requires a bounded nonempty turnId");
     if (typeof args.prompt !== "string" || args.prompt.length === 0 || args.prompt.length > MAX_PROMPT_CHARS) throw new Error("direct_chat_send requires a nonempty prompt of at most 65536 chars");
@@ -458,7 +492,8 @@ export function createNativeChatService(options) {
     requireLive();
     requireGeneration(args);
     requireToken(args);
-    if (state.active !== null) renewLease(state.active);
+    if (state.prepared.controller === "claude") state.prepared.actor.touch();
+    else if (state.active !== null) renewLease(state.active);
     return { generation, events: mailbox.drain() };
   }
 
@@ -466,6 +501,7 @@ export function createNativeChatService(options) {
     requireLive();
     requireGeneration(args);
     requireToken(args);
+    if (state.prepared.controller === "claude") return state.prepared.actor.respond(args);
     if (!isValidId(args.sessionId)) throw new Error("native_chat_respond requires a bounded nonempty sessionId");
     if (!isValidId(args.turnId)) throw new Error("native_chat_respond requires a bounded nonempty turnId");
     if (typeof args.approvalId !== "string" || args.approvalId.length === 0) throw new Error("native_chat_respond requires an approvalId");
@@ -488,6 +524,7 @@ export function createNativeChatService(options) {
     requireLive();
     requireGeneration(args);
     requireToken(args);
+    if (state.prepared.controller === "claude") return state.prepared.actor.cancel(args);
     if (!isValidId(args.sessionId)) throw new Error("direct_chat_cancel requires a bounded nonempty sessionId");
     if (!isValidId(args.turnId)) throw new Error("direct_chat_cancel requires a bounded nonempty turnId");
     const a = state.active;
@@ -498,27 +535,41 @@ export function createNativeChatService(options) {
     return { generation, sessionId: args.sessionId, turnId: args.turnId, cancelling: true };
   }
 
+  async function closeClient(client) {
+    if (client === null) return;
+    try { await client.close(); } catch (err) { const error = err instanceof Error ? err : new Error(String(err)); notifyOwner(error); throw error; }
+  }
+
   function resetProject() {
-    state.context = null;
+    if (state.closing) return state.closing;
+    const context = state.context;
+    if (context) context.cancelled = true;
     if (state.active !== null) { const a = state.active; state.active = null; clearTimer(a); clearLease(a); }
     state.approvals.clear();
     state.sessions.clear();
     state.challenge = null;
-    const client = state.prepared?.client ?? null;
+    const owned = state.prepared?.actor ?? state.prepared?.client ?? null;
     state.prepared = null;
-    return client;
-  }
-
-  async function closeClient(client) {
-    if (client === null) return;
-    try { await client.close(); } catch (err) { const error = err instanceof Error ? err : new Error(String(err)); notifyOwner(error); throw error; }
+    const closing = (async () => {
+      try {
+        if (context) await context.done;
+        if (context?.cleanupError) throw context.cleanupError;
+        try { await closeClient(owned); } catch (err) { state.dead = true; throw err; }
+        while (mailbox.size) mailbox.drain();
+      } finally {
+        if (state.context === context) state.context = null;
+        state.closing = null;
+      }
+    })();
+    state.closing = closing;
+    return closing;
   }
 
   async function cmdClose(args) {
     requireLive();
     requireGeneration(args);
     if (state.prepared !== null && (!isPlainObject(args) || args.projectToken !== state.prepared.projectToken)) throw new Error("unknown project token");
-    await closeClient(resetProject());
+    await resetProject();
     return { generation, closed: true };
   }
 
@@ -536,9 +587,9 @@ export function createNativeChatService(options) {
   }
 
   async function close() {
-    if (state.closed) return;
+    if (state.closed) { if (state.closing) await state.closing; return; }
     state.closed = true;
-    await closeClient(resetProject());
+    await resetProject();
   }
 
   return { handle, close };

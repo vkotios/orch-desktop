@@ -118,6 +118,94 @@ function completeTurn(client, threadId, turnId, status, errorMessage) {
   client.note("turn/completed", { threadId, turn });
 }
 
+describe("Claude facade routing", () => {
+  it("binds trust to Claude, closes metadata before actor creation, and routes through one mailbox", async () => {
+    const order = [];
+    const metadata = { models: [{ id: "live", name: "Live", isDefault: true, resolvedModel: "actual", supportedEfforts: ["high", "max"] }], close: async () => { order.push("metadata closed"); } };
+    let hooks;
+    const actor = { send: vi.fn(async () => ({ submitted: true })), cancel: vi.fn(() => ({ cancelling: true })), respond: vi.fn(async () => ({ acknowledged: true })), touch: vi.fn(), close: vi.fn(async () => { order.push("actor closed"); }) };
+    const openClaudeClient = vi.fn(async (opts) => { expect(opts.metadataOnly).toBe(true); return metadata; });
+    const svc = createNativeChatService({ generation: GEN, onFatal: vi.fn(), openClaudeClient, createClaudeActor: async (opts) => {
+      order.push("actor created"); hooks = opts; return actor;
+    } });
+    await expect(svc.handle("native_chat_validate_project", { path: tempDir(), controller: "other" })).rejects.toThrow(/controller/);
+    const v = await svc.handle("native_chat_validate_project", { path: tempDir(), controller: "claude" });
+    expect(v.controller).toBe("claude");
+    await expect(svc.handle("native_chat_prepare_project", { projectToken: v.projectToken, trusted: true, controller: "codex" })).rejects.toThrow(/controller/);
+    const info = await svc.handle("native_chat_prepare_project", { projectToken: v.projectToken, trusted: true, controller: "claude" });
+    expect(info).toMatchObject({ controller: "claude", models: metadata.models });
+    expect(order).toEqual(["metadata closed", "actor created"]);
+    expect(hooks).toMatchObject({ workspace: v.path, generation: GEN, models: metadata.models, openClient: openClaudeClient });
+    const args = sendFor(v.projectToken, { model: "live" });
+    await expect(svc.handle("direct_chat_send", { ...args, generation: "old" })).rejects.toThrow(/stale/);
+    await expect(svc.handle("direct_chat_send", { ...args, projectToken: "foreign" })).rejects.toThrow(/token/);
+    expect(actor.send).not.toHaveBeenCalled();
+    expect(await svc.handle("direct_chat_send", args)).toEqual({ submitted: true });
+    await svc.handle("direct_chat_cancel", args);
+    await svc.handle("native_chat_respond", { ...args, approvalId: "a", decision: "accept" });
+    expect(actor.send).toHaveBeenCalledWith(args);
+    expect(actor.cancel).toHaveBeenCalledWith(args);
+    expect(actor.respond).toHaveBeenCalledOnce();
+    const event = { kind: "message_delta", generation: GEN, controller: "claude", harness: "claude", sessionId: "s1", turnId: "u1", text: "hello" };
+    hooks.onEvent(event);
+    expect((await pollFor(svc, v.projectToken)).events).toEqual([event]);
+    expect(actor.touch).toHaveBeenCalledOnce();
+    await svc.handle("native_chat_close", { generation: GEN, projectToken: v.projectToken });
+    expect(actor.close).toHaveBeenCalledOnce();
+    hooks.onEvent(event); hooks.onFatal(new Error("stale"));
+    const next = await svc.handle("native_chat_validate_project", { path: tempDir() });
+    expect(next.controller).toBe("codex");
+  });
+
+  it("waits for late metadata close before admitting another project", async () => {
+    let resolveOpen, resolveClose;
+    const client = { models: [], close: vi.fn(() => new Promise((resolve) => { resolveClose = resolve; })) };
+    const makeActor = vi.fn();
+    const svc = createNativeChatService({ generation: GEN, onFatal: vi.fn(), openClaudeClient: () => new Promise((resolve) => { resolveOpen = resolve; }), createClaudeActor: makeActor });
+    const v = await svc.handle("native_chat_validate_project", { path: tempDir(), controller: "claude" });
+    const preparing = svc.handle("native_chat_prepare_project", { projectToken: v.projectToken, trusted: true });
+    preparing.catch(() => {});
+    let closed = false;
+    const closing = svc.handle("native_chat_close", { generation: GEN }).then(() => { closed = true; });
+    const next = await svc.handle("native_chat_validate_project", { path: tempDir() });
+    await expect(svc.handle("native_chat_prepare_project", { projectToken: next.projectToken, trusted: true })).rejects.toThrow(/preparing/);
+    resolveOpen(client); await tick();
+    expect(client.close).toHaveBeenCalledOnce();
+    expect(closed).toBe(false);
+    resolveClose(); await closing;
+    await expect(preparing).rejects.toThrow(/closed or superseded/);
+    expect(makeActor).not.toHaveBeenCalled();
+  });
+
+  it("closes an actor that resolves after project close", async () => {
+    let resolveActor;
+    const actor = { close: vi.fn(async () => {}) };
+    const svc = createNativeChatService({ generation: GEN, onFatal: vi.fn(),
+      openClaudeClient: async () => ({ models: [], close: async () => {} }),
+      createClaudeActor: () => new Promise((resolve) => { resolveActor = resolve; }),
+    });
+    const v = await svc.handle("native_chat_validate_project", { path: tempDir(), controller: "claude" });
+    const preparing = svc.handle("native_chat_prepare_project", { projectToken: v.projectToken, trusted: true });
+    preparing.catch(() => {});
+    await tick();
+    const closing = svc.handle("native_chat_close", { generation: GEN });
+    resolveActor(actor);
+    await closing;
+    await expect(preparing).rejects.toThrow(/closed or superseded/);
+    expect(actor.close).toHaveBeenCalledOnce();
+  });
+
+  it("does not prepare or create an actor if metadata close fails", async () => {
+    const fatal = vi.fn(); const createClaudeActor = vi.fn();
+    const svc = createNativeChatService({ generation: GEN, onFatal: fatal, createClaudeActor, openClaudeClient: async () => ({ models: [], close: async () => { throw new Error("metadata cleanup failed"); } }) });
+    const v = await svc.handle("native_chat_validate_project", { path: tempDir(), controller: "claude" });
+    await expect(svc.handle("native_chat_prepare_project", { projectToken: v.projectToken, trusted: true })).rejects.toThrow(/metadata cleanup failed/);
+    expect(createClaudeActor).not.toHaveBeenCalled();
+    expect(fatal).toHaveBeenCalledOnce();
+    await expect(svc.handle("native_chat_validate_project", { path: tempDir() })).rejects.toThrow(/closed/);
+  });
+});
+
 describe("validate/prepare trust", () => {
   it("closes a client opened after project close without installing it", async () => {
     const client = new FakeClient();
@@ -126,8 +214,9 @@ describe("validate/prepare trust", () => {
     const v = await svc.handle("native_chat_validate_project", { path: tempDir() });
     const preparing = svc.handle("native_chat_prepare_project", { projectToken: v.projectToken, trusted: true });
     preparing.catch(() => {});
-    await svc.handle("native_chat_close", { generation: GEN });
+    const closing = svc.handle("native_chat_close", { generation: GEN });
     resolveOpen(client);
+    await closing;
     await expect(preparing).rejects.toThrow(/closed or superseded/);
     expect(client.closes).toBe(1);
     await expect(svc.handle("direct_chat_send", sendFor(v.projectToken))).rejects.toThrow(/no prepared project/);
@@ -142,8 +231,10 @@ describe("validate/prepare trust", () => {
     const v = await svc.handle("native_chat_validate_project", { path: tempDir() });
     const preparing = svc.handle("native_chat_prepare_project", { projectToken: v.projectToken, trusted: true });
     preparing.catch(() => {});
-    await svc.handle("native_chat_close", { generation: GEN });
+    const closing = svc.handle("native_chat_close", { generation: GEN });
+    closing.catch(() => {});
     resolveOpen(client);
+    await expect(closing).rejects.toThrow(/late cleanup failed/);
     await expect(preparing).rejects.toThrow(/late cleanup failed/);
     expect(fatals[0].message).toMatch(/late cleanup failed/);
   });
@@ -187,7 +278,7 @@ describe("validate/prepare trust", () => {
     await expect(svc.handle("native_chat_validate_project", { path: file })).rejects.toThrow(/existing directory/);
     const dir = tempDir();
     const v = await svc.handle("native_chat_validate_project", { path: dir });
-    expect(v).toEqual({ generation: GEN, path: realpathSync(dir), name: basename(realpathSync(dir)), projectToken: expect.any(String) });
+    expect(v).toEqual({ generation: GEN, controller: "codex", path: realpathSync(dir), name: basename(realpathSync(dir)), projectToken: expect.any(String) });
   });
 
   it("prepare consumes the challenge once and needs explicit trust", async () => {
