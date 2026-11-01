@@ -3,7 +3,7 @@ import { Dialog, Icon } from "./Chrome";
 import { FormattedMarkdown } from "./FormattedMarkdown";
 import {
   nativeChatCancel, nativeChatClose, nativeChatPoll, nativeChatPrepareProject,
-  nativeChatRespond, nativeChatSend, nativeChatValidateProject,
+  nativeChatRespond, nativeChatSend, nativeChatValidateProject, nativeChatPickProjectFolder,
   type NativeController, type NativeDecision, type NativeEffort, type NativeModelInfo, type NativePrepareResult,
   type NativeRole, type NativeValidateResult,
 } from "../lib/api";
@@ -114,6 +114,19 @@ export function NativeChat() {
     };
   }, []);
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [current?.messages]);
+
+  async function browseProject() {
+    if (actionRef.current || challenge) return;
+    actionRef.current = true;
+    setLoading("Choose a project folder…");
+    try {
+      const selectedPath = await nativeChatPickProjectFolder();
+      if (mounted.current && selectedPath !== null) {
+        setPath(selectedPath); setError(""); setChallenge(null);
+      }
+    } catch (err) { if (mounted.current) setError(errorText(err)); }
+    finally { actionRef.current = false; if (mounted.current) setLoading(""); }
+  }
 
   async function validate(e: FormEvent) {
     e.preventDefault();
@@ -267,7 +280,7 @@ export function NativeChat() {
       <header className="native-header"><span>{project?.name || "Open a project"}</span>{current && <span>{controllerName} · {current.role === "review" ? "Read-only" : "Editing"}</span>}</header>
       <div className="native-content">
         {(error || loading) && <div role={error ? "alert" : "status"} className={error ? "native-notice error" : "native-notice"}>{error || loading}</div>}
-        {!project && <section className="native-empty"><h1>Open a project</h1><p>Choose an existing project directory for this conversation.</p><form onSubmit={validate}><label htmlFor="native-controller">Controller</label><select id="native-controller" value={controller} disabled={Boolean(loading) || Boolean(challenge)} onChange={(e) => setController(e.target.value as NativeController)}><option value="codex">Codex</option><option value="claude">Claude</option></select><label htmlFor="native-path">Project path</label><div className="native-path-row"><input id="native-path" value={path} onChange={(e) => setPath(e.target.value)} placeholder="Path to a project" disabled={Boolean(loading)} /><button className="native-primary" disabled={!path.trim() || Boolean(loading)}>Continue</button></div></form></section>}
+        {!project && <section className="native-empty"><h1>Open a project</h1><p>Choose an existing project directory for this conversation.</p><form onSubmit={validate}><label htmlFor="native-controller">Controller</label><select id="native-controller" value={controller} disabled={Boolean(loading) || Boolean(challenge)} onChange={(e) => setController(e.target.value as NativeController)}><option value="codex">Codex</option><option value="claude">Claude</option></select><label htmlFor="native-path">Project path</label><div className="native-path-row"><input id="native-path" value={path} onChange={(e) => { setPath(e.target.value); setChallenge(null); }} placeholder="Path to a project" disabled={Boolean(loading)} /><button type="button" className="native-button" onClick={() => void browseProject()} disabled={Boolean(loading) || Boolean(challenge)}><Icon name="folder" size={15} /> Browse…</button><button className="native-primary" disabled={!path.trim() || Boolean(loading)}>Continue</button></div></form></section>}
         {project && current && <><div className="native-settings"><label>Model <select value={current.model} disabled={current.threadStarted || current.messages.length > 0 || current.busy || sendPending || lost} onChange={(e) => chooseModel(e.target.value)}>{project.models.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}</select></label><label>Access <select value={current.role} disabled={current.threadStarted || current.messages.length > 0 || current.busy || sendPending || lost} onChange={(e) => updateSettings({ role: e.target.value as NativeRole })}><option value="implement">Editing</option><option value="review">Read-only</option></select></label><label>Effort <select value={current.effort ?? ""} disabled={((current.threadStarted || current.messages.length > 0) && current.controller === "claude") || current.busy || sendPending || lost || !availableEfforts.length} onChange={(e) => updateSettings({ effort: e.target.value as NativeEffort })}>{availableEfforts.length ? availableEfforts.map((e) => <option key={e} value={e}>{e === "xhigh" ? "Extra high" : e === "max" ? "Max" : e[0].toUpperCase() + e.slice(1)}</option>) : <option value="">Default</option>}</select></label></div>
           {(current.threadStarted || current.messages.length > 0) && <p className="native-hint">{current.controller === "codex" ? "Start a new chat to change the model or access." : "Start a new chat to change these settings."}</p>}
           {projectController === "claude" && current.role === "review" && <p className="native-hint">Review mode limits Claude to read tools.</p>}

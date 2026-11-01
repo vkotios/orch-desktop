@@ -323,6 +323,11 @@ async function invokeNative<T>(
   return callHost<T>(command, payload);
 }
 
+export function nativeChatPickProjectFolder(): Promise<string | null> {
+  if (!isTauriRuntime()) return Promise.reject(new Error("Folder selection is available only in the desktop app."));
+  return tauriInvoke<string | null>("native_pick_project_folder");
+}
+
 export function nativeChatValidateProject(
   path: string,
   controller: NativeController = "codex",
