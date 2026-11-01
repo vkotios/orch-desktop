@@ -59,7 +59,7 @@ The built Windows view also passes actual rendered acceptance after the owner ma
 
 ## Next bounded slices
 
-1. Complete rendered Claude conversation/continuation/Stop acceptance for the built candidate before local integration. Windows automation currently reports input access denied; project trust requires the owner's manual action.
+1. Complete rendered Claude conversation/continuation/Stop acceptance for the built candidate before local integration. The app is open and Browse selection/cancellation pass; Claude project trust requires the owner's manual action.
 2. Complete installed-artifact M1 evidence. The built debug view's text/continuation/Stop acceptance passes; keep debug, installed and clean-machine claims separate.
 3. Qualify live clarification and deliberately supported permission extensions. The current preview interrupts unsupported requests; do not add automatic replay or persistent grants.
 4. Keep CHO-03 native-reference storage contracts provisional until both controller spikes establish their actual requirements. Add durable conversation and recovery behavior through its own reviewed slice.
