@@ -1,6 +1,6 @@
 # CHO Desktop implementation status
 
-Updated: 2026-10-31. Integration branch: `codex/cho-v01-foundation`. Codex is integrated and rendered-verified. Claude candidate `d07df86` is retained separately pending rendered acceptance and integration.
+Updated: 2026-11-01. Integration branch: `codex/cho-v01-foundation`. Codex is integrated and rendered-verified. Claude candidate `c47437a`, including native folder browsing, is retained separately pending rendered acceptance and integration.
 
 Product contract: [specification](PRODUCT_SPEC.md). Sequence: [plan](IMPLEMENTATION_PLAN.md). Sonnet findings: [validated dispositions](reviews/FINDINGS_DISPOSITION.md). Current package: [CHO-02 protocol and host](work-packages/CHO-02.md). Current spike: [CHO-04 controller capabilities](work-packages/CHO-04.md); native Codex and Claude runtime checks pass, with Claude rendered acceptance still open.
 
@@ -80,7 +80,7 @@ Independent source reviews from Qwen and DeepSeek and controller verification ar
 ## Remaining work and holds
 
 - The first native Codex debug conversation passes runtime fixtures, independent source reviews and the built window's rendered text, continuation and Stop checks. Installed-artifact acceptance remains open; mutating coordinator commands are not admitted.
-- Claude candidate `d07df86` passes 291 package tests, type/web/native builds, 12 Rust tests and six actual conversation/tool/denial/Stop cases through its copied bundle outside the checkout. Its controller selector and separate native session actor are implemented; the rendered window check is pending because Windows input automation reports access denied and project trust requires the owner's click. Do not claim this candidate is integrated yet.
+- Claude runtime checkpoint `d07df86` passes six actual conversation/tool/denial/Stop cases through its copied bundle outside the checkout. Candidate `c47437a` adds a native Browse button and passes 291 package tests, type/web/native builds, 12 Rust tests and copied-bundle startup/cleanup; its bundled Node/runtime modules are unchanged. Rendered conversation and chooser checks are pending because Windows launch automation reports access denied and project trust requires the owner's click. Do not claim this candidate is integrated into the main branch yet.
 - Next: finish Claude rendered acceptance and local integration, then qualify live clarification. Keep CHO-03 native-reference storage provisional and complete M1 distribution evidence.
 - Full npm audit identifies 3 vulnerable development-tool packages around Vitest/mocker/tinypool (one moderate, two critical). The production-only audit reports 0. Qualify the major test-tool upgrade before publication; do not force-update the dependency graph blindly.
 - Source publication still needs provenance/license and public-example cleanup, release/privacy/security documentation and content checks. The remote still points to the coordinator repository. No push, remote change or publication occurred.

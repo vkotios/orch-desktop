@@ -1,6 +1,6 @@
 # CHO-04 — Controller capability spike and first transport slice
 
-Updated: 2026-10-31. Status: the first native Codex conversation is integrated and rendered-verified. A separate Claude candidate passes native runtime checks and packaging; rendered acceptance and local integration remain pending. No session storage schema freeze yet.
+Updated: 2026-11-01. Status: the first native Codex conversation is integrated and rendered-verified. A separate Claude candidate includes native folder browsing and passes runtime checks and packaging; rendered acceptance and main-branch integration remain pending. No session storage schema freeze yet.
 
 Authority: [implementation plan](../IMPLEMENTATION_PLAN.md), [product specification](../PRODUCT_SPEC.md). The bundled host foundation is recorded in [CHO-02](CHO-02.md).
 
@@ -68,7 +68,9 @@ CHO-04 remains in progress. The native Codex implementation and focused rendered
 
 ## Claude native candidate
 
-Source candidate: `d07df86`, retained separately from the integrated Codex checkpoint. The project screen selects Codex or Claude before validation and explicit trust. Claude preparation checks saved `claude.ai`/first-party authentication, obtains its live catalogue without starting a turn and closes that metadata process before admitting a project. Conversations open lazily, pin their model, role and supported effort, and keep actual native session and input identities. Codex retains its existing per-turn effort control.
+Current source candidate: `c47437a`, extending the Claude runtime checkpoint `d07df86` and retained separately from the integrated Codex checkpoint. The project screen selects Codex or Claude before validation and explicit trust. Claude preparation checks saved `claude.ai`/first-party authentication, obtains its live catalogue without starting a turn and closes that metadata process before admitting a project. Conversations open lazily, pin their model, role and supported effort, and keep actual native session and input identities. Codex retains its existing per-turn effort control.
+
+The project screen now also offers Browse, backed by a native folder-selection dialog. Selection fills the exact path; cancellation preserves the existing path and error. Typed paths remain supported. Browsing does not validate or trust a project automatically. The directory chooser uses the official Rust dialog plugin without adding a browser/Node bridge route or JavaScript filesystem permissions. The updated candidate passes the same 291 package tests, type/web/native builds, 12 Rust tests and copied-bundle startup/cleanup check. Its bundled Node/runtime modules are byte-identical to the earlier six-case Claude and two-turn Codex runtime fixtures; only the application executable changed. Actual rendered selection/cancellation still needs desktop access, so it is not recorded as passed.
 
 The Claude actor uses the shared project trust, host ownership and bounded mailbox. A wire write is submission, not native activation or completion. Stream continuations require an observed message anchor; post-tool continuation has a one-use causal allowance from a previously unseen, known active tool result on the same connection. Any supplied input-UUID fields must match exactly. Permission requests bind the actual tool ID, name and original input before appearing in the UI. Cancellation, native withdrawal and terminal events retire queued, unwritten grants. Replayed native permission responses are informational; they cannot settle an unrelated RPC request or grant access again. Persistent grants, user customizations, hooks, external MCP services and delegation are disabled for this path. Review mode limits the exposed tools and is not an OS sandbox.
 
