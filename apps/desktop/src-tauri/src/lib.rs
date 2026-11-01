@@ -9,7 +9,8 @@ use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::path::BaseDirectory;
-use tauri::{AppHandle, Manager, RunEvent};
+use tauri::{AppHandle, Manager, RunEvent, WebviewWindow};
+use tauri_plugin_dialog::DialogExt;
 use tokio::sync::OnceCell;
 
 type StartResult = Result<Arc<HostRuntime>, String>;
@@ -117,6 +118,35 @@ async fn native_chat_close(app: AppHandle, args: Value) -> Result<Value, String>
     route_with_args(&app, "native_chat_close", args).await
 }
 
+#[tauri::command]
+async fn native_pick_project_folder(window: WebviewWindow) -> Result<Option<String>, String> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    window
+        .dialog()
+        .file()
+        .set_parent(&window)
+        .set_title("Choose a project folder")
+        .pick_folder(move |path| {
+            let _ = tx.send(path);
+        });
+    let chosen = rx
+        .await
+        .map_err(|e| format!("folder picker channel closed: {e}"))?;
+    match chosen {
+        None => Ok(None),
+        Some(fp) => {
+            let path = fp
+                .into_path()
+                .map_err(|e| format!("cannot resolve chosen folder path: {e}"))?;
+            let path = plain(path);
+            path.into_os_string()
+                .into_string()
+                .map(Some)
+                .map_err(|_| "chosen folder path contains non-Unicode characters".to_string())
+        }
+    }
+}
+
 // Debug-only: report host startup/health on stdout, then exit through the normal lifecycle.
 fn smoke_requested() -> bool {
     cfg!(debug_assertions) && std::env::args().any(|a| a == "--native-host-smoke")
@@ -145,6 +175,7 @@ fn stop_host(app: &AppHandle) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app = tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(HostSlot(OnceCell::new()))
         .setup(|app| {
             let handle = app.handle().clone();
@@ -165,7 +196,8 @@ pub fn run() {
             native_chat_poll,
             native_chat_respond,
             direct_chat_cancel,
-            native_chat_close
+            native_chat_close,
+            native_pick_project_folder
         ])
         .build(tauri::generate_context!())
         .expect("error while building CHO Desktop");
