@@ -1,6 +1,6 @@
 # CHO-04 — Controller capability spike and first transport slice
 
-Updated: 2026-11-01. Status: the first native Codex conversation is integrated and rendered-verified. A separate Claude candidate includes native folder browsing and passes runtime checks and packaging; rendered acceptance and main-branch integration remain pending. No session storage schema freeze yet.
+Updated: 2026-11-01. Status: native Codex and Claude debug conversations pass runtime and focused rendered acceptance. Claude source `c47437a`, including native folder browsing, is accepted for local integration. No session storage schema freeze yet.
 
 Authority: [implementation plan](../IMPLEMENTATION_PLAN.md), [product specification](../PRODUCT_SPEC.md). The bundled host foundation is recorded in [CHO-02](CHO-02.md).
 
@@ -59,16 +59,16 @@ The built Windows view also passes actual rendered acceptance after the owner ma
 
 ## Next bounded slices
 
-1. Complete rendered Claude conversation/continuation/Stop acceptance for the built candidate before local integration. The app is open and Browse selection/cancellation pass; Claude project trust requires the owner's manual action.
-2. Complete installed-artifact M1 evidence. The built debug view's text/continuation/Stop acceptance passes; keep debug, installed and clean-machine claims separate.
-3. Qualify live clarification and deliberately supported permission extensions. The current preview interrupts unsupported requests; do not add automatic replay or persistent grants.
+1. Qualify live clarification and deliberately supported permission extensions. The current preview interrupts unsupported requests; do not add automatic replay or persistent grants.
+2. Complete installed-artifact M1 evidence. Both built debug views' focused text/continuation/Stop checks pass; keep debug, installed and clean-machine claims separate.
+3. Extend native UI polish beyond the focused conversation checks, including partial Markdown after interruption.
 4. Keep CHO-03 native-reference storage contracts provisional until both controller spikes establish their actual requirements. Add durable conversation and recovery behavior through its own reviewed slice.
 
-CHO-04 remains in progress. The native Codex implementation and focused rendered conversation check do not complete the second controller, clarification, durable recovery, broader UI polish or installer/release acceptance.
+CHO-04 remains in progress. The native Codex and Claude implementations and focused rendered conversation checks do not complete clarification, durable recovery, broader UI polish or installer/release acceptance.
 
-## Claude native candidate
+## Native Claude conversation milestone
 
-Current source candidate: `c47437a`, extending the Claude runtime checkpoint `d07df86` and retained separately from the integrated Codex checkpoint. The project screen selects Codex or Claude before validation and explicit trust. Claude preparation checks saved `claude.ai`/first-party authentication, obtains its live catalogue without starting a turn and closes that metadata process before admitting a project. Conversations open lazily, pin their model, role and supported effort, and keep actual native session and input identities. Codex retains its existing per-turn effort control.
+Accepted source: `c47437a`, extending the Claude runtime checkpoint `d07df86` and the integrated Codex checkpoint. The project screen selects Codex or Claude before validation and explicit trust. Claude preparation checks saved `claude.ai`/first-party authentication, obtains its live catalogue without starting a turn and closes that metadata process before admitting a project. Conversations open lazily, pin their model, role and supported effort, and keep actual native session and input identities. Codex retains its existing per-turn effort control.
 
 The project screen now also offers Browse, backed by a native folder-selection dialog. Selection fills the exact path; cancellation preserves the existing path and error. Typed paths remain supported. Browsing does not validate or trust a project automatically. The directory chooser uses the official Rust dialog plugin without adding a browser/Node bridge route or JavaScript filesystem permissions. The updated candidate passes the same 291 package tests, type/web/native builds, 12 Rust tests and copied-bundle startup/cleanup check. Its bundled Node/runtime modules are byte-identical to the earlier six-case Claude and two-turn Codex runtime fixtures; only the application executable changed. Rendered acceptance now confirms owner-assisted folder selection and project preparation with the exact path, plus automated cancellation preserving a previously entered path and re-enabling controls. Claude conversation acceptance remains separate.
 
@@ -76,4 +76,6 @@ The Claude actor uses the shared project trust, host ownership and bounded mailb
 
 Controller verification passes 291 package tests, type checking, web/native debug builds and 12 locked Rust tests. Six actual Claude service cases pass both in the checkout and using the copied bundle's Node/runtime outside the checkout: first turn, marker continuation, approved Read with streamed file content, denied Write without a created file, Stop and continuation after Stop. The copied 94-file debug bundle also passes Rust-owned startup/cleanup with global Node absent and poisoned Node environment variables. Captured traffic and counterexamples drove corrections for missing continuation UUID fields, permission-response echoes and overlapping stream starts; fake-peer tests cover those boundaries.
 
-This candidate has not passed a rendered Claude window check or been merged into the integration branch. Native clarification, durable recovery, installed release and clean-machine qualification remain open. Requested/native-reported model identity is not independently verified served identity. Owned native fixture sessions and private receipts remain local; no credentials or user conversations are published.
+The built Windows Claude view now passes focused rendered acceptance after the owner manually trusted its synthetic project. The first two turns completed with the same exact marker without repeating it in the continuation prompt. A bounded text-only response visibly streamed headings and formatted paragraphs while Stop remained available. Clicking Stop produced the actual interrupted outcome; the next turn completed with the original marker, proving same-chat recovery. The response was interrupted before its requested code example, so this check does not establish Claude code-block rendering. The native-selected model was Sonnet 5 at medium effort; Editing access was left unchanged. The pending Stopping state was too brief to establish separately. No security, trust or tool-permission control was automated.
+
+Independent source reviews and controller verification support local integration of this debug milestone. Native clarification, durable recovery, installed release and clean-machine qualification remain open. Requested/native-reported model identity is not independently verified served identity. Owned native fixture sessions and private receipts remain local; no credentials or user conversations are published.
