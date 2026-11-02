@@ -1,15 +1,17 @@
 // One prepared project's Claude conversations; the facade owns trust and mailbox.
 import crypto from "node:crypto";
 import { openClaudeClient } from "./claude-client.mjs";
+import { parseClaudeClarification, encodeClaudeClarificationAnswer } from "./native-clarification.mjs";
 import { normalizeClaudeStreamEvent } from "../../../packages/acp-client/src/claude-stream.ts";
 
 const ACTIVATION_MS = 15_000;
 const LEASE_MS = 30_000;
 const MAX_TOOLS = 64;
 const MAX_APPROVALS = 8;
+const MAX_CLARIFICATIONS = 4;
 const TOOL_INPUT_BYTES = 65_536;
 const EFFORTS = new Set(["low", "medium", "high", "xhigh", "max"]);
-const TOOLS = { review: new Set(["Read", "Grep", "Glob"]), implement: new Set(["Read", "Grep", "Glob", "Write", "Edit", "Bash"]) };
+const TOOLS = { review: new Set(["Read", "Grep", "Glob", "AskUserQuestion"]), implement: new Set(["Read", "Grep", "Glob", "Write", "Edit", "Bash", "AskUserQuestion"]) };
 const plain = (v) => v !== null && typeof v === "object" && !Array.isArray(v) && (Object.getPrototypeOf(v) === Object.prototype || Object.getPrototypeOf(v) === null);
 const idOk = (v) => typeof v === "string" && v.length > 0 && v.length <= 128;
 const errorOf = (v) => v instanceof Error ? v : new Error(String(v));
@@ -58,6 +60,12 @@ export function createClaudeChatActor(options) {
       if (rec.approvalId) emit(a, { kind: "approval_resolved", approvalId: rec.approvalId, ...(a.observed ? identities(a) : {}) });
     }
     a.approvals.clear();
+    for (const rec of a.clarifications.values()) {
+      clearTimeout(rec.timer);
+      a.session.client?.retire(rec.requestId);
+      if (rec.clarificationId) emit(a, { kind: "clarification_resolved", clarificationId: rec.clarificationId, ...(a.observed ? identities(a) : {}) });
+    }
+    a.clarifications.clear();
   }
   function identities(a) { return { nativeSessionId: a.session.nativeId, nativeUserMessageId: a.userId }; }
   function stopClients() {
@@ -128,29 +136,60 @@ export function createClaudeChatActor(options) {
     const detail = JSON.stringify(rec.input.value);
     emit(a, { kind: "approval", approvalId: rec.approvalId, approvalType: "tool", text: `${rec.name}: ${detail}`.slice(0, 4096), decisions: ["accept", "decline", "cancel"], ...identities(a) });
   }
+  function promoteQuestion(a, rec) {
+    const tool = a.tools.get(rec.toolId);
+    if (!tool) return;
+    if (tool.name !== rec.name || tool.input.key !== rec.input.key) throw new Error("Claude permission request does not match assistant tool use");
+    if (tool.requested) throw new Error("duplicate Claude permission request for tool");
+    tool.requested = true;
+    clearTimeout(rec.timer);
+    rec.timer = null;
+    rec.clarificationId = crypto.randomUUID();
+    emit(a, { kind: "clarification", clarificationId: rec.clarificationId, nativeItemId: rec.toolId, isBlocking: true, questions: rec.parsed.questions, ...identities(a) });
+  }
   function receiveRequest(session, message) {
     const a = active;
     if (!a || a.session !== session || !plain(message) || !idOk(message.id) || !plain(message.request)) throw new Error("unexpected Claude permission request");
     const req = message.request;
     if (!idOk(req.tool_use_id) || !idOk(req.tool_name) || !TOOLS[session.role].has(req.tool_name)) throw new Error("invalid or disallowed Claude tool request");
+    const question = req.tool_name === "AskUserQuestion";
     const previous = a.approvals.get(message.id);
     // The peer permits ID reuse only once the previous response was written.
     if (previous?.responding) a.approvals.delete(message.id);
-    if (a.cancelPending || a.approvals.has(message.id) || [...a.approvals.values()].some((r) => r.toolId === req.tool_use_id) || a.approvals.size >= MAX_APPROVALS) throw new Error("duplicate or unavailable Claude permission request");
-    const rec = { requestId: message.id, toolId: req.tool_use_id, name: req.tool_name, input: snapshot(req.input), approvalId: null, responding: false, timer: null };
-    a.approvals.set(message.id, rec);
-    rec.timer = setTimeout(() => { if (active === a && a.approvals.get(rec.requestId) === rec) fatal(new Error("Claude tool request did not correlate with assistant output")); }, ACTIVATION_MS);
+    const previousQuestion = a.clarifications.get(message.id);
+    if (previousQuestion?.responding) a.clarifications.delete(message.id);
+    if (a.cancelPending || a.approvals.has(message.id) || a.clarifications.has(message.id) || [...a.approvals.values(), ...a.clarifications.values()].some((r) => r.toolId === req.tool_use_id) || a.approvals.size + a.clarifications.size >= MAX_APPROVALS || (question && a.clarifications.size >= MAX_CLARIFICATIONS)) throw new Error("duplicate or unavailable Claude permission request");
+    const rec = { requestId: message.id, toolId: req.tool_use_id, name: req.tool_name, input: snapshot(req.input), parsed: null, approvalId: null, clarificationId: null, responding: false, timer: null };
+    // A malformed or unsupported question rejects here so the turn fails
+    // visibly instead of stranding a pending native request.
+    if (question) {
+      rec.parsed = parseClaudeClarification(rec.input.value);
+      if (rec.input.value.questions.some((q) => Object.hasOwn(q, "isSecret") && q.isSecret !== false)) throw new Error("Claude secret clarification questions are not supported");
+    }
+    (question ? a.clarifications : a.approvals).set(message.id, rec);
+    rec.timer = setTimeout(() => {
+      const current = question ? a.clarifications.get(rec.requestId) : a.approvals.get(rec.requestId);
+      if (active === a && current === rec) fatal(new Error("Claude tool request did not correlate with assistant output"));
+    }, ACTIVATION_MS);
     rec.timer.unref?.();
-    promote(a, rec);
+    if (question) promoteQuestion(a, rec);
+    else promote(a, rec);
   }
   function receiveCancel(session, requestId) {
     const a = active;
     if (!a || a.session !== session) return;
     const rec = a.approvals.get(requestId);
-    if (!rec) return;
-    clearTimeout(rec.timer);
-    a.approvals.delete(requestId);
-    if (rec.approvalId) emit(a, { kind: "approval_resolved", approvalId: rec.approvalId, ...(a.observed ? identities(a) : {}) });
+    if (rec) {
+      clearTimeout(rec.timer);
+      a.approvals.delete(requestId);
+      if (rec.approvalId) emit(a, { kind: "approval_resolved", approvalId: rec.approvalId, ...(a.observed ? identities(a) : {}) });
+      return;
+    }
+    const pending = a.clarifications.get(requestId);
+    if (!pending) return;
+    clearTimeout(pending.timer);
+    a.clarifications.delete(requestId);
+    if (pending.clarificationId) emit(a, { kind: "clarification_resolved", clarificationId: pending.clarificationId, ...(a.observed ? identities(a) : {}) });
   }
   function receiveEvent(session, raw) {
     const a = active;
@@ -180,6 +219,7 @@ export function createClaudeChatActor(options) {
         if (!idOk(block.id) || !idOk(block.name) || !TOOLS[session.role].has(block.name) || a.tools.has(block.id) || a.tools.size >= MAX_TOOLS) throw new Error("invalid, duplicate or disallowed Claude assistant tool use");
         a.tools.set(block.id, { name: block.name, input: snapshot(block.input), requested: false, resultSeen: false });
         for (const rec of a.approvals.values()) if (rec.toolId === block.id) promote(a, rec);
+        for (const rec of a.clarifications.values()) if (rec.toolId === block.id) promoteQuestion(a, rec);
       }
     }
     const context = { sessionId: session.nativeId, userMessageId: a.userId, messageId: a.messageId, streamMessageId: a.streamMessageId ?? undefined, toolUseIds: new Set(a.tools.keys()) };
@@ -240,7 +280,7 @@ export function createClaudeChatActor(options) {
     let abort;
     const aborted = new Promise((_, reject) => { abort = reject; });
     aborted.catch(() => {});
-    const a = { session, sessionId: args.sessionId, turnId: args.turnId, userId: crypto.randomUUID(), observed: false, submitted: false, cancelPending: false, interruptSent: false, messageId: undefined, streamMessageId: null, continuationCredit: false, tools: new Map(), approvals: new Map(), abort, activationTimer: null, leaseTimer: null };
+    const a = { session, sessionId: args.sessionId, turnId: args.turnId, userId: crypto.randomUUID(), observed: false, submitted: false, cancelPending: false, interruptSent: false, messageId: undefined, streamMessageId: null, continuationCredit: false, tools: new Map(), approvals: new Map(), clarifications: new Map(), abort, activationTimer: null, leaseTimer: null };
     active = a;
     activationDeadline(a, "Claude turn did not activate within 15s");
     lease(a);
@@ -288,6 +328,42 @@ export function createClaudeChatActor(options) {
     finally { if (a.approvals.get(rec.requestId) === rec) a.approvals.delete(rec.requestId); }
     return { generation, controller: "claude", approvalId: rec.approvalId, acknowledged: true };
   }
+  async function answer(args) {
+    if (closed || dead) throw new Error("Claude actor is closed");
+    if (!plain(args) || !idOk(args.sessionId) || !idOk(args.turnId) || !idOk(args.clarificationId)) throw new Error("invalid Claude clarification answer");
+    const a = active;
+    const receipt = (submitted, extra) => ({ generation, controller: "claude", sessionId: args.sessionId, turnId: args.turnId, clarificationId: args.clarificationId, submitted, ...extra });
+    if (!a || args.sessionId !== a.sessionId || args.turnId !== a.turnId || a.cancelPending) return receipt(false, { reason: "stale" });
+    const rec = [...a.clarifications.values()].find((r) => r.clarificationId === args.clarificationId);
+    if (!rec || rec.responding) return receipt(false, { reason: "stale" });
+    let decision;
+    try {
+      decision = encodeClaudeClarificationAnswer(rec.input.value, rec.parsed, args.answers);
+    } catch (err) {
+      return receipt(false, { reason: "invalid", message: errorOf(err).message.slice(0, 512) });
+    }
+    if (!a.session.client) throw new Error("Claude client is not ready");
+    rec.responding = true;
+    try {
+      await a.session.client.respond(rec.requestId, decision);
+    } catch (err) {
+      const fault = errorOf(err);
+      if (fault?.code === "NOT_SENT") {
+        if (active === a && a.clarifications.get(rec.requestId) === rec) {
+          rec.responding = false;
+          return receipt(false, { reason: "not_sent" });
+        }
+        return receipt(false, { reason: "stale" });
+      }
+      if (active === a && a.clarifications.get(rec.requestId) === rec) fatal(new Error(`Claude clarification response failed: ${fault.message}`));
+      throw err;
+    }
+    if (a.clarifications.get(rec.requestId) === rec) {
+      a.clarifications.delete(rec.requestId);
+      emit(a, { kind: "clarification_resolved", clarificationId: rec.clarificationId, ...(a.observed ? identities(a) : {}) });
+    }
+    return receipt(true, {});
+  }
   function touch() { if (active && !dead && !closed) lease(active); }
   function close() {
     if (closePromise) return closePromise;
@@ -307,5 +383,5 @@ export function createClaudeChatActor(options) {
     })();
     return closePromise;
   }
-  return { send, cancel, respond, touch, close };
+  return { send, cancel, respond, answer, touch, close };
 }

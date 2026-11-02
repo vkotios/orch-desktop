@@ -19,6 +19,7 @@ function fixture() {
       retire: vi.fn((id) => { client.retires.push(id); const d = pending.get(id); if (d) { pending.delete(id); d.reject(Object.assign(new Error("retired"), { code: "NOT_SENT" })); } return true; }),
       close: vi.fn(async () => { client.closes += 1; if (closeError) throw closeError; }),
       resolve: (id) => { pending.get(id).resolve(); pending.delete(id); },
+      reject: (id, error) => { pending.get(id).reject(error); pending.delete(id); },
       event: (raw) => opts.onEvent(raw),
       request: (id, request) => opts.onRequest({ id, request }),
       cancel: (id) => { client.retire(id); opts.onCancel(id); },
@@ -32,6 +33,160 @@ function fixture() {
 const corr = (ack) => ({ session_id: ack.requestedNativeSessionId, user_message_uuid: ack.requestedNativeUserMessageId, user_message_uuids: [ack.requestedNativeUserMessageId], parent_tool_use_id: null });
 const assistant = (ack, blocks) => ({ ...corr(ack), type: "assistant", message: { id: "assistant-1", content: blocks } });
 const terminal = (ack, reason = "completed") => ({ ...corr(ack), type: "result", subtype: "success", is_error: reason !== "completed", terminal_reason: reason });
+const questionInput = () => ({ questions: [
+  { header: "Style", question: "Which style?", options: [{ label: "Dark", description: "Dark theme" }, { label: "Light", description: "Light theme" }], multiSelect: false },
+  { header: "Features", question: "Which features?", options: [{ label: "A", description: "Feature A" }, { label: "B", description: "Feature B" }], multiSelect: true },
+], nativeExtra: { retained: true } });
+const questionRequest = (id, input) => ({ subtype: "can_use_tool", tool_use_id: id, tool_name: "AskUserQuestion", input });
+const questionBlock = (id, input) => ({ type: "tool_use", id, name: "AskUserQuestion", input });
+const answerArgs = (id, answers) => ({ sessionId: "s1", turnId: "u1", clarificationId: id, answers });
+
+describe("Claude clarification", () => {
+  for (const order of ["request-first", "assistant-first"]) {
+    it(`correlates ${order} and sends only explicit answers using the original input`, async () => {
+      const h = fixture(); const ack = await h.actor.send(args()); const c = h.clients[0];
+      const input = questionInput(); const original = structuredClone(input);
+      const request = () => c.request("req", questionRequest("tool", input));
+      const showTool = () => c.event(assistant(ack, [questionBlock("tool", input)]));
+      if (order === "request-first") { request(); expect(h.events).toHaveLength(0); showTool(); }
+      else { showTool(); expect(h.events.some((e) => e.kind === "clarification")).toBe(false); request(); }
+      const clarification = h.events.find((e) => e.kind === "clarification");
+      expect(clarification).toMatchObject({ nativeItemId: "tool", isBlocking: true, nativeSessionId: ack.requestedNativeSessionId, questions: [{ id: "Which style?" }, { id: "Which features?", multiSelect: true }] });
+      expect(clarification).not.toHaveProperty("nativeExtra");
+      expect(h.events.some((e) => e.kind === "approval")).toBe(false);
+      expect(c.responses).toHaveLength(0);
+      const answering = h.actor.answer(answerArgs(clarification.clarificationId, { "Which style?": ["Light"], "Which features?": ["A", "B"] }));
+      expect(c.responses).toEqual([{ id: "req", decision: { behavior: "allow", updatedInput: { ...original, answers: { "Which style?": "Light", "Which features?": "A, B" } } } }]);
+      expect(input).toEqual(original);
+      c.resolve("req");
+      await expect(answering).resolves.toMatchObject({ generation: "g", controller: "claude", submitted: true, clarificationId: clarification.clarificationId });
+      expect(h.events.filter((e) => e.kind === "clarification_resolved")).toHaveLength(1);
+      expect(h.events.some((e) => e.nativeOutcome)).toBe(false);
+      await expect(h.actor.send(args({ turnId: "u2" }))).rejects.toThrow(/active/);
+      c.event(terminal(ack));
+      expect(h.events.at(-1)).toMatchObject({ nativeOutcome: "completed" });
+      await h.actor.close();
+    });
+  }
+
+  it("keeps the question actionable after invalid, missing or extra answers", async () => {
+    const h = fixture(); const ack = await h.actor.send(args()); const c = h.clients[0]; const input = questionInput();
+    c.event(assistant(ack, [questionBlock("tool", input)])); c.request("req", questionRequest("tool", input));
+    const id = h.events.find((e) => e.kind === "clarification").clarificationId;
+    for (const answers of [null, {}, { "Which style?": ["Dark"] }, { "Which style?": ["Dark"], "Which features?": ["A"], extra: ["x"] }, { "Which style?": ["  "], "Which features?": ["A"] }]) {
+      await expect(h.actor.answer(answerArgs(id, answers))).resolves.toMatchObject({ submitted: false, reason: "invalid" });
+    }
+    expect(c.responses).toHaveLength(0);
+    const sent = h.actor.answer(answerArgs(id, { "Which style?": ["Dark"], "Which features?": ["A"] }));
+    c.resolve("req"); await expect(sent).resolves.toMatchObject({ submitted: true });
+    expect(h.fatals).toHaveLength(0);
+    await h.actor.close();
+  });
+
+  it("returns stale for duplicate, foreign, withdrawn and completed-turn submissions", async () => {
+    const h = fixture(); const ack = await h.actor.send(args()); const c = h.clients[0]; const input = questionInput();
+    c.event(assistant(ack, [questionBlock("tool", input)])); c.request("req", questionRequest("tool", input));
+    const id = h.events.find((e) => e.kind === "clarification").clarificationId;
+    const valid = { "Which style?": ["Dark"], "Which features?": ["A"] };
+    await expect(h.actor.answer({ ...answerArgs(id, valid), sessionId: "foreign" })).resolves.toMatchObject({ sessionId: "foreign", submitted: false, reason: "stale" });
+    await expect(h.actor.answer({ ...answerArgs(id, valid), turnId: "foreign" })).resolves.toMatchObject({ turnId: "foreign", submitted: false, reason: "stale" });
+    const sent = h.actor.answer(answerArgs(id, valid));
+    await expect(h.actor.answer(answerArgs(id, valid))).resolves.toMatchObject({ submitted: false, reason: "stale" });
+    c.resolve("req"); await sent;
+    await expect(h.actor.answer(answerArgs(id, valid))).resolves.toMatchObject({ submitted: false, reason: "stale" });
+    c.event(terminal(ack));
+    await expect(h.actor.answer(answerArgs(id, null))).resolves.toMatchObject({ submitted: false, reason: "stale" });
+    expect(c.responses).toHaveLength(1);
+    await h.actor.close();
+  });
+
+  it("permits only explicit retry after a current response is known not sent", async () => {
+    const h = fixture(); const ack = await h.actor.send(args()); const c = h.clients[0]; const input = questionInput();
+    c.event(assistant(ack, [questionBlock("tool", input)])); c.request("req", questionRequest("tool", input));
+    const id = h.events.find((e) => e.kind === "clarification").clarificationId;
+    const answer = answerArgs(id, { "Which style?": ["Dark"], "Which features?": ["A"] });
+    const first = h.actor.answer(answer);
+    c.reject("req", Object.assign(new Error("not written"), { code: "NOT_SENT" }));
+    await expect(first).resolves.toMatchObject({ submitted: false, reason: "not_sent" });
+    expect(c.responses).toHaveLength(1);
+    const second = h.actor.answer(answer); c.resolve("req");
+    await expect(second).resolves.toMatchObject({ submitted: true });
+    expect(h.fatals).toHaveLength(0);
+    await h.actor.close();
+  });
+
+  for (const boundary of ["terminal", "cancel", "native withdrawal"]) {
+    it(`retires an unwritten clarification answer on ${boundary}`, async () => {
+      const h = fixture(); const ack = await h.actor.send(args()); const c = h.clients[0]; const input = questionInput();
+      c.event(assistant(ack, [questionBlock("tool", input)])); c.request("req", questionRequest("tool", input));
+      const id = h.events.find((e) => e.kind === "clarification").clarificationId;
+      const data = answerArgs(id, { "Which style?": ["Dark"], "Which features?": ["A"] });
+      const pending = h.actor.answer(data);
+      if (boundary === "terminal") c.event(terminal(ack));
+      if (boundary === "cancel") await h.actor.cancel({ sessionId: "s1", turnId: "u1" });
+      if (boundary === "native withdrawal") c.cancel("req");
+      await expect(pending).resolves.toMatchObject({ submitted: false, reason: "stale" });
+      await expect(h.actor.answer(data)).resolves.toMatchObject({ submitted: false, reason: "stale" });
+      expect(c.retires).toContain("req");
+      expect(h.events.filter((e) => e.kind === "clarification_resolved")).toHaveLength(1);
+      expect(h.fatals).toHaveLength(0);
+      await h.actor.close();
+    });
+  }
+
+  for (const firstKind of ["approval", "question"]) {
+    it(`preserves a reused native request ID from ${firstKind} to the other kind`, async () => {
+      const h = fixture(); const ack = await h.actor.send(args()); const c = h.clients[0]; const input = questionInput();
+      c.event(assistant(ack, [questionBlock("question", input), { type: "tool_use", id: "read", name: "Read", input: { path: "file" } }]));
+      const approval = () => c.request("same", { tool_use_id: "read", tool_name: "Read", input: { path: "file" } });
+      const question = () => c.request("same", questionRequest("question", input));
+      if (firstKind === "approval") approval(); else question();
+      const firstEvent = h.events.find((e) => e.kind === (firstKind === "approval" ? "approval" : "clarification"));
+      const first = firstKind === "approval" ? h.actor.respond({ sessionId: "s1", turnId: "u1", approvalId: firstEvent.approvalId, decision: "accept" }) : h.actor.answer(answerArgs(firstEvent.clarificationId, { "Which style?": ["Dark"], "Which features?": ["A"] }));
+      c.resolve("same"); // transport admitted it; its promise continuation has not run
+      if (firstKind === "approval") question(); else approval();
+      await first;
+      const secondEvent = h.events.find((e) => e.kind === (firstKind === "approval" ? "clarification" : "approval"));
+      const second = firstKind === "approval" ? h.actor.answer(answerArgs(secondEvent.clarificationId, { "Which style?": ["Light"], "Which features?": ["B"] })) : h.actor.respond({ sessionId: "s1", turnId: "u1", approvalId: secondEvent.approvalId, decision: "decline" });
+      c.resolve("same"); await second;
+      expect(c.responses).toHaveLength(2);
+      expect(h.fatals).toHaveLength(0);
+      await h.actor.close();
+    });
+  }
+
+  it("enforces four questions and the shared eight-request bound", async () => {
+    const h = fixture(); await h.actor.send(args()); const c = h.clients[0];
+    for (let i = 0; i < 4; i += 1) c.request(`q${i}`, questionRequest(`qt${i}`, questionInput()));
+    for (let i = 0; i < 4; i += 1) c.request(`a${i}`, { tool_use_id: `at${i}`, tool_name: "Read", input: {} });
+    expect(h.fatals).toHaveLength(0);
+    c.request("overflow", { tool_use_id: "extra", tool_name: "Read", input: {} });
+    expect(h.fatals).toHaveLength(1);
+    await h.actor.close();
+    const g = fixture(); await g.actor.send(args());
+    for (let i = 0; i < 5; i += 1) g.clients[0].request(`q${i}`, questionRequest(`qt${i}`, questionInput()));
+    expect(g.fatals).toHaveLength(1);
+    await g.actor.close();
+  });
+
+  it("fails visibly for malformed or secret questions and mismatched assistant input", async () => {
+    for (const input of [{ questions: [] }, { ...questionInput(), questions: [{ ...questionInput().questions[0], isSecret: true }] }]) {
+      const h = fixture(); await h.actor.send(args());
+      h.clients[0].request("req", questionRequest("tool", input));
+      expect(h.fatals).toHaveLength(1);
+      expect(h.events.some((e) => e.nativeOutcome === "unknown")).toBe(true);
+      expect(h.clients[0].responses).toHaveLength(0);
+      await h.actor.close();
+    }
+    const h = fixture(); const ack = await h.actor.send(args()); const c = h.clients[0];
+    c.request("req", questionRequest("tool", questionInput()));
+    const changed = questionInput(); changed.questions[0].question = "Changed?";
+    c.event(assistant(ack, [questionBlock("tool", changed)]));
+    expect(h.fatals).toHaveLength(1);
+    expect(h.events.some((e) => e.kind === "clarification")).toBe(false);
+    await h.actor.close();
+  });
+});
 
 describe("Claude chat actor", () => {
   it("distinguishes write submission from observed activation and preserves two-turn session identity", async () => {

@@ -154,7 +154,7 @@ export async function openClaudeClient(options) {
   const args = ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--replay-user-messages", "--permission-prompt-tool", "stdio", "--permission-mode", "manual", "--safe-mode", "--setting-sources", "", "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}', "--disable-slash-commands", "--no-chrome"];
   if (metadata) args.push("--tools", "", "--no-session-persistence");
   else {
-    const tools = opts.role === "review" ? ["Read", "Grep", "Glob"] : ["Read", "Grep", "Glob", "Write", "Edit", "Bash"];
+    const tools = opts.role === "review" ? ["Read", "Grep", "Glob", "AskUserQuestion"] : ["Read", "Grep", "Glob", "Write", "Edit", "Bash", "AskUserQuestion"];
     args.push("--tools", tools.join(","), "--settings", JSON.stringify({ permissions: { ask: tools } }), "--model", opts.model);
     if (opts.effort !== undefined) args.push("--effort", opts.effort);
     args.push(opts.resume === true ? "--resume" : "--session-id", opts.sessionId);

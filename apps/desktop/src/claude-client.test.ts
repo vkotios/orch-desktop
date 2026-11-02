@@ -69,13 +69,23 @@ describe("owned Claude client", () => {
     for (const key of ["aNtHrOpIc_API_KEY", "CLAUDE_CODE_USE_BEDROCK", "OPENAI_API_KEY", "MY_API_ENDPOINT"]) expect(h.calls[1].options.env[key]).toBeUndefined();
     expect(process.env.aNtHrOpIc_API_KEY).toBe("secret");
     const args = h.calls[1].args;
-    expect(args[args.indexOf("--tools") + 1]).toBe("Read,Grep,Glob");
-    expect(JSON.parse(args[args.indexOf("--settings") + 1])).toEqual({ permissions: { ask: ["Read", "Grep", "Glob"] } });
+    expect(args[args.indexOf("--tools") + 1]).toBe("Read,Grep,Glob,AskUserQuestion");
+    expect(JSON.parse(args[args.indexOf("--settings") + 1])).toEqual({ permissions: { ask: ["Read", "Grep", "Glob", "AskUserQuestion"] } });
     expect(args).toContain("--safe-mode");
     expect(args).toContain("--strict-mcp-config");
     expect(args).toContain("--session-id");
     expect(client.models).toEqual([{ id: "default", name: "Default", isDefault: true, resolvedModel: "actual", supportedEfforts: ["low", "high"] }]);
     expect(Object.isFrozen(client.models)).toBe(true);
+    await client.close();
+  });
+
+  it("exposes exactly the implement tools and asks for each", async () => {
+    const h = fixture();
+    const client = await openClaudeClient({ ...h.options, model: "default", sessionId: session, role: "implement" });
+    const args = h.calls[1].args;
+    const tools = ["Read", "Grep", "Glob", "Write", "Edit", "Bash", "AskUserQuestion"];
+    expect(args[args.indexOf("--tools") + 1]).toBe(tools.join(","));
+    expect(JSON.parse(args[args.indexOf("--settings") + 1])).toEqual({ permissions: { ask: tools } });
     await client.close();
   });
 
