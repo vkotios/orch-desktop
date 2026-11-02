@@ -28,10 +28,12 @@ CREATE TABLE conversations(
   id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   title TEXT NOT NULL DEFAULT '', controller TEXT NOT NULL CHECK(controller IN ('codex','claude')),
   model_requested TEXT, model_reported TEXT NULL, served_verified TEXT NULL,
-  effort TEXT, role TEXT, parent_conversation_id TEXT NULL REFERENCES conversations(id),
+  requested_claude_session_uuid TEXT NULL,
+  effort TEXT, role TEXT, parent_conversation_id TEXT NULL,
   created_at_ms INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL,
   archived INTEGER NOT NULL DEFAULT 0 CHECK(archived IN (0,1)),
-  UNIQUE(id, project_id), UNIQUE(id, project_id, controller));
+  UNIQUE(id, project_id), UNIQUE(id, project_id, controller),
+  FOREIGN KEY(parent_conversation_id, project_id) REFERENCES conversations(id, project_id));
 CREATE INDEX conv_project_updated ON conversations(project_id, updated_at_ms);
 CREATE TABLE native_refs(
   conversation_id TEXT NOT NULL, project_id TEXT NOT NULL,
@@ -71,6 +73,7 @@ CREATE TABLE operations(
   decision TEXT NULL, state TEXT NOT NULL, history_json TEXT NOT NULL DEFAULT '[]',
   payload_hash TEXT NULL, result_json TEXT NULL,
   created_at_ms INTEGER NOT NULL, settled_at_ms INTEGER NULL,
+  CHECK(kind IN ('draft_save','handoff') OR turn_id IS NOT NULL),
   FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
   FOREIGN KEY (conversation_id, turn_id) REFERENCES turns(conversation_id, id) ON DELETE CASCADE);
 CREATE TABLE clarifications(id TEXT PRIMARY KEY, turn_id TEXT NOT NULL, conversation_id TEXT NOT NULL,
@@ -106,18 +109,21 @@ to the native session. A Codex `turn/started` signal establishes observed activa
 controller's own observation semantics (Claude observed input/assistant identities
 are its own semantics). Native lifecycle: store the returned Codex thread id before
 turn/start; persist the requested Claude session UUID as requested before launch,
-then bind the actually observed control UUID as the `native_refs` native ref; a
+in `conversations.requested_claude_session_uuid`, then bind the actually observed
+control UUID as the `native_refs` native ref only when it matches that request; a
 crash before binding leaves the native side unknown/orphan — never an invented
 association, replay, or auto-grant. Same-project binding: the composite
 `(conversation_id, project_id, controller)` FK on `native_refs` keeps a native ref
-on its conversation's project and controller; parent
-linkage stays same-project via composite parent columns plus composite FK, or via
-explicit required transactional S2 validation where the schema FK cannot reach.
+on its conversation's project and controller. The composite parent FK keeps parent
+linkage in the same project; its `UNIQUE(id, project_id)` is required by SQLite's
+composite-parent-key rules, despite `id` being globally unique.
 `operations` carry `(conversation_id, turn_id)` FKs; approval, clarification-answer
 and Stop require a turn; `draft_save` and handoff may have NULL turn ids. The integer
 `owner_generation` is the writer-fence counter, distinct from the actual host UUID
 in `host_generation`; local draft saves use counter 0 and NULL host generation.
-Every Claude turn carries a nonnull unique `claude_input_uuid`;
+S2 deliberately checks the conversation's controller before admitting a turn:
+every Claude turn requires a nonnull unique `claude_input_uuid` (the table's
+nullable column also serves Codex turns);
 `native_turn_id` stays distinct from UI `turns.id`. The native request id is typed
 (canonical JSON with `native_request_id_type`, so numeric `0` and string `"0"`
 differ); `history_json` retains approval outcomes and is never deleted.
@@ -135,8 +141,10 @@ immutable afterwards. Bounds: prompt and draft at most 65536 UTF-16 code units
 Empty-draft edits need not create a chat. Imports create conversations/turns/events
 only, with NULL native ids and no `native_refs` rows — never fabricated native
 associations. Draft idempotency: each save carries a stable save/mutation id plus a
-payload hash, and the ACK returns the prior result receipt on retry (a generic
-`operations` row with kind `draft_save` may serve as the receipt record). A missing
+payload hash. The save id is the globally unique client UUID in `operations.id`,
+with kind `draft_save`, required `payload_hash` and `result_json`; `draft_conflicts.client_save_id`
+uses that same id. Lookup also verifies conversation/kind/hash before returning
+the prior receipt; changed owner or payload conflicts, never a cross-chat reuse. A missing
 draft with expected version 0 creates v1 on first save; same id + same payload
 returns the prior receipt; same id + changed payload is a key conflict; distinct
 stale save ids each persist their own immutable `draft_conflicts` row — no single
@@ -161,8 +169,9 @@ whose schema/version must stay consistent. `meta.instance_uuid` is logical linea
 not a clone detector: the explicit S5 restore/clone path rotates identity before
 serving; no guarantee is claimed for arbitrary manual file copies. The existing Rust
 host may later enforce one app-wide owner; that is separate from this module.
-One `DatabaseSync` connection per host process; all writes go through one serialized
-queue in that process. Per-transaction SQLite serialization is NOT producer
+The future host owns one connection and serialized writer per store path. S1
+does not cache module-global handles: explicit additional opens are permitted
+and contend through SQLite with the same finite busy policy. This is NOT producer
 exclusivity: SQLite serializes transactions, while `producer_fences` serializes which
 live owner may produce for a conversation (fence behavior is S2+S3). Fence rule:
 the first claim INSERTs the absent row as `held` at generation 1 (unique conflict
@@ -192,8 +201,14 @@ other-instance cursors with defined errors. Poll is replay-by-cursor
 drain. One poll returns at most 32 events AND at most 128KiB TOTAL serialized bytes
 including a fixed 2KiB envelope/overhead margin; each event payload is capped (32KiB
 default), stopping before either bound trips, with caller limits applied inside the
-bounds. Oversized bodies and projections are paged via `large_bodies`/snapshot
-pages, never one unbounded `projection_json` in a poll. Bounded history/list reads
+bounds. `snapshots.projection_json` is a bounded (32KiB) current-state summary with
+`{version, conversationId, lastSeq, bodyRefs}`; it is not the complete transcript.
+Historical data remains in paged events/bodies. Oversized summary content uses a
+body ref. A body needs no chunk table: immutable `body_text` is read by bounded SQL
+`substr(CAST(body_text AS BLOB), offsetBytes+1, lengthBytes)`. S2 body reads require
+integer offsets and 1..16384 bytes, returning base64 bytes, length and stored hash;
+clients decode incrementally across UTF-8 boundaries. No poll contains a full
+oversized body or projection. Bounded history/list reads
 are separate (conversation lists at most 100 rows; history windows bounded by caller
 limit, default 50, max 200); they are not poll bounds. Disk-full, corruption, or
 write failure aborts the transaction, advances no cursor, and surfaces a visible
@@ -252,7 +267,8 @@ statement escapes the callback. The callback must be synchronous: a returned
 thenable forces rollback and expires the helpers, and no async write after return
 is admitted. There is no external/IPC SQL endpoint and no records CRUD, poll,
 draft, or native-binding claims in S1. Bounded busy (100ms), no nested transaction,
-no close-inside-transaction; calls after close reject. S1 errors (each with a
+no close-inside-transaction; transactions after close reject, while repeated
+`close()` is an idempotent no-op. S1 errors (each with a
 stable code and message): `ERR_BAD_PATH` (missing/non-absolute path),
 `ERR_FOREIGN_DB` (foreign application id), `ERR_FUTURE_VERSION` (newer schema than
 code), `ERR_SCHEMA_MISMATCH` (corrupt header, version-0-nonempty, or meta/singleton
@@ -260,7 +276,7 @@ divergence), `ERR_BUSY` (bounded busy timeout incl. competing initializer),
 `ERR_STORAGE` (I/O, disk-full, integrity failure), `ERR_CLOSED` (use after close),
 `ERR_INVALID_TX` (nested transaction, close-in-tx, async write after return, or
 thenable callback). S1 machine checks: fresh open then reopen keeps the same
-instance id; PRAGMA WAL/FULL/FK read-back; malformed/foreign/future files preserved
+instance id; PRAGMA WAL/FULL/FK read-back; malformed/foreign/future/version-0-nonempty files preserved
 byte-identical; commit persists, rollback and thenable-callback discard, nested and
 close-in-tx and post-close and async-after-return reject; real-busy and competing
 initializer surface `ERR_BUSY` without writes by the losing attempt (the winning
