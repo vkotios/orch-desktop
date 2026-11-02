@@ -46,8 +46,12 @@ export interface NativeRpcCodec {
   decode(envelope: Record<string, unknown>): Record<string, unknown>;
 }
 
+export interface NativeRpcRequestOptions {
+  signal?: AbortSignal;
+}
+
 export interface NativeRpcPeer {
-  request(method: string, params?: unknown): Promise<unknown>;
+  request(method: string, params?: unknown, options?: NativeRpcRequestOptions): Promise<unknown>;
   notify(method: string, params?: unknown): Promise<void>;
   respond(id: string | number, result: unknown): Promise<void>;
   retire(id: string | number): boolean;

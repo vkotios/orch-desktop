@@ -82,6 +82,32 @@ function isValidMethod(method) {
   return typeof method === "string" && method.length >= 1 && method.length <= MAX_METHOD_CHARS;
 }
 
+function isAbortSignalLike(value) {
+  if (value === null || (typeof value !== "object" && typeof value !== "function")) return false;
+  return (
+    typeof value.aborted === "boolean" &&
+    typeof value.addEventListener === "function" &&
+    typeof value.removeEventListener === "function"
+  );
+}
+
+// Detaches a request's abort listener exactly once. Safe on every settle
+// path (completion, remote error, deadline, abort, close/fatal) and at
+// dispatch, where a later abort must be ignored.
+function detachRequestSignal(entry) {
+  const signal = entry.signal;
+  const onAbort = entry.onAbort;
+  entry.signal = undefined;
+  entry.onAbort = undefined;
+  if (signal !== undefined && onAbort !== undefined) {
+    try {
+      signal.removeEventListener("abort", onAbort);
+    } catch {
+      // Detach is best effort; settlement stands.
+    }
+  }
+}
+
 const isContainer = (value) => value !== null && typeof value === "object";
 
 // Iterative depth check so hostile frames reject instead of overflowing the
@@ -257,7 +283,12 @@ export function createNativeRpc(options) {
         // (or a fatal) reentrantly during write, and it must see this request
         // as already handed over (OUTCOME_UNKNOWN), never as never-sent.
         // Genuinely queued entries stay unwritten.
-        if (node.entry !== null) node.entry.written = true;
+        if (node.entry !== null) {
+          node.entry.written = true;
+          // Dispatch claims ownership: a later abort is ignored, and the
+          // listener leaves here so no completion path can leak it.
+          detachRequestSignal(node.entry);
+        }
         node.dispatching = true;
         let accepted;
         try {
@@ -316,9 +347,31 @@ export function createNativeRpc(options) {
     fatal(new Error(`request ${id} expired after reaching the transport`));
   }
 
-  function request(method, params) {
+  // Outbound requests accept an optional narrow cancellation option
+  // `{ signal }` that applies ONLY before the frame is handed to the
+  // transport. A malformed options object or signal, or an already-aborted
+  // signal, rejects NOT_SENT before any queue/pending/timer allocation.
+  // Aborting while the request is queued and unwritten removes exactly that
+  // frame and rejects NOT_SENT; once dispatch ownership is claimed
+  // (entry.written, set before output.write), aborts are ignored and the
+  // native response/error/deadline retains ownership. A written request is
+  // never classified NOT_SENT. Omitting options keeps existing behaviour.
+  function request(method, params, options) {
     if (state.closed) return Promise.reject(closedError("native RPC peer is closed"));
     if (!isValidMethod(method)) return Promise.reject(notSent("request method must be a nonempty string"));
+    let signal;
+    if (options !== undefined) {
+      if (!isPlainObject(options)) return Promise.reject(notSent("request options must be an object"));
+      // The cancellation option is narrow by design: only `signal` is known.
+      if (Object.keys(options).some((key) => key !== "signal")) {
+        return Promise.reject(notSent("request options carry an unknown option"));
+      }
+      if (options.signal !== undefined) {
+        signal = options.signal;
+        if (!isAbortSignalLike(signal)) return Promise.reject(notSent("request signal must be an AbortSignal"));
+        if (signal.aborted) return Promise.reject(notSent("request was aborted before reaching the transport"));
+      }
+    }
     const id = `rpc-${state.nextId}`;
     state.nextId += 1;
     let bytes;
@@ -334,7 +387,58 @@ export function createNativeRpc(options) {
       return Promise.reject(notSent("outgoing frame queue is full"));
     }
     return new Promise((resolve, reject) => {
-      const entry = { id, resolve, reject, timer: undefined, written: false };
+      const entry = {
+        id,
+        resolve: undefined,
+        reject: undefined,
+        timer: undefined,
+        written: false,
+        signal,
+        onAbort: undefined,
+      };
+      // Every settle path funnels through these wrappers so the listener
+      // is detached on completion, remote error, deadline, abort, and
+      // close/fatal teardown alike.
+      const settleResolve = (value) => {
+        detachRequestSignal(entry);
+        resolve(value);
+      };
+      const settleReject = (err) => {
+        detachRequestSignal(entry);
+        reject(err);
+      };
+      entry.resolve = settleResolve;
+      entry.reject = settleReject;
+      if (signal !== undefined) {
+        entry.onAbort = () => {
+          // Only queued, unwritten frames are removable. Written requests
+          // keep native ownership; settled entries are gone from pendingOut
+          // and dispatching nodes belong to the pump, so reentrant
+          // pump/write callbacks never cancel or lose later frames.
+          if (entry.written) return;
+          if (state.pendingOut.get(entry.id) !== entry) return;
+          const index = state.queue.findIndex((node) => node.entry === entry);
+          if (index < 0) return;
+          if (state.queue[index].dispatching) return;
+          state.queue.splice(index, 1);
+          state.pendingOut.delete(entry.id);
+          clearTimeout(entry.timer);
+          settleReject(notSent(`request ${entry.id} aborted before reaching the transport`));
+        };
+        try {
+          signal.addEventListener("abort", entry.onAbort, { once: true });
+        } catch {
+          entry.signal = undefined;
+          entry.onAbort = undefined;
+          reject(notSent("request signal cannot be observed"));
+          return;
+        }
+        if (signal.aborted) {
+          detachRequestSignal(entry);
+          reject(notSent("request was aborted before reaching the transport"));
+          return;
+        }
+      }
       entry.timer = setTimeout(() => onDeadline(id), timeoutMs);
       state.pendingOut.set(id, entry);
       state.queue.push({ bytes, entry });

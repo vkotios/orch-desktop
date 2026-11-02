@@ -114,6 +114,27 @@ describe("codex client process connection", () => {
     }
   });
 
+  it("forwards the request options to the native peer", async () => {
+    const dir = tempDir();
+    try {
+      const seen: Array<{ exe: string; args: string[]; options: any; child: FakeChild }> = [];
+      const client = await openCodexClient({ workspace: dir, spawnImpl: fakeSpawn(seen, "chatgpt"), resolveExe: () => EXE });
+      const child = seen[0].child;
+      const pre = new AbortController();
+      pre.abort();
+      await expect(client.request("turn/steer", { answer: "yes" }, { signal: pre.signal }))
+        .rejects.toMatchObject({ code: "NOT_SENT" });
+      expect(orderOf(child)).not.toContain("turn/steer"); // never reached the transport
+      await expect(client.request("m", {}, { signal: {} as never })).rejects.toMatchObject({ code: "NOT_SENT" });
+      expect(client.closed).toBe(false);
+      await expect(client.request("ping", {})).resolves.toBeDefined(); // peer still healthy
+      child.stdin.on("finish", () => child.emit("close", 0, null));
+      await expect(client.close()).resolves.toBeUndefined();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("rejects bad workspaces and a non-absolute exe before spawning", async () => {
     const dir = tempDir();
     try {

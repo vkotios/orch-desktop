@@ -27,8 +27,12 @@ export interface OpenCodexClientOptions {
   resolveExe?: () => string;
 }
 
+export interface CodexClientRequestOptions {
+  signal?: AbortSignal;
+}
+
 export interface CodexClient {
-  request(method: string, params?: unknown): Promise<unknown>;
+  request(method: string, params?: unknown, options?: CodexClientRequestOptions): Promise<unknown>;
   notify(method: string, params?: unknown): Promise<void>;
   respond(id: string | number, result: unknown): Promise<void>;
   retire(id: string | number): boolean;

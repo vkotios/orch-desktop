@@ -442,7 +442,7 @@ export async function openCodexClient(options) {
   const closedError = () => new NativeRpcError("CLOSED", "codex client is closed");
   const peer = state.peer;
   return {
-    request: (method, params) => (state.closed ? Promise.reject(closedError()) : peer.request(method, params)),
+    request: (method, params, options) => (state.closed ? Promise.reject(closedError()) : peer.request(method, params, options)),
     notify: (method, params) => (state.closed ? Promise.reject(closedError()) : peer.notify(method, params)),
     respond: (id, result) => (state.closed ? Promise.reject(closedError()) : peer.respond(id, result)),
     retire: (id) => (state.closed ? false : peer.retire(id)),

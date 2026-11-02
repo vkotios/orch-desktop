@@ -369,6 +369,244 @@ describe("native rpc peer", () => {
     writeSpy.mockRestore();
   });
 
+  it("rejects malformed request options or signals as not-sent without allocating", async () => {
+    const h = makePeer();
+    const bad: unknown[] = [null, 42, "x", [], { signal: null }, { signal: {} }, { signal: { aborted: false } }];
+    for (const options of bad) {
+      await expect(h.peer.request("m", {}, options as never)).rejects.toMatchObject({ code: "NOT_SENT" });
+    }
+    expect(h.peer.closed).toBe(false);
+    expect(h.lines()).toHaveLength(0);
+    const pending = Array.from({ length: 8 }, (_, i) => h.peer.request(`ok${i}`, {}));
+    await tick();
+    expect(h.lines()).toHaveLength(8); // pending/queue capacity retained
+    for (const l of h.lines()) h.input.write(frame({ id: l.id, result: true }));
+    await expect(Promise.all(pending)).resolves.toHaveLength(8);
+    h.peer.close();
+  });
+
+  it("refuses a pre-aborted signal with no write and capacity retained", async () => {
+    const h = makePeer();
+    const controller = new AbortController();
+    controller.abort();
+    await expect(h.peer.request("turn/steer", { answer: "yes" }, { signal: controller.signal }))
+      .rejects.toMatchObject({ code: "NOT_SENT" });
+    expect(h.lines()).toHaveLength(0);
+    expect(h.peer.closed).toBe(false);
+    const next = h.peer.request("next", {});
+    await tick();
+    expect(h.lines()).toHaveLength(1);
+    h.input.write(frame({ id: h.lines()[0].id, result: "ok" }));
+    await expect(next).resolves.toBe("ok");
+    h.peer.close();
+  });
+
+  it("aborts a queued steer behind backpressure and drains unrelated frames", async () => {
+    const h = makePeer();
+    const origWrite = h.output.write.bind(h.output);
+    let hold = true;
+    const writeSpy = vi.spyOn(h.output, "write").mockImplementation(((chunk: unknown, cb: unknown) => {
+      if (hold) {
+        // Accepted by the transport but backpressured: capture bytes via the
+        // real write path, then report false so the pump waits for drain.
+        (origWrite as any)(chunk, cb);
+        return false;
+      }
+      return (origWrite as any)(chunk, cb);
+    }) as any);
+    const primer = h.peer.notify("block", {});
+    primer.catch(() => {});
+    await tick();
+    const controller = new AbortController();
+    const steer = h.peer.request("turn/steer", { answer: "yes" }, { signal: controller.signal });
+    steer.catch(() => {});
+    const later = h.peer.request("turn/poll", {});
+    await tick();
+    controller.abort();
+    await expect(steer).rejects.toMatchObject({ code: "NOT_SENT" });
+    expect(h.peer.closed).toBe(false);
+    expect(h.onFatal).not.toHaveBeenCalled();
+    hold = false;
+    h.output.emit("drain");
+    await tick();
+    await tick();
+    const methods = h.lines().map((l) => l.method ?? "(response)");
+    expect(methods).toContain("block");
+    expect(methods).toContain("turn/poll");
+    expect(methods).not.toContain("turn/steer"); // never written late
+    await primer;
+    const pollId = h.lines().find((l) => l.method === "turn/poll").id;
+    h.input.write(frame({ id: pollId, result: "polled" }));
+    await expect(later).resolves.toBe("polled");
+    const healthy = h.peer.request("after", {});
+    await tick();
+    h.input.write(frame({ id: h.lines().at(-1).id, result: 1 }));
+    await expect(healthy).resolves.toBe(1);
+    writeSpy.mockRestore();
+    h.peer.close();
+  });
+
+  it("ignores an abort once the request is written and keeps the native result", async () => {
+    const h = makePeer();
+    const controller = new AbortController();
+    const pending = h.peer.request("turn/steer", {}, { signal: controller.signal });
+    await tick();
+    expect(h.lines()).toHaveLength(1);
+    controller.abort();
+    await tick();
+    expect(h.peer.closed).toBe(false);
+    h.input.write(frame({ id: h.lines()[0].id, result: "done" }));
+    await expect(pending).resolves.toBe("done");
+    h.peer.close();
+  });
+
+  it("treats an abort synchronously inside write as already written", async () => {
+    const h = makePeer();
+    const origWrite = h.output.write.bind(h.output);
+    const controller = new AbortController();
+    const writeSpy = vi.spyOn(h.output, "write").mockImplementation(((chunk: unknown, cb: unknown) => {
+      controller.abort(); // fires during dispatch, after ownership is claimed
+      return (origWrite as any)(chunk, cb);
+    }) as any);
+    const pending = h.peer.request("m", {}, { signal: controller.signal });
+    await tick();
+    writeSpy.mockRestore();
+    expect(h.lines()).toHaveLength(1);
+    h.input.write(frame({ id: h.lines()[0].id, result: 1 }));
+    await expect(pending).resolves.toBe(1);
+    expect(h.peer.closed).toBe(false);
+    h.peer.close();
+  });
+
+  it("settles a queued abort exactly once against close and deadline", async () => {
+    const h = makePeer();
+    const block = vi.spyOn(h.output, "write").mockReturnValue(false);
+    const primer = h.peer.notify("block", {});
+    primer.catch(() => {});
+    await tick();
+    const controller = new AbortController();
+    const steer = h.peer.request("turn/steer", {}, { signal: controller.signal });
+    steer.catch(() => {});
+    controller.abort();
+    h.peer.close("owner");
+    await expect(steer).rejects.toMatchObject({ code: "NOT_SENT" });
+    // The primer was already handed to output.write (false still means
+    // accepted), so its notify already resolved correctly.
+    await primer;
+    expect(h.onFatal).not.toHaveBeenCalled();
+    block.mockRestore();
+
+    const q = makePeer({ timeoutMs: 20 });
+    const hold = vi.spyOn(q.output, "write").mockReturnValue(false);
+    const first = q.peer.notify("block", {});
+    first.catch(() => {});
+    await tick();
+    const qc = new AbortController();
+    const queued = q.peer.request("queued", {}, { signal: qc.signal });
+    queued.catch(() => {});
+    qc.abort(); // wins before the 20ms queued expiry
+    await expect(queued).rejects.toMatchObject({ code: "NOT_SENT" });
+    await new Promise((r) => setTimeout(r, 60)); // past expiry: no second settle
+    expect(q.peer.closed).toBe(false);
+    expect(q.onFatal).not.toHaveBeenCalled();
+    hold.mockRestore();
+    q.peer.close();
+  });
+
+  it("detaches the abort listener on every settle path", async () => {
+    const tracked = () => {
+      const c = new AbortController();
+      const add = vi.spyOn(c.signal, "addEventListener");
+      const remove = vi.spyOn(c.signal, "removeEventListener");
+      return { c, add, remove };
+    };
+    const detached = (t: { add: { mock: { calls: unknown[][] } }; remove: ReturnType<typeof vi.fn> }) => {
+      expect(t.add.mock.calls).toHaveLength(1);
+      expect(t.remove).toHaveBeenCalledWith("abort", t.add.mock.calls[0][1]);
+    };
+    // Completion through dispatch.
+    {
+      const h = makePeer();
+      const t = tracked();
+      const pending = h.peer.request("m", {}, { signal: t.c.signal });
+      await tick();
+      h.input.write(frame({ id: h.lines()[0].id, result: 1 }));
+      await expect(pending).resolves.toBe(1);
+      detached(t);
+      h.peer.close();
+    }
+    // Remote error.
+    {
+      const h = makePeer();
+      const t = tracked();
+      const pending = h.peer.request("m", {}, { signal: t.c.signal });
+      await tick();
+      h.input.write(frame({ id: h.lines()[0].id, error: { code: -1, message: "no" } }));
+      await expect(pending).rejects.toMatchObject({ code: "REMOTE_ERROR" });
+      detached(t);
+      h.peer.close();
+    }
+    // Queued expiry.
+    {
+      const h = makePeer({ timeoutMs: 20 });
+      const hold = vi.spyOn(h.output, "write").mockReturnValue(false);
+      const first = h.peer.notify("block", {});
+      first.catch(() => {});
+      await tick();
+      const t = tracked();
+      const queued = h.peer.request("q", {}, { signal: t.c.signal });
+      queued.catch(() => {});
+      await expect(queued).rejects.toMatchObject({ code: "NOT_SENT" });
+      detached(t);
+      expect(h.peer.closed).toBe(false);
+      hold.mockRestore();
+      h.peer.close();
+    }
+    // Owner close with a queued request.
+    {
+      const h = makePeer();
+      const hold = vi.spyOn(h.output, "write").mockReturnValue(false);
+      const first = h.peer.notify("block", {});
+      first.catch(() => {});
+      await tick();
+      const t = tracked();
+      const queued = h.peer.request("q", {}, { signal: t.c.signal });
+      queued.catch(() => {});
+      h.peer.close("owner");
+      await expect(queued).rejects.toMatchObject({ code: "NOT_SENT" }); // never written
+      detached(t);
+      hold.mockRestore();
+    }
+    // Fatal with a written request.
+    {
+      const h = makePeer();
+      const t = tracked();
+      const pending = h.peer.request("m", {}, { signal: t.c.signal });
+      pending.catch(() => {});
+      await tick();
+      h.input.write("{bad\n");
+      await tick();
+      await expect(pending).rejects.toMatchObject({ code: "OUTCOME_UNKNOWN" });
+      detached(t);
+    }
+    // Queued abort itself.
+    {
+      const h = makePeer();
+      const hold = vi.spyOn(h.output, "write").mockReturnValue(false);
+      const first = h.peer.notify("block", {});
+      first.catch(() => {});
+      await tick();
+      const t = tracked();
+      const queued = h.peer.request("q", {}, { signal: t.c.signal });
+      queued.catch(() => {});
+      t.c.abort();
+      await expect(queued).rejects.toMatchObject({ code: "NOT_SENT" });
+      detached(t);
+      hold.mockRestore();
+      h.peer.close();
+    }
+  });
+
   it("writes nothing further when close runs synchronously during write", async () => {
     const h = makePeer();
     const origWrite = h.output.write.bind(h.output);
