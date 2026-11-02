@@ -2,16 +2,16 @@
 
 **CHO-desktop** combines the multi-harness desktop shell architecture of [`RapidAI/grok-build-desktop`](https://github.com/RapidAI/grok-build-desktop) with the multi-agent coordination engine of [`vkotios/cli-agentic-coordinator`](https://github.com/vkotios/cli-agentic-coordinator) (`orch`).
 
-The product brings direct CLI conversations and the `orch` coordination dashboard into one desktop workspace. The current delivery is a Windows native Codex preview; product and release work continues:
+The product brings direct CLI conversations and the `orch` coordination dashboard into one desktop workspace. The current delivery is a Windows native Codex and Claude debug preview; product and release work continues:
 
-1. **Direct CLI conversations:** the native preview uses the installed Codex CLI and saved ChatGPT sign-in. It supports streamed continuing conversations, tool status, once-only permissions and cancellation after explicit project selection. Chats remain in memory while the window is open.
-2. **Coordinator studio:** the browser prototype exposes orchestration workflows. The native host supports discovery and dashboard reads, while the current native conversation view focuses on Codex. Mutating coordinator commands remain outside the admitted native route.
+1. **Direct CLI conversations:** the native preview uses the installed Codex or Claude CLI and saved first-party sign-in. It supports streamed continuing conversations, tool status, once-only permissions, explicit clarification answers and cancellation after project selection and trust. Chats remain in memory while the window is open.
+2. **Coordinator studio:** the browser prototype exposes orchestration workflows. The native host supports discovery and dashboard reads, while the native conversation view supports Codex and Claude. Mutating coordinator commands remain outside the admitted native route.
 
 The implementation builds on the existing coordinator and adapter code. Supported product behavior and release acceptance are tracked in the specification and status below.
 
 ## Desktop implementation status
 
-The Windows x64 debug executable and its bundled Node runtime build successfully. Actual runtime fixtures cover continuing Codex turns, an approved read, a rejected write and interruption followed by continuation. The built native window also passes rendered conversation checks: visible streamed text, context retained across turns, Stop reaching an interrupted outcome and successful continuation afterward. Claude integration, durable recovery, installer/upgrade and clean-machine release acceptance remain open. The browser preview retains prototype workflows. See the [product specification](docs/PRODUCT_SPEC.md) and [verified implementation status](docs/IMPLEMENTATION_STATUS.md) for the current boundary.
+The Windows x64 debug executable and its bundled Node runtime build successfully. Actual runtime fixtures cover continuing Codex and Claude turns, approved reads, rejected writes, explicit clarification answers and interruption followed by continuation. The built native window also passes rendered conversation checks: visible streamed text, context retained across turns, Stop reaching an interrupted outcome and successful continuation afterward. Durable recovery, installer/upgrade and clean-machine release acceptance remain open. The shared clarification card also passes the built Codex window's answer, Stop and recovery check. The browser preview retains prototype workflows. See the [product specification](docs/PRODUCT_SPEC.md) and [verified implementation status](docs/IMPLEMENTATION_STATUS.md) for the current boundary.
 
 ## Workspace Layout & Quick Commands
 

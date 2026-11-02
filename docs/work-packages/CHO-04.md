@@ -1,6 +1,6 @@
 # CHO-04 — Controller capability spike and first transport slice
 
-Updated: 2026-11-01. Status: native Codex and Claude debug conversations pass runtime and focused rendered acceptance. Claude source `c47437a`, including native folder browsing, is accepted for local integration. No session storage schema freeze yet.
+Updated: 2026-11-02. Status: native Codex/Claude debug conversations and clarification source milestone accepted for local integration. Durable recovery and release qualification remain open.
 
 Authority: [implementation plan](../IMPLEMENTATION_PLAN.md), [product specification](../PRODUCT_SPEC.md). The bundled host foundation is recorded in [CHO-02](CHO-02.md).
 
@@ -20,7 +20,7 @@ The controller tested the installed Codex app-server protocol in an owned Window
 | Approval reject | Declined/cancelled tool observed; proposed fixture write did not occur | Write denied, tool declined and turn interrupted; no file created |
 | Cancellation | Interrupted native turn observed after native start | Interrupt control acknowledged, then actual aborted-streaming result observed |
 | Continue after cancellation | Original marker retained in the next turn | Original marker retained after both denial and Stop |
-| Clarification | Installed experimental schema exists; live flow not qualified | Not yet tested |
+| Clarification | Default native async question/steer and experimental blocking request qualified separately; shared native card answer/Stop/recovery rendered | Actual AskUserQuestion answer/invalid/Stop/recovery through the bundled service; shared-card rendering verified |
 | Model attribution | Requested/native-selected gpt-6-sol; independently served identity unknown | Live native catalogue queried; model-reported identity retained separately from independent verification |
 
 The installed Codex model catalogue was queried rather than copied from the prototype. It does not establish access to every hard-coded or documented model. The app must retain the distinction between a requested/selected model and verified served identity.
@@ -59,12 +59,12 @@ The built Windows view also passes actual rendered acceptance after the owner ma
 
 ## Next bounded slices
 
-1. Qualify live clarification and deliberately supported permission extensions. The current preview interrupts unsupported requests; do not add automatic replay or persistent grants.
+1. Implement CHO-03 durable chats and recovery from the established native identities and clarification contract. Deliberate permission extensions remain separate; do not add automatic replay or persistent grants.
 2. Complete installed-artifact M1 evidence. Both built debug views' focused text/continuation/Stop checks pass; keep debug, installed and clean-machine claims separate.
 3. Extend native UI polish beyond the focused conversation checks, including partial Markdown after interruption.
-4. Keep CHO-03 native-reference storage contracts provisional until both controller spikes establish their actual requirements. Add durable conversation and recovery behavior through its own reviewed slice.
+4. Finalize CHO-03 native-reference storage contracts through its reviewed design using the now-established controller requirements. Add durable conversation and recovery behavior through its own reviewed slice.
 
-CHO-04 remains in progress. The native Codex and Claude implementations and focused rendered conversation checks do not complete clarification, durable recovery, broader UI polish or installer/release acceptance.
+CHO-04 remains in progress. The native Codex and Claude implementations and focused rendered conversation checks do not complete durable recovery, broader UI polish or installer/release acceptance.
 
 ## Native Claude conversation milestone
 
@@ -79,3 +79,19 @@ Controller verification passes 291 package tests, type checking, web/native debu
 The built Windows Claude view now passes focused rendered acceptance after the owner manually trusted its synthetic project. The first two turns completed with the same exact marker without repeating it in the continuation prompt. A bounded text-only response visibly streamed headings and formatted paragraphs while Stop remained available. Clicking Stop produced the actual interrupted outcome; the next turn completed with the original marker, proving same-chat recovery. The response was interrupted before its requested code example, so this check does not establish Claude code-block rendering. The native-selected model was Sonnet 5 at medium effort; Editing access was left unchanged. The pending Stopping state was too brief to establish separately. No security, trust or tool-permission control was automated.
 
 Independent source reviews and controller verification support local integration of this debug milestone. Native clarification, durable recovery, installed release and clean-machine qualification remain open. Requested/native-reported model identity is not independently verified served identity. Owned native fixture sessions and private receipts remain local; no credentials or user conversations are published.
+
+## Native clarification milestone
+
+Source checkpoint: `926110a`, extending the accepted Codex/Claude debug conversations. Native questions now appear as explicit single-choice, multiple-choice or custom-text cards. Nothing is selected or sent automatically. Answers remain separate from tool permissions and bind the current project, process generation, chat, turn and native question. Invalid or proven unsent answers remain editable; an unknown submission requires Stop before retrying.
+
+Codex default async questions use the native expected-turn steer mechanism. Its experimental blocking request uses a typed request-ID response; the application does not force Plan mode. Claude AskUserQuestion correlates the original assistant tool and native control request, treating only an omitted optional multiSelect as equivalent to false for comparison. The original control input is preserved in the answer. Explicit empty option descriptions are supported where allowed by the native schema; missing, mistyped or overlong descriptions still reject.
+
+The serial host returns answer queue admission promptly and reports actual submission separately through polling, keeping Stop responsive under native backpressure. Terminal, withdrawal and Stop retire queued, unwritten replies; a written answer is not presented as reversible. Pending native steers hold new-turn admission until they settle, including late ACKs.
+
+Controller verification: **388 package tests** (44 shared, 344 desktop), type checking, web build and locked Windows debug build pass. The unchanged Rust command/lifecycle sources previously passed 12 locked tests. Independent GLM 5.3/Vibe reviews cover the full numbered source and the final parser correction; all findings are adjudicated. The copied 95-file final bundle passes startup and owned-host cleanup outside the checkout without global Node and with poisoned Node settings. Native Claude fixtures cover explicit/invalid answers, Stop and same-chat recovery, including omitted optional defaults and empty descriptions.
+
+The built Codex window passes actual question rendering with no default answer, explicit custom-answer submission, completed response, Stop at a second question, the native interrupted outcome and successful same-chat marker recovery. The owner handled project trust. This rendered check uses `e54317f`; the final correction changes only codec acceptance of empty descriptions, and the UI/state modules are unchanged. Claude clarification is qualified through its actual bundled service and shared-card checks; this does not claim a separately rendered Claude question in the native window.
+
+The final Codex bundled probe successfully displayed a native async question, rejected an invalid answer, and acknowledged the explicit answer before the subscription reported its usage limit. Its failed terminal outcome and clean owned-client shutdown are retained as failure-path evidence; they are not a successful final response. Earlier successful runtime and rendered checks remain separately bound to their source/artifacts. Naming the unavailable blocking request tool in default-mode prompts is not a valid async fixture; the application does not silently change modes to satisfy it.
+
+This completes the bounded clarification source milestone, not CHO-04 or a product release. Chats, answers and project trust remain in memory. Next: CHO-03 durable chats/drafts/native references and restart recovery without execution replay. Retain submitted question/answer history in that design; complete broader UI polish, delegation/admission boundaries and installed-release qualification through their own packages.

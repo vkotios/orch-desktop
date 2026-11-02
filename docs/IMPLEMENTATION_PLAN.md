@@ -1,7 +1,7 @@
 # CHO Desktop v0.1 — Implementation Plan
 
 Date: 2026-10-30  
-Status: Foundation and native Codex/Claude debug conversations accepted for local integration, including rendered continuity and Stop checks; clarification, durable recovery and release qualification remain open
+Status: Foundation, native Codex/Claude debug conversations and clarification accepted locally; durable recovery and release qualification remain open
 Product contract: [PRODUCT_SPEC.md](PRODUCT_SPEC.md), initially committed as `d9cc7ef`  
 Planning branch: `codex/cho-v01-plan`; implementation branch: `codex/cho-v01-foundation`
 
@@ -56,13 +56,15 @@ The successful Qwen parity trial used a 65,536-token client/backend window, a 16
 
 ### Independent review assignments
 
-| Implementer | Normal independent reviewer | Additional review for security-sensitive changes |
-| --- | --- | --- |
-| Aider / Qwen | Qualified Muse reviewer | Qualified DeepSeek reviewer through a read-only-capable harness. |
-| Aider / dspark | Qualified Muse reviewer | Qualified Qwen reviewer through a read-only-capable harness. |
-| Muse | Qualified Qwen or dspark reviewer through a read-only-capable harness | The other local model family, independently and blind. |
+The owner replaced the standing independent reviewer with **GLM 5.3 high through Vibe CLI** on 2026-11-02 after renewing its quota. This supersedes the earlier one-off GLM allocation for review work; the other implementation allocations retain their original limits.
 
-OpenCode is the proposed secondary harness for those local reviews because Aider cannot fill that role. Candidate selectors are `igm-local/qwen3.8-flash-next-kyojin` and `igm-local/deepseek-v4-rocmfpx-lucebox-dspark`. They are review candidates, not enabled or qualified by this plan. Qualify their read-only behaviour and model attribution first. This preserves Muse/Aider as the primary implementation pool without pretending Muse can independently review itself.
+| Implementer | Normal independent reviewer | Controller verification |
+| --- | --- | --- |
+| Muse / Meta | GLM 5.3 high / Vibe | Codex inspects the diff, runs checks and adjudicates findings. |
+| Aider / Qwen or DeepSeek | GLM 5.3 high / Vibe | Same controller checks; Aider remains implementation-only. |
+| Approved GPT/Terra API worker | GLM 5.3 high / Vibe | Preserve API-worker provenance separately from CLI run receipts. |
+
+The reviewer uses the existing Vibe subscription and exact native model selector, with a private high-thinking profile. Bounded numbered source packets are supported when the installed read policy denies file access; record the exact source hash, limits, native model attribution and containment. A denied read, context overflow or quota failure is not a completed source review. Local OpenCode reviewer routes are retained inactive rather than silently substituted. Additional reviewer families for sensitive changes still require applicable authorization and independence; the Codex controller's recorded review is separate from GLM's findings.
 
 Independence is about the actual model, not the CLI name. Using the same model through Aider and OpenCode does not create an independent review. Preserve unknown attribution in run records. For local Aider work, retain gateway engine/model/selection evidence bound to the run and inspect any selection changes; this is separate provenance, not permission to overwrite `actual_model` with the requested selector. Critical acceptance must wait if the necessary identity/independence evidence remains unresolved.
 
@@ -246,7 +248,7 @@ The owner has authorized this first foundation batch:
 
 At each launch use a fresh exact-file handoff, not this entire plan as an unrestricted prompt. The controller reviews every worker diff and runs the checks independently. Additional model reviews satisfy coordinator workflow requirements where applicable; do not make broad, up-front route qualification the product's critical path.
 
-First-batch results and remaining gates: [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md). The next protocol/host handoff is [work-packages/CHO-02.md](work-packages/CHO-02.md); native toolchain and packaged-runtime readiness remain prerequisites for extraction.
+First-batch results and remaining gates: [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md). The host foundation and native controller clarification milestones are implemented. The next bounded product package is CHO-03 durable chats, drafts and recovery, grounded in the native identities and lifecycle established by CHO-04.
 
 ## 9. Evidence and checkpoints
 
@@ -267,4 +269,4 @@ After each milestone, compare delivered behaviour with the product spec and reco
 - [Aider model settings documentation](https://aider.chat/docs/config/adv-model-settings.html)
 - [Aider scripting documentation](https://aider.chat/docs/scripting.html)
 
-Current controller spike and remaining integration gates: [CHO-04 capability results](work-packages/CHO-04.md). Muse has returned to the primary pool after current access was verified; the one-off GLM/Claude feature allocations are not automatically renewed.
+Current controller spike and remaining integration gates: [CHO-04 capability results](work-packages/CHO-04.md). Muse has returned to the primary pool after current access was verified; GLM 5.3 high/Vibe is now the standing independent reviewer; the one-off Claude feature allocation is not automatically renewed.
