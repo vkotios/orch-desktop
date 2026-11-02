@@ -16,6 +16,13 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { createEventMailbox } from "./event-mailbox.mjs";
 import { openCodexClient } from "./codex-client.mjs";
+import { NATIVE_RPC_MAX_PENDING_INBOUND } from "./native-rpc.mjs";
+import {
+  parseCodexClarification,
+  encodeCodexClarificationAnswer,
+  parseCodexAsyncClarification,
+  encodeCodexAsyncClarificationAnswer,
+} from "./native-clarification.mjs";
 import { normalizeCodexAppServerEvent } from "../../../packages/acp-client/src/codex-app-server.ts";
 
 const CHALLENGE_TTL_MS = 5 * 60 * 1000;
@@ -24,6 +31,8 @@ const CONSUMER_LEASE_MS = 30_000;
 const MAX_SESSIONS = 8;
 const MAX_ADMITTED_TURNS = 256;
 const MAX_PENDING_APPROVALS = 8;
+const MAX_PENDING_CLARIFICATIONS = 4;
+const MAX_SEEN_ASYNC_ITEMS = 64;
 const MAX_ID_CHARS = 128;
 const MAX_PROMPT_CHARS = 65536;
 const MAX_APPROVAL_TEXT = 4096;
@@ -82,7 +91,7 @@ export function createNativeChatService(options) {
   const createClaudeActor = options?.createClaudeActor ?? (async (o) => (await import("./claude-chat-actor.mjs")).createClaudeChatActor(o));
 
   const mailbox = createEventMailbox();
-  const state = { closed: false, dead: false, challenge: null, prepared: null, context: null, sessions: new Map(), active: null, approvals: new Map() };
+  const state = { closed: false, dead: false, challenge: null, prepared: null, context: null, sessions: new Map(), active: null, approvals: new Map(), clarifications: new Map(), pendingSteers: new Set(), answerJobs: new Map() };
 
   function notifyOwner(err) {
     try { onFatal(err); } catch { /* owner callback must not break teardown */ }
@@ -111,6 +120,7 @@ export function createNativeChatService(options) {
     clearTimer(a);
     clearLease(a);
     state.approvals.clear();
+    clearClarifications(false);
     try {
       if (state.prepared?.controller === "claude" || state.context?.controller === "claude") throw new Error("actor owns Claude outcomes");
       const event = { kind: "error", text: boundText(`native chat fatal: ${messageOf(error)}`, MAX_ERROR_TEXT), nativeOutcome: "unknown", generation, harness: "codex" };
@@ -171,6 +181,36 @@ export function createNativeChatService(options) {
     }
     state.approvals.clear();
   }
+  function clarificationEvent(rec, kind) {
+    return { kind, clarificationId: rec.clarificationId, generation, controller: "codex", harness: "codex",
+      sessionId: rec.sessionId, turnId: rec.turnId, nativeThreadId: rec.parsed.nativeThreadId,
+      nativeTurnId: rec.parsed.nativeTurnId, nativeItemId: rec.parsed.nativeItemId };
+  }
+  function clearClarifications(emit = true) {
+    for (const rec of state.clarifications.values()) {
+      if (rec.requestId !== undefined) retireInbound(rec.requestId);
+      if (emit) enqueue(clarificationEvent(rec, "clarification_resolved"));
+    }
+    state.clarifications.clear();
+    for (const pending of state.pendingSteers) pending.controller.abort();
+  }
+  function releaseReusedRequest(id) {
+    for (const [key, rec] of state.approvals) if (rec.responding && rec.requestId === id) state.approvals.delete(key);
+    for (const [key, rec] of state.clarifications) {
+      if (rec.responding && rec.requestId === id) {
+        state.clarifications.delete(key);
+        enqueue(clarificationEvent(rec, "clarification_resolved"));
+      }
+    }
+  }
+  function registerClarification(a, parsed, requestId) {
+    if (state.clarifications.size >= MAX_PENDING_CLARIFICATIONS) throw new Error("too many pending native clarifications");
+    const clarificationId = crypto.randomUUID();
+    const rec = { clarificationId, parsed, requestId, sessionId: a.sessionId, turnId: a.turnId,
+      connectionId: state.prepared.client.connectionId, responding: false };
+    state.clarifications.set(clarificationId, rec);
+    enqueue({ ...clarificationEvent(rec, "clarification"), isBlocking: parsed.isBlocking, questions: parsed.questions });
+  }
   // Only a known not-admitted failure may release the turn locally.
   function failActiveTurn(a, text) {
     if (state.active === a) state.active = null;
@@ -178,6 +218,7 @@ export function createNativeChatService(options) {
     clearLease(a);
     a.stash.length = 0;
     invalidateApprovals();
+    clearClarifications();
     queueError(a, text);
   }
   function settleTerminal(a) {
@@ -187,6 +228,7 @@ export function createNativeChatService(options) {
     clearLease(a);
     a.stash.length = 0;
     invalidateApprovals();
+    clearClarifications();
   }
   function deliverMapped(a, mapped) {
     let terminal = false;
@@ -197,13 +239,24 @@ export function createNativeChatService(options) {
     }
     if (terminal) settleTerminal(a);
   }
+  function deliverNotification(a, method, params) {
+    const item = params.item;
+    if (!a.cancelPending && !a.interruptSent && method === "item/completed" && isPlainObject(item) && item.type === "agentMessage" && item.delivery === "async" && item.questions != null) {
+      const parsed = parseCodexAsyncClarification(params);
+      if (!a.seenAsyncItems.has(parsed.nativeItemId)) {
+        if (a.seenAsyncItems.size >= MAX_SEEN_ASYNC_ITEMS) throw new Error("too many async clarification items");
+        a.seenAsyncItems.add(parsed.nativeItemId);
+        registerClarification(a, parsed, undefined);
+      }
+    }
+    const mapped = normalizeCodexAppServerEvent(a.sessionId, { threadId: a.nativeThreadId, turnId: a.nativeTurnId }, { method, params });
+    if (mapped.length > 0) deliverMapped(a, mapped);
+  }
   function flushStash(a) {
     if (a.stash.length === 0 || a.nativeTurnId === null) return;
     for (const raw of a.stash.splice(0, a.stash.length)) {
       if (eventTurnId(raw.method, raw.params) !== a.nativeTurnId) continue;
-      const mapped = normalizeCodexAppServerEvent(a.sessionId, { threadId: a.nativeThreadId, turnId: a.nativeTurnId }, { method: raw.method, params: raw.params });
-      if (mapped.length === 0) continue;
-      deliverMapped(a, mapped);
+      deliverNotification(a, raw.method, raw.params);
       if (state.active !== a) return;
     }
   }
@@ -249,11 +302,19 @@ export function createNativeChatService(options) {
       return;
     }
     if (turnId !== a.nativeTurnId) return; // old turn on a reused thread is not rebound
-    const mapped = normalizeCodexAppServerEvent(a.sessionId, { threadId: a.nativeThreadId, turnId: a.nativeTurnId }, { method, params });
-    if (mapped.length > 0) deliverMapped(a, mapped);
+    deliverNotification(a, method, params);
   }
   function handleResolved(params) {
     if (params == null) return;
+    for (const [key, rec] of state.clarifications) {
+      if (rec.requestId !== undefined && rec.requestId === params.requestId) {
+        if (params.threadId !== undefined && params.threadId !== rec.parsed.nativeThreadId) { fatalize(new Error("clarification resolution has wrong thread")); return; }
+        state.clarifications.delete(key);
+        retireInbound(rec.requestId);
+        enqueue(clarificationEvent(rec, "clarification_resolved"));
+        return;
+      }
+    }
     for (const [approvalId, rec] of state.approvals) {
       if (rec.requestId === params.requestId) { // === keeps numeric 0 distinct from "0"
         state.approvals.delete(approvalId);
@@ -281,10 +342,8 @@ export function createNativeChatService(options) {
     }
     // The peer admits reuse only after the earlier response was handed to
     // the transport. Its promise continuation may not have run yet.
-    for (const [approvalId, rec] of state.approvals) {
-      if (rec.responding && rec.requestId === id) state.approvals.delete(approvalId);
-    }
-    if (state.approvals.size >= MAX_PENDING_APPROVALS) {
+    releaseReusedRequest(id);
+    if (state.approvals.size >= MAX_PENDING_APPROVALS || state.approvals.size + [...state.clarifications.values()].filter((rec) => rec.requestId !== undefined).length >= NATIVE_RPC_MAX_PENDING_INBOUND) {
       retireInbound(id);
       fatalize(new Error("too many pending native approvals"));
       return;
@@ -302,6 +361,7 @@ export function createNativeChatService(options) {
     }
     queueError(a, `unsupported native request: ${method}`);
     invalidateApprovals();
+    clearClarifications();
     if (a.activated) interruptOnce(a);
     else a.cancelPending = true;
   }
@@ -309,8 +369,19 @@ export function createNativeChatService(options) {
     const id = message?.id;
     const method = message?.method;
     if (typeof method !== "string") { retireInbound(id); fatalize(new Error("malformed native request")); return; }
+    if (method === "item/tool/requestUserInput") {
+      const a = state.active;
+      try {
+        const parsed = parseCodexClarification(message?.params);
+        if (!a || !a.activated || a.cancelPending || a.interruptSent || parsed.nativeThreadId !== a.nativeThreadId || parsed.nativeTurnId !== a.nativeTurnId) throw new Error("foreign or inactive clarification");
+        releaseReusedRequest(id);
+        if (state.approvals.size + [...state.clarifications.values()].filter((rec) => rec.requestId !== undefined).length >= NATIVE_RPC_MAX_PENDING_INBOUND) throw new Error("too many pending native requests");
+        registerClarification(a, parsed, id);
+      } catch (err) { retireInbound(id); fatalize(new Error(`invalid native clarification: ${messageOf(err)}`)); }
+      return;
+    }
     if (APPROVALS.has(method)) { handleApprovalRequest(id, method, message?.params); return; }
-    handleUnsupportedRequest(id, method); // incl. clarification: visible, interrupt/fail, never autoaccept
+    handleUnsupportedRequest(id, method);
   }
 
   function requireLive() {
@@ -425,13 +496,13 @@ export function createNativeChatService(options) {
     }
     if (session.admitted.has(args.turnId)) throw new Error(`turnId was already admitted for session ${args.sessionId}`);
     if (session.admitted.size >= MAX_ADMITTED_TURNS) throw new Error("turn history exhausted (max 256); start a new chat");
-    if (state.active !== null) throw new Error("another provider turn is already active");
+    if (state.active !== null || state.pendingSteers.size) throw new Error("another provider turn is already active or its answer is settling");
     if (session.nativeThreadId !== null && (session.role !== args.role || session.model !== args.model)) {
       throw new Error("session role/model are immutable after the native thread was created; start a new chat");
     }
     session.admitted.add(args.turnId);
     const client = prepared.client;
-    const a = { sessionId: args.sessionId, turnId: args.turnId, nativeThreadId: session.nativeThreadId, nativeTurnId: null, ackTurnId: null, activated: false, terminal: false, cancelPending: false, interruptSent: false, timer: null, stash: [] };
+    const a = { sessionId: args.sessionId, turnId: args.turnId, nativeThreadId: session.nativeThreadId, nativeTurnId: null, ackTurnId: null, activated: false, terminal: false, cancelPending: false, interruptSent: false, timer: null, stash: [], seenAsyncItems: new Set() };
     state.active = a; // pending before any provider request so early events bind here
     renewLease(a);
     const timer = setTimeout(() => {
@@ -520,6 +591,91 @@ export function createNativeChatService(options) {
     return { generation, approvalId: args.approvalId, acknowledged: true };
   }
 
+  async function cmdAnswer(args) {
+    requireLive(); requireGeneration(args); requireToken(args);
+    if (state.prepared.controller === "claude") return state.prepared.actor.answer(args);
+    const receipt = (submitted, reason, message) => ({ generation, controller: "codex", sessionId: args.sessionId,
+      turnId: args.turnId, clarificationId: args.clarificationId, submitted,
+      ...(reason ? { reason } : {}), ...(message ? { message: boundText(message, 256) } : {}) });
+    const a = state.active;
+    const rec = state.clarifications.get(args.clarificationId);
+    if (!a || !rec || rec.responding || a.cancelPending || a.interruptSent ||
+        rec.sessionId !== args.sessionId || rec.turnId !== args.turnId ||
+        a.sessionId !== args.sessionId || a.turnId !== args.turnId ||
+        rec.connectionId !== state.prepared.client.connectionId) return receipt(false, "stale");
+    let encoded;
+    try {
+      encoded = rec.requestId === undefined ? encodeCodexAsyncClarificationAnswer(rec.parsed, args.answers)
+        : encodeCodexClarificationAnswer(rec.parsed, args.answers);
+    } catch (err) { return receipt(false, "invalid", messageOf(err)); }
+    const client = state.prepared.client;
+    rec.responding = true;
+    let pending;
+    try {
+      if (rec.requestId === undefined) {
+        const controller = new AbortController();
+        pending = { controller };
+        state.pendingSteers.add(pending);
+        const expectedTurnId = rec.parsed.nativeTurnId;
+        const response = await client.request("turn/steer", { threadId: rec.parsed.nativeThreadId, expectedTurnId,
+          input: [{ type: "text", text: encoded }] }, { signal: controller.signal });
+        if (!isPlainObject(response) || response.turnId !== expectedTurnId) throw new Error("native steer ACK did not match the expected turn");
+      } else {
+        await client.respond(rec.requestId, encoded);
+      }
+      if (state.clarifications.get(rec.clarificationId) === rec) {
+        state.clarifications.delete(rec.clarificationId);
+        enqueue(clarificationEvent(rec, "clarification_resolved"));
+      }
+      return receipt(true);
+    } catch (err) {
+      const current = state.clarifications.get(rec.clarificationId) === rec && state.active === a && !state.dead && !state.closed;
+      if (err?.code === "NOT_SENT") {
+        if (current) rec.responding = false;
+        return receipt(false, current ? "not_sent" : "stale");
+      }
+      fatalize(new Error("native clarification response failed; outcome unknown"));
+      throw new Error("native clarification response failed; outcome unknown");
+    } finally {
+      if (pending) state.pendingSteers.delete(pending);
+    }
+  }
+
+  function cmdQueueAnswer(args) {
+    requireLive(); requireGeneration(args); requireToken(args);
+    const prepared = state.prepared;
+    const controller = prepared.controller;
+    if (!isValidId(args.sessionId) || !isValidId(args.turnId) || !isValidId(args.clarificationId)) throw new Error("invalid clarification answer identity");
+    const admission = (queued, reason) => ({ generation, controller, sessionId: args.sessionId, turnId: args.turnId,
+      clarificationId: args.clarificationId, queued, ...(reason ? { reason } : {}) });
+    const key = JSON.stringify([prepared.projectToken, args.sessionId, args.turnId, args.clarificationId]);
+    if (state.answerJobs.has(key) || state.answerJobs.size >= MAX_PENDING_CLARIFICATIONS) return admission(false, "stale");
+    let rec;
+    if (controller === "codex") {
+      const a = state.active;
+      rec = state.clarifications.get(args.clarificationId);
+      if (!a || !rec || rec.responding || a.cancelPending || a.interruptSent || a.sessionId !== args.sessionId ||
+          a.turnId !== args.turnId || rec.sessionId !== args.sessionId || rec.turnId !== args.turnId ||
+          rec.connectionId !== prepared.client.connectionId) return admission(false, "stale");
+    }
+    const context = state.context;
+    const job = {};
+    state.answerJobs.set(key, job);
+    Promise.resolve().then(() => cmdAnswer(args)).then((result) => {
+      if (state.prepared !== prepared || state.context !== context || state.closed || state.dead) return;
+      const identity = rec ? { nativeThreadId: rec.parsed.nativeThreadId, nativeTurnId: rec.parsed.nativeTurnId } : {};
+      enqueue({ kind: "clarification_answered", generation, controller, harness: controller,
+        sessionId: args.sessionId, turnId: args.turnId, clarificationId: args.clarificationId,
+        submitted: result.submitted === true, ...(result.reason ? { reason: result.reason } : {}),
+        ...(result.message ? { message: boundText(result.message, 256) } : {}), ...identity });
+    }).catch(() => {
+      if (state.prepared === prepared && state.context === context && !state.closed && !state.dead) fatalize(new Error("native clarification answer outcome unknown"));
+    }).finally(() => {
+      if (state.answerJobs.get(key) === job) state.answerJobs.delete(key);
+    });
+    return admission(true);
+  }
+
   function cmdCancel(args) {
     requireLive();
     requireGeneration(args);
@@ -530,6 +686,7 @@ export function createNativeChatService(options) {
     const a = state.active;
     if (a === null || a.sessionId !== args.sessionId || a.turnId !== args.turnId) throw new Error("no matching active turn to cancel");
     invalidateApprovals();
+    clearClarifications();
     if (a.activated) interruptOnce(a);
     else a.cancelPending = true; // ACK is not activation: interrupt once the real turn binds
     return { generation, sessionId: args.sessionId, turnId: args.turnId, cancelling: true };
@@ -545,6 +702,7 @@ export function createNativeChatService(options) {
     const context = state.context;
     if (context) context.cancelled = true;
     if (state.active !== null) { const a = state.active; state.active = null; clearTimer(a); clearLease(a); }
+    clearClarifications(false);
     state.approvals.clear();
     state.sessions.clear();
     state.challenge = null;
@@ -580,6 +738,7 @@ export function createNativeChatService(options) {
       case "direct_chat_send": return cmdSend(args);
       case "native_chat_poll": return cmdPoll(args);
       case "native_chat_respond": return cmdRespond(args);
+      case "native_chat_answer": return cmdQueueAnswer(args);
       case "direct_chat_cancel": return cmdCancel(args);
       case "native_chat_close": return cmdClose(args);
       default: throw new Error(`unknown command ${String(command)}`);

@@ -5,6 +5,7 @@ import { join, basename } from "node:path";
 import { PassThrough } from "node:stream";
 import { createNativeChatService } from "../server/native-chat.mjs";
 import { createNativeRpc } from "../server/native-rpc.mjs";
+import { runHost } from "../server/host.mjs";
 
 const GEN = "gen-1";
 const tick = () => new Promise((r) => setImmediate(r));
@@ -38,10 +39,11 @@ class FakeClient {
     this.threadImpl = null;
     this.turnImpl = null;
     this.interruptImpl = null;
+    this.steerImpl = null;
     this.deferTurns = false;
     this.pendingTurns = [];
   }
-  async request(method, params) {
+  async request(method, params, options) {
     this.requests.push({ method, params });
     if (method === "thread/start") {
       this.threadIds += 1;
@@ -58,6 +60,10 @@ class FakeClient {
     if (method === "turn/interrupt") {
       if (this.interruptImpl) return this.interruptImpl(params);
       return {};
+    }
+    if (method === "turn/steer") {
+      if (this.steerImpl) return this.steerImpl(params, options);
+      return { turnId: params.expectedTurnId };
     }
     throw new Error(`unexpected native request ${method}`);
   }
@@ -123,7 +129,7 @@ describe("Claude facade routing", () => {
     const order = [];
     const metadata = { models: [{ id: "live", name: "Live", isDefault: true, resolvedModel: "actual", supportedEfforts: ["high", "max"] }], close: async () => { order.push("metadata closed"); } };
     let hooks;
-    const actor = { send: vi.fn(async () => ({ submitted: true })), cancel: vi.fn(() => ({ cancelling: true })), respond: vi.fn(async () => ({ acknowledged: true })), touch: vi.fn(), close: vi.fn(async () => { order.push("actor closed"); }) };
+    const actor = { send: vi.fn(async () => ({ submitted: true })), cancel: vi.fn(() => ({ cancelling: true })), respond: vi.fn(async () => ({ acknowledged: true })), answer: vi.fn(async () => ({ submitted: true })), touch: vi.fn(), close: vi.fn(async () => { order.push("actor closed"); }) };
     const openClaudeClient = vi.fn(async (opts) => { expect(opts.metadataOnly).toBe(true); return metadata; });
     const svc = createNativeChatService({ generation: GEN, onFatal: vi.fn(), openClaudeClient, createClaudeActor: async (opts) => {
       order.push("actor created"); hooks = opts; return actor;
@@ -146,9 +152,19 @@ describe("Claude facade routing", () => {
     expect(actor.send).toHaveBeenCalledWith(args);
     expect(actor.cancel).toHaveBeenCalledWith(args);
     expect(actor.respond).toHaveBeenCalledOnce();
+    const answerArgs = { ...args, clarificationId: "q", answers: { q: ["yes"] } };
+    await expect(svc.handle("native_chat_answer", { ...answerArgs, generation: "old" })).rejects.toThrow(/stale/);
+    await expect(svc.handle("native_chat_answer", { ...answerArgs, projectToken: "foreign" })).rejects.toThrow(/token/);
+    expect(actor.answer).not.toHaveBeenCalled();
+    expect(await svc.handle("native_chat_answer", answerArgs)).toEqual({ generation: GEN, controller: "claude", sessionId: "s1", turnId: "u1", clarificationId: "q", queued: true });
+    await tick();
+    expect(actor.answer).toHaveBeenCalledWith(answerArgs);
     const event = { kind: "message_delta", generation: GEN, controller: "claude", harness: "claude", sessionId: "s1", turnId: "u1", text: "hello" };
     hooks.onEvent(event);
-    expect((await pollFor(svc, v.projectToken)).events).toEqual([event]);
+    expect((await pollFor(svc, v.projectToken)).events).toEqual([
+      { kind: "clarification_answered", generation: GEN, controller: "claude", harness: "claude", sessionId: "s1", turnId: "u1", clarificationId: "q", submitted: true },
+      event,
+    ]);
     expect(actor.touch).toHaveBeenCalledOnce();
     await svc.handle("native_chat_close", { generation: GEN, projectToken: v.projectToken });
     expect(actor.close).toHaveBeenCalledOnce();
@@ -203,6 +219,250 @@ describe("Claude facade routing", () => {
     expect(createClaudeActor).not.toHaveBeenCalled();
     expect(fatal).toHaveBeenCalledOnce();
     await expect(svc.handle("native_chat_validate_project", { path: tempDir() })).rejects.toThrow(/closed/);
+  });
+});
+
+describe("Codex clarifications", () => {
+  const block = (extra = {}) => ({ threadId: "th-1", turnId: "tu-1", itemId: "item-1", isBlocking: true,
+    questions: [{ id: "q", header: "Choice", question: "Which?", options: null }], ...extra });
+  const asyncItem = (id = "async-1") => ({ threadId: "th-1", turnId: "tu-1", item: {
+    type: "agentMessage", delivery: "async", id, questions: [{ title: "Which?", options: ["A", "B"] }],
+  } });
+  const answer = (token, id, answers = { q: ["A"] }) => ({ generation: GEN, projectToken: token,
+    sessionId: "s1", turnId: "u1", clarificationId: id, answers });
+  async function active() {
+    const h = await prepared();
+    await h.svc.handle("direct_chat_send", sendFor(h.token));
+    h.client.note("turn/started", { threadId: "th-1", turn: { id: "tu-1" } });
+    return h;
+  }
+
+  it("round-trips a blocking request ID zero and keeps invalid answers editable", async () => {
+    const h = await active();
+    h.client.req(0, "item/tool/requestUserInput", block());
+    const [q] = (await pollFor(h.svc, h.token)).events;
+    expect(q).toMatchObject({ kind: "clarification", nativeItemId: "item-1", isBlocking: true });
+    expect(h.client.responded).toEqual([]);
+    expect(await h.svc.handle("native_chat_answer", answer(h.token, q.clarificationId, { q: [] }))).toMatchObject({ queued: true });
+    await tick();
+    expect((await pollFor(h.svc, h.token)).events).toEqual([expect.objectContaining({ kind: "clarification_answered", submitted: false, reason: "invalid" })]);
+    const input = { q: ["A"] };
+    expect(await h.svc.handle("native_chat_answer", answer(h.token, q.clarificationId, input))).toMatchObject({ queued: true });
+    await tick();
+    expect(input).toEqual({ q: ["A"] });
+    expect(h.client.responded).toEqual([{ id: 0, result: { answers: { q: { answers: ["A"] } } } }]);
+    expect((await pollFor(h.svc, h.token)).events).toEqual(expect.arrayContaining([expect.objectContaining({ kind: "clarification_resolved", clarificationId: q.clarificationId }), expect.objectContaining({ kind: "clarification_answered", submitted: true })]));
+    expect(await h.svc.handle("native_chat_answer", answer(h.token, q.clarificationId))).toMatchObject({ queued: false, reason: "stale" });
+    await expect(h.svc.handle("direct_chat_send", sendFor(h.token, { turnId: "u2" }))).rejects.toThrow(/already active/);
+    await h.svc.close();
+  });
+
+  it("delivers stashed async questions and steers the exact turn only on answer", async () => {
+    const h = await prepared();
+    await h.svc.handle("direct_chat_send", sendFor(h.token));
+    h.client.note("item/completed", asyncItem());
+    expect((await pollFor(h.svc, h.token)).events).toEqual([]);
+    h.client.note("turn/started", { threadId: "th-1", turn: { id: "tu-1" } });
+    const q = (await pollFor(h.svc, h.token)).events.find((e) => e.kind === "clarification");
+    expect(q).toMatchObject({ nativeItemId: "async-1", isBlocking: false, questions: [{ id: "0" }] });
+    expect(h.client.requests.filter((r) => r.method === "turn/steer")).toHaveLength(0);
+    expect(await h.svc.handle("native_chat_answer", answer(h.token, q.clarificationId, { 0: ["B"] }))).toMatchObject({ queued: true });
+    await tick();
+    const steer = h.client.requests.find((r) => r.method === "turn/steer");
+    expect(steer.params).toMatchObject({ threadId: "th-1", expectedTurnId: "tu-1", input: [{ type: "text" }] });
+    expect(steer.params.input[0].text).toContain("B");
+    await pollFor(h.svc, h.token);
+    h.client.note("item/completed", asyncItem());
+    expect((await pollFor(h.svc, h.token)).events.filter((e) => e.kind === "clarification")).toEqual([]);
+    await h.svc.close();
+  });
+
+  it("does not treat an ordinary async message with null questions as a prompt", async () => {
+    const h = await active();
+    h.client.note("item/completed", { threadId: "th-1", turnId: "tu-1", item: {
+      type: "agentMessage", delivery: "async", id: "ordinary", questions: null,
+    } });
+    expect(h.fatals).toEqual([]);
+    expect((await pollFor(h.svc, h.token)).events.filter((e) => e.kind === "clarification")).toEqual([]);
+    await h.svc.close();
+  });
+
+  it("aborts an unsent steer on cancel and blocks a new turn until settlement", async () => {
+    const h = await active();
+    let rejectSteer;
+    h.client.steerImpl = (_params, { signal }) => new Promise((_resolve, reject) => {
+      rejectSteer = reject;
+      signal.addEventListener("abort", () => { /* model a queued request whose rejection is deferred */ });
+      h.signal = signal;
+    });
+    h.client.note("item/completed", asyncItem());
+    const q = (await pollFor(h.svc, h.token)).events.find((e) => e.kind === "clarification");
+    expect(await h.svc.handle("native_chat_answer", answer(h.token, q.clarificationId, { 0: ["A"] }))).toMatchObject({ queued: true });
+    await tick();
+    await h.svc.handle("direct_chat_cancel", { generation: GEN, projectToken: h.token, sessionId: "s1", turnId: "u1" });
+    expect(h.signal.aborted).toBe(true);
+    completeTurn(h.client, "th-1", "tu-1", "interrupted");
+    await expect(h.svc.handle("direct_chat_send", sendFor(h.token, { turnId: "u2" }))).rejects.toThrow(/settling/);
+    rejectSteer(Object.assign(new Error("not sent"), { code: "NOT_SENT" }));
+    await tick();
+    expect((await pollFor(h.svc, h.token)).events).toEqual(expect.arrayContaining([expect.objectContaining({ kind: "clarification_answered", submitted: false, reason: "stale" })]));
+    expect((await h.svc.handle("direct_chat_send", sendFor(h.token, { turnId: "u2" }))).nativeTurnId).toBe("tu-2");
+    await h.svc.close();
+  });
+
+  it("checks a late steer ACK after terminal and fails closed on mismatched turn", async () => {
+    const h = await active();
+    let resolveSteer;
+    h.client.steerImpl = () => new Promise((resolve) => { resolveSteer = resolve; });
+    h.client.note("item/completed", asyncItem());
+    const q = (await pollFor(h.svc, h.token)).events.find((e) => e.kind === "clarification");
+    expect(await h.svc.handle("native_chat_answer", answer(h.token, q.clarificationId, { 0: ["A"] }))).toMatchObject({ queued: true });
+    await tick();
+    completeTurn(h.client, "th-1", "tu-1", "completed");
+    resolveSteer({ turnId: "wrong" });
+    await tick();
+    expect(h.fatals).toHaveLength(1);
+    await expect(h.svc.handle("direct_chat_send", sendFor(h.token, { turnId: "u2" }))).rejects.toThrow(/closed/);
+  });
+
+  it("retires a blocking prompt on native resolution and rejects malformed requests", async () => {
+    const h = await active();
+    h.client.req(0, "item/tool/requestUserInput", block());
+    const [q] = (await pollFor(h.svc, h.token)).events;
+    h.client.note("serverRequest/resolved", { requestId: 0, threadId: "th-1" });
+    expect(h.client.retired).toContain(0);
+    expect((await pollFor(h.svc, h.token)).events).toEqual([expect.objectContaining({ kind: "clarification_resolved", clarificationId: q.clarificationId })]);
+    expect(await h.svc.handle("native_chat_answer", answer(h.token, q.clarificationId))).toMatchObject({ queued: false, reason: "stale" });
+    h.client.req("0", "item/tool/requestUserInput", block({ questions: [] }));
+    expect(h.fatals).toHaveLength(1);
+    expect(h.client.retired).toContain("0");
+  });
+
+  it("keeps a current NOT_SENT question for explicit resubmission", async () => {
+    const h = await active();
+    h.client.req(0, "item/tool/requestUserInput", block());
+    const [q] = (await pollFor(h.svc, h.token)).events;
+    h.client.respond = vi.fn().mockRejectedValueOnce(Object.assign(new Error("not sent"), { code: "NOT_SENT" })).mockResolvedValueOnce(undefined);
+    expect(await h.svc.handle("native_chat_answer", answer(h.token, q.clarificationId))).toMatchObject({ queued: true });
+    await tick();
+    expect((await pollFor(h.svc, h.token)).events).toEqual([expect.objectContaining({ kind: "clarification_answered", submitted: false, reason: "not_sent" })]);
+    expect(h.client.respond).toHaveBeenCalledTimes(1);
+    expect(await h.svc.handle("native_chat_answer", answer(h.token, q.clarificationId))).toMatchObject({ queued: true });
+    await tick();
+    expect(h.client.respond).toHaveBeenCalledTimes(2);
+    await h.svc.close();
+  });
+
+  it("keeps reused request ID ownership separate across question and approval", async () => {
+    const h = await active();
+    let completeResponse;
+    h.client.respond = vi.fn().mockImplementationOnce(() => new Promise((resolve) => { completeResponse = resolve; })).mockResolvedValueOnce(undefined);
+    h.client.req(0, "item/tool/requestUserInput", block());
+    const [question] = (await pollFor(h.svc, h.token)).events;
+    expect(await h.svc.handle("native_chat_answer", answer(h.token, question.clarificationId))).toMatchObject({ queued: true });
+    await tick();
+    h.client.req(0, "item/commandExecution/requestApproval", { threadId: "th-1", turnId: "tu-1", itemId: "approval", availableDecisions: ["decline"] });
+    const approval = (await pollFor(h.svc, h.token)).events.find((e) => e.kind === "approval");
+    completeResponse();
+    await tick();
+    await h.svc.handle("native_chat_respond", { generation: GEN, projectToken: h.token, sessionId: "s1", turnId: "u1", approvalId: approval.approvalId, decision: "decline" });
+    expect(h.client.respond).toHaveBeenCalledTimes(2);
+    await h.svc.close();
+  });
+
+  it("retires a queued blocking answer at terminal without reoffering it", async () => {
+    const h = await active();
+    let rejectResponse;
+    h.client.respond = () => new Promise((_resolve, reject) => { rejectResponse = reject; });
+    h.client.retire = (id) => { h.client.retired.push(id); rejectResponse?.(Object.assign(new Error("not sent"), { code: "NOT_SENT" })); return true; };
+    h.client.req(0, "item/tool/requestUserInput", block());
+    const [q] = (await pollFor(h.svc, h.token)).events;
+    expect(await h.svc.handle("native_chat_answer", answer(h.token, q.clarificationId))).toMatchObject({ queued: true });
+    await tick();
+    completeTurn(h.client, "th-1", "tu-1", "completed");
+    await tick();
+    const events = (await pollFor(h.svc, h.token)).events;
+    expect(events).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "turn_complete" }),
+      expect.objectContaining({ kind: "clarification_resolved", clarificationId: q.clarificationId }),
+    ]));
+    expect(h.client.retired).toContain(0);
+    expect(h.fatals).toHaveLength(0);
+    await h.svc.close();
+  });
+
+  it("fails visibly when pending clarification capacity is exceeded", async () => {
+    const h = await active();
+    for (let id = 0; id < 5; id += 1) h.client.req(id, "item/tool/requestUserInput", block({ itemId: `item-${id}` }));
+    expect(h.fatals).toHaveLength(1);
+    expect(h.fatals[0].message).toMatch(/clarification/);
+    expect(h.client.retired).toContain(4);
+  });
+});
+
+describe("host clarification answer admission", () => {
+  it("keeps poll and cancel responsive while a real peer steer is queued behind backpressure", async () => {
+    const peerInput = new PassThrough();
+    const peerOutput = new PassThrough();
+    const peerFrames = [];
+    peerOutput.on("data", (bytes) => peerFrames.push(Buffer.from(bytes)));
+    const peer = createNativeRpc({ input: peerInput, output: peerOutput, onFatal: () => {} });
+    const client = new FakeClient();
+    const originalRequest = client.request.bind(client);
+    client.request = (method, params, options) => method === "turn/steer"
+      ? peer.request(method, params, options) : originalRequest(method, params, options);
+    client.close = async () => { peer.close(); };
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const error = new PassThrough();
+    error.resume();
+    let buffer = "";
+    const waiters = new Map();
+    output.on("data", (bytes) => {
+      buffer += bytes.toString("utf8");
+      let index;
+      while ((index = buffer.indexOf("\n")) !== -1) {
+        const line = buffer.slice(0, index); buffer = buffer.slice(index + 1);
+        const envelope = JSON.parse(line);
+        const resolve = waiters.get(envelope.requestId);
+        if (resolve) { waiters.delete(envelope.requestId); resolve(envelope); }
+      }
+    });
+    const serviceFactory = ({ generation, onFatal }) => createNativeChatService({ generation, onFatal,
+      openClient: async (opts) => { client.handlers = opts; return client; } });
+    const running = runHost({ input, output, error, generation: GEN, serviceFactory });
+    let sequence = 0;
+    const call = (command, args) => new Promise((resolve) => {
+      const requestId = `r${++sequence}`;
+      waiters.set(requestId, resolve);
+      input.write(frame({ v: 1, type: "request", generation: GEN, requestId, command, args }));
+    });
+    const validated = await call("native_chat_validate_project", { path: tempDir() });
+    const token = validated.result.projectToken;
+    await call("native_chat_prepare_project", { projectToken: token, trusted: true });
+    await call("direct_chat_send", sendFor(token));
+    client.note("turn/started", { threadId: "th-1", turn: { id: "tu-1" } });
+    client.note("item/completed", { threadId: "th-1", turnId: "tu-1", item: { type: "agentMessage", delivery: "async", id: "question", questions: [{ title: "Which?", options: ["A", "B"] }] } });
+    const first = await call("native_chat_poll", { generation: GEN, projectToken: token });
+    const question = first.result.events.find((e) => e.kind === "clarification");
+    const originalWrite = peerOutput.write.bind(peerOutput);
+    peerOutput.write = (chunk, callback) => { originalWrite(chunk, callback); return false; };
+    await peer.notify("primer", {});
+    const queued = await call("native_chat_answer", { generation: GEN, projectToken: token, sessionId: "s1", turnId: "u1", clarificationId: question.clarificationId, answers: { 0: ["A"] } });
+    expect(queued.result).toMatchObject({ queued: true });
+    const polled = await call("native_chat_poll", { generation: GEN, projectToken: token });
+    expect(polled.type).toBe("result");
+    const cancelled = await call("direct_chat_cancel", { generation: GEN, projectToken: token, sessionId: "s1", turnId: "u1" });
+    expect(cancelled.result.cancelling).toBe(true);
+    await tick();
+    const outcome = await call("native_chat_poll", { generation: GEN, projectToken: token });
+    expect(outcome.result.events).toEqual(expect.arrayContaining([expect.objectContaining({ kind: "clarification_answered", submitted: false, reason: "stale" })]));
+    peerOutput.write = originalWrite;
+    peerOutput.emit("drain");
+    await tick();
+    expect(Buffer.concat(peerFrames).toString("utf8")).not.toContain("turn/steer");
+    await call("shutdown", {});
+    await running;
   });
 });
 
