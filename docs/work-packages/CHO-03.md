@@ -1,6 +1,6 @@
 # CHO-03 — Durable sessions and recovery
 
-Status: in progress (contract slice only, no product source changes).
+Status: in progress. Contract accepted; standalone S1 store foundation implemented and verified locally (`f0b4f72`). Application consumers remain in memory.
 Authority: [implementation plan](../IMPLEMENTATION_PLAN.md) (CHO-03),
 [product spec](../PRODUCT_SPEC.md) (SESSION-01–06, RUN-04/06, AC-03/04/07/13),
 [CHO-04 milestones](CHO-04.md), storage contract: [SESSION_STORAGE](../contracts/SESSION_STORAGE.md).
@@ -16,14 +16,26 @@ Established identities to persist: Codex thread/turn/item ids, Claude session
 UUID with per-turn input UUIDs, plus asked/answered clarification history.
 Rust already owns an app-local state root (`app_local_data_dir()/host-state`).
 
-## This slice (docs only)
+## Accepted foundation
 
 1. `docs/contracts/SESSION_STORAGE.md`: versioned project/conversation/
    native-ref/turn/event/operation/draft/clarification records, concrete
    schema, DB-identity admission, CAS ownership fence, cursor/poll/crash/draft
    rules, close semantics, S1 I/O-error contracts and acceptance, later-slice scope.
-2. This work package: bounded implementation sequence for later slices.
-   Native resume and store migration are NOT implemented in this slice.
+2. `apps/desktop/server/session-store-schema.mjs`: exact accepted v1 DDL.
+3. `apps/desktop/server/session-store.mjs`: file admission, atomic initialization,
+   full schema checking, guarded synchronous transactions and close.
+4. `apps/desktop/src/session-store.test.mjs`: 20 real SQLite lifecycle and
+   transaction tests. No host/UI consumer, native resume or migration yet.
+
+Verification on `f0b4f72`: all 408 package tests (44 shared, 364 desktop), type
+checking and web build pass. Controller and independent GLM 5.3 high/Vibe
+review found no remaining High or Medium issue. Separate bundled Node 24.22.2
+fixtures establish commit across process restart, rollback after abrupt exit,
+WAL reopening without SHM, bounded contention, schema rejection with unchanged
+file bytes, and SQLite pager-FULL rollback. No provider call or native artifact
+rebuild was needed for this unconsumed module. This establishes the store core;
+it does not establish chat or draft persistence in the application.
 
 Decisions: SQLite default via `node:sqlite` on bundled Node 24.22.2; first
 implementation a standalone store module exposing only
@@ -36,14 +48,14 @@ recovery-required unless a proven not-sent fact exists — never replayed, never
 auto-resent, never auto-granted; pending approvals/questions become historical
 and unactionable after generation loss; close is interrupt-and-close only.
 
-## Implementation sequence (later slices, in order)
+## Implementation sequence
 
-- S1 — Store core only: file lifecycle/DB-identity admission, v1 schema,
+- S1 — Complete locally. Store core only: file lifecycle/DB-identity admission, v1 schema,
   `user_version`, guarded synchronous transaction boundary, one serialized
   writer, finite 100ms busy behavior. No consumers, no records CRUD/poll/draft/
   native claims, no runtime/recovery claims, no destructive migration.
   Exact I/O/error contracts and machine checks live in SESSION_STORAGE §7.
-- S2 — Normalized records: projects/conversations/native-refs/turns/operations/
+- S2 — Next. Normalized records: projects/conversations/native-refs/turns/operations/
   clarifications/large bodies/drafts with same-project binding, turn FKs,
   ownership, uniqueness, immutability-after-pinning, and draft mutation
   receipts; producer-fence acquisition rules; redaction boundary (no
@@ -69,3 +81,9 @@ stays in progress until S1–S5 land.
 
 Remaining unknowns: exact poll replay shape against the host protocol (02-a
 envelopes); conversation-list budget and large-body chunk tuning (128KiB poll).
+
+Low follow-ups: correct the ignored extension option in the raw test fixture
+(product connections use `allowExtension: false`); await child exit on fixture
+timeout; consolidate rare corrupt-path/transient-I/O error classification and
+failed rollback/close retirement before S3 host integration. POSIX path policy
+belongs to future platform qualification. These do not block the isolated S1 core.

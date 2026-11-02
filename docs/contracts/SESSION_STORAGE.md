@@ -1,6 +1,6 @@
 # SESSION_STORAGE — durable session/event store contract (CHO-03)
 
-Status: contract v1, design only. No implementation in this slice.
+Status: contract v1 accepted. Standalone S1 schema/lifecycle implemented and verified in `f0b4f72`; S2–S5 and application wiring remain pending.
 Authority: PRODUCT_SPEC SESSION-01–06, RUN-04/06, §9; IMPLEMENTATION_PLAN CHO-03; CHO-04 clarification milestone.
 Runtime: `node:sqlite` `DatabaseSync` (synchronous execution) on bundled Node 24.22.2.
 Official reference: [Node.js v24 SQLite](https://nodejs.org/docs/latest-v24.x/api/sqlite.html).

@@ -2,7 +2,24 @@
 
 Updated: 2026-11-02. Integration branch: `codex/cho-v01-foundation`. Native Codex/Claude conversations and the clarification source milestone are accepted locally; source checkpoint `926110a` is verified by controller checks and independent GLM review.
 
-Product contract: [specification](PRODUCT_SPEC.md). Sequence: [plan](IMPLEMENTATION_PLAN.md). Sonnet findings: [validated dispositions](reviews/FINDINGS_DISPOSITION.md). Current package: [CHO-02 protocol and host](work-packages/CHO-02.md). Current spike: [CHO-04 controller capabilities](work-packages/CHO-04.md); native Codex and Claude runtime and focused rendered conversation checks pass.
+Product contract: [specification](PRODUCT_SPEC.md). Sequence: [plan](IMPLEMENTATION_PLAN.md). Sonnet findings: [validated dispositions](reviews/FINDINGS_DISPOSITION.md). Current package: [CHO-03 durable sessions](work-packages/CHO-03.md). Native Codex and Claude runtime and focused rendered conversation checks pass; broader [CHO-04 qualification](work-packages/CHO-04.md) remains open.
+
+## Durable storage foundation
+
+The accepted v1 storage contract and standalone S1 core are implemented in
+`f0b4f72`. File admission rejects incompatible databases before persistent
+changes; schema/identity initialization is atomic; scoped synchronous
+transactions expire their query helpers and reject async callbacks. The core
+verifies WAL, FULL synchronous writes, foreign keys and a 100ms busy policy.
+
+All 408 package tests (including 20 new SQLite tests), type checking and web
+build pass. Independent GLM 5.3 high/Vibe and controller review have no remaining
+High or Medium findings. Separate bundled-runtime fixtures verify process
+restart, abrupt-exit rollback, WAL recovery, schema preservation and pager-FULL
+rollback. Initial sandbox permission failures were rerun successfully with
+normal Windows permissions. No new native artifact or rendered durability
+claim is made: application chats, drafts and events still use memory. Next is
+S2 record APIs, followed by host coupling, UI history/drafts and explicit recovery.
 
 ## First foundation batch integrated
 
