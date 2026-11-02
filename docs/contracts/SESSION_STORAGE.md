@@ -1,6 +1,6 @@
 # SESSION_STORAGE — durable session/event store contract (CHO-03)
 
-Status: contract v1 accepted. Standalone S1 schema/lifecycle implemented and verified in `f0b4f72`; S2–S5 and application wiring remain pending.
+Status: contract v1 accepted. S1 schema/lifecycle (`f0b4f72`) and S2a project/chat/draft records (`247f43d`) implemented and verified. Remaining native records, S3–S5 and application wiring are pending. S2a API: [SESSION_RECORDS](SESSION_RECORDS.md).
 Authority: PRODUCT_SPEC SESSION-01–06, RUN-04/06, §9; IMPLEMENTATION_PLAN CHO-03; CHO-04 clarification milestone.
 Runtime: `node:sqlite` `DatabaseSync` (synchronous execution) on bundled Node 24.22.2.
 Official reference: [Node.js v24 SQLite](https://nodejs.org/docs/latest-v24.x/api/sqlite.html).
@@ -241,7 +241,11 @@ overwrites: each distinct save id inserts its own immutable
 `draft_conflicts(conversation_id, client_save_id)` row holding the full conflicting
 text; conflicts are listed/resolved explicitly (`resolution`, version CAS on
 resolve) and prior conflicting text survives resolution; no silent deletion.
-Message, answer, and draft text are stored byte-exact (no trimming). Titles,
+Accepted message, answer, and draft text is stored byte-exact (no trimming).
+S2a rejects embedded NUL and unpaired surrogates before any record mutation;
+accepted whitespace, newlines and Unicode are preserved. This avoids NUL
+truncation on the older development Node SQLite reader; bundled Node 24.22.2
+preserves NUL natively. See SESSION_RECORDS for the consistent input policy. Titles,
 archive, search, and export are future consumers of these same tables, not separate
 stores. Transcript imports are atomic per batch and idempotent via
 `imports(source, source_key)`; they create conversations/turns/events only, with

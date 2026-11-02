@@ -21,6 +21,17 @@ normal Windows permissions. No new native artifact or rendered durability
 claim is made: application chats, drafts and events still use memory. Next is
 S2 record APIs, followed by host coupling, UI history/drafts and explicit recovery.
 
+## Project/chat records and draft persistence
+
+S2a source `247f43d` adds project/chat metadata APIs and draft CAS saves with
+immutable conflicts and idempotent receipts. All 428 package tests, type checking
+and web build pass; installed and bundled Node process fixtures establish record
+persistence and atomic receipt rollback. Controller and GLM review have no
+remaining High or Medium issue after direct validation of findings. See the
+[API contract](contracts/SESSION_RECORDS.md) and [CHO-03](work-packages/CHO-03.md).
+Application chats still use memory until the host/UI consumers are connected.
+Next: native record binding and producer ownership, then durable event coupling.
+
 ## First foundation batch integrated
 
 The prototype checkpoint (`d477cf6`) preserved the desktop and its required coordinator/Grok dependencies together. Review-driven spec/plan corrections were committed in `f9a5549`. The five worker slices below are now integrated locally.

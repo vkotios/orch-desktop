@@ -1,6 +1,6 @@
 # CHO-03 — Durable sessions and recovery
 
-Status: in progress. Contract accepted; standalone S1 store foundation implemented and verified locally (`f0b4f72`). Application consumers remain in memory.
+Status: in progress. S1 store foundation (`f0b4f72`) and S2a project/chat/draft records (`247f43d`) implemented and verified locally. Application consumers remain in memory.
 Authority: [implementation plan](../IMPLEMENTATION_PLAN.md) (CHO-03),
 [product spec](../PRODUCT_SPEC.md) (SESSION-01–06, RUN-04/06, AC-03/04/07/13),
 [CHO-04 milestones](CHO-04.md), storage contract: [SESSION_STORAGE](../contracts/SESSION_STORAGE.md).
@@ -48,6 +48,25 @@ recovery-required unless a proven not-sent fact exists — never replayed, never
 auto-resent, never auto-granted; pending approvals/questions become historical
 and unactionable after generation loss; close is interrupt-and-close only.
 
+## Project/chat records and drafts
+
+S2a adds the [session records API](../contracts/SESSION_RECORDS.md): explicit
+project/chat creation, bounded lists, literal title search, rename/archive,
+version-checked draft saves, immutable stale-save conflicts and durable save
+receipts. Project checks, mutations and receipts share one SQLite transaction.
+An exact retry returns its original receipt without replacing a newer draft.
+Native configuration/identities remain untouched; conflict lists return metadata
+and individual reads return text. NUL and unpaired-surrogate input rejects
+explicitly; accepted text retains whitespace, newlines and Unicode.
+
+Source `247f43d` passes all 428 package tests (44 shared, 384 desktop), including
+20 record tests, type checking and web build. Separate installed/bundled Node
+process fixtures verify persisted drafts/receipts, two-connection stale saves,
+receipt-failure rollback and text bounds. Independent GLM review and controller
+validation leave no High or Medium issue. Non-BMP fidelity is verified against
+actual Git source and direct runtime roundtrips. No host/UI consumer or new
+native artifact is claimed.
+
 ## Implementation sequence
 
 - S1 — Complete locally. Store core only: file lifecycle/DB-identity admission, v1 schema,
@@ -55,11 +74,12 @@ and unactionable after generation loss; close is interrupt-and-close only.
   writer, finite 100ms busy behavior. No consumers, no records CRUD/poll/draft/
   native claims, no runtime/recovery claims, no destructive migration.
   Exact I/O/error contracts and machine checks live in SESSION_STORAGE §7.
-- S2 — Next. Normalized records: projects/conversations/native-refs/turns/operations/
-  clarifications/large bodies/drafts with same-project binding, turn FKs,
-  ownership, uniqueness, immutability-after-pinning, and draft mutation
-  receipts; producer-fence acquisition rules; redaction boundary (no
-  credentials or raw provider payloads).
+- S2a — Complete locally: projects/conversations and draft saves/conflicts/receipts.
+- S2 remaining — Next: producer fences, native references, turns, execution
+  operations, clarifications and bounded large bodies; same-project/controller/
+  turn binding, ownership, uniqueness and native-configuration pinning. Complete
+  explicit draft-conflict resolution before its UI workflow. No credentials or
+  raw provider payloads enter normalized records.
 - S3 — Host/native event coupling: durable event+projection+outcome commits,
   replay-by-cursor poll replacing destructive drain, ownership checks, paged
   resync, interrupt-and-close with persisted Stop intent, visible
@@ -87,3 +107,7 @@ Low follow-ups: correct the ignored extension option in the raw test fixture
 timeout; consolidate rare corrupt-path/transient-I/O error classification and
 failed rollback/close retirement before S3 host integration. POSIX path policy
 belongs to future platform qualification. These do not block the isolated S1 core.
+
+S2a Low follow-ups: avoid timestamp changes on no-op rename/archive before S4;
+code the defensive CAS failure and validate malformed stored receipt JSON/shape
+before S3 consumers. Current API writes valid receipts under one writer lock.
