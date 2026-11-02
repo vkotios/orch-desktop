@@ -520,7 +520,7 @@ describe("native rpc peer", () => {
       const remove = vi.spyOn(c.signal, "removeEventListener");
       return { c, add, remove };
     };
-    const detached = (t: { add: { mock: { calls: unknown[][] } }; remove: ReturnType<typeof vi.fn> }) => {
+    const detached = (t: ReturnType<typeof tracked>) => {
       expect(t.add.mock.calls).toHaveLength(1);
       expect(t.remove).toHaveBeenCalledWith("abort", t.add.mock.calls[0][1]);
     };
