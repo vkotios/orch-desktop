@@ -21,35 +21,43 @@ Rust already owns an app-local state root (`app_local_data_dir()/host-state`).
 1. `docs/contracts/SESSION_STORAGE.md`: versioned project/conversation/
    native-ref/turn/event/operation/draft/clarification records, concrete
    schema, DB-identity admission, CAS ownership fence, cursor/poll/crash/draft
-   rules, S1 I/O-error contracts, acceptance/fault matrix.
+   rules, close semantics, S1 I/O-error contracts, per-slice acceptance.
 2. This work package: bounded implementation sequence for later slices.
    Native resume and store migration are NOT implemented in this slice.
 
 Decisions: SQLite default via `node:sqlite` on bundled Node 24.22.2; first
-implementation a standalone store module (no UI/IPC/provider wiring or
-provider start); transcript imports never invent native ids; all unfinished
-work after a crash is unknown/recovery-required unless a proven not-sent fact
-exists — never replayed, never auto-resent, never auto-granted; pending
-approvals/questions become historical and unactionable after generation loss.
+implementation a standalone store module exposing only
+`openSessionStore({ databasePath })`, `transaction(fn)`, `close()` — no
+records CRUD, poll/draft/native claims, UI/IPC/provider wiring, or provider
+start; fixed module application id (no caller app id); bounds are 65536 UTF-16
+code units; transcript imports never invent native ids and create no
+`native_refs` rows; all unfinished work after a crash is unknown/
+recovery-required unless a proven not-sent fact exists — never replayed, never
+auto-resent, never auto-granted; pending approvals/questions become historical
+and unactionable after generation loss; close is interrupt-and-close only.
 
 ## Implementation sequence (later slices, in order)
 
 - S1 — Store core only: file lifecycle/DB-identity admission, v1 schema,
-  `user_version`, transaction boundary, one serialized writer, finite busy
-  behavior. No consumers, no runtime/recovery claims, no destructive migration.
+  `user_version`, guarded synchronous transaction boundary, one serialized
+  writer, finite 100ms busy behavior. No consumers, no records CRUD/poll/draft/
+  native claims, no runtime/recovery claims, no destructive migration.
   Exact I/O/error contracts and machine checks live in SESSION_STORAGE §7.
-- S2 — Normalized records: projects/conversations/native-refs/turns/drafts
-  with ownership, uniqueness, and immutability rules; redaction boundary (no
+- S2 — Normalized records: projects/conversations/native-refs/turns/operations/
+  clarifications/large bodies/drafts with same-project binding, turn FKs,
+  ownership, uniqueness, immutability-after-pinning, and draft mutation
+  receipts; producer-fence acquisition rules; redaction boundary (no
   credentials or raw provider payloads).
-- S3 — Host/native event coupling: durable event+snapshot commits,
-  replay-by-cursor poll replacing destructive drain, ownership checks,
-  paginated resync, visible disk-full/corruption handling.
-- S4 — UI drafts/history: CAS drafts with immutable conflicts, bounded
-  history/list reads, rename/archive/search onto the store, one producer
+- S3 — Host/native event coupling: durable event+projection+outcome commits,
+  replay-by-cursor poll replacing destructive drain, ownership checks, paged
+  resync, interrupt-and-close with persisted Stop intent, visible
+  disk-full/corruption handling.
+- S4 — UI drafts/history: CAS drafts with per-save-id immutable conflicts,
+  bounded history/list reads, rename/archive/search onto the store, one producer
   per conversation at a time.
-- S5 — Resume/import/export: restart reconciliation with unknown states,
-  atomic idempotent browser transcript import, redacted export.
-  Native resume is S5 work, not S1.
+- S5 — Resume/import/export/restore: restart reconciliation with unknown states,
+  atomic idempotent browser transcript import, redacted export, explicit
+  restore/clone with identity rotation. Native resume is S5 work, not S1.
 
 ## Exit and review
 
@@ -59,7 +67,5 @@ production-ready claim. Storage/migration slices get two-family review (root
 independent review plus GLM); no fabricated CLI receipts for API work. CHO-03
 stays in progress until S1–S5 land.
 
-Remaining unknowns: exact poll replay shape against the current host protocol
-(02-a envelopes); retention/erase policy for transcripts and diagnostics;
-conversation-list performance budget on large stores; large-body chunk size
-tuning against the 128KiB poll total.
+Remaining unknowns: exact poll replay shape against the host protocol (02-a
+envelopes); conversation-list budget and large-body chunk tuning (128KiB poll).
