@@ -1,15 +1,16 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { Dialog, Icon } from "./Chrome";
 import { FormattedMarkdown } from "./FormattedMarkdown";
+import { NativeClarificationCard } from "./NativeClarificationCard";
 import {
-  nativeChatCancel, nativeChatClose, nativeChatPoll, nativeChatPrepareProject,
+  nativeChatAnswer, nativeChatCancel, nativeChatClose, nativeChatPoll, nativeChatPrepareProject,
   nativeChatRespond, nativeChatSend, nativeChatValidateProject, nativeChatPickProjectFolder,
-  type NativeController, type NativeDecision, type NativeEffort, type NativeModelInfo, type NativePrepareResult,
+  type NativeClarificationRequest, type NativeController, type NativeDecision, type NativeEffort, type NativeModelInfo, type NativePrepareResult,
   type NativeRole, type NativeValidateResult,
 } from "../lib/api";
 import {
-  applyNativeAck, applyNativePollBatch, beginNativeTurn, createNativeUiSession,
-  defaultNativeModel, failNativeTurn, markNativeCancelling, markNativeUnavailable,
+  applyNativeAck, applyNativeClarificationAck, applyNativePollBatch, beginNativeTurn, createNativeUiSession,
+  defaultNativeModel, failNativeTurn, markNativeCancelling, markNativeClarificationAnswering, markNativeUnavailable,
   NATIVE_MAX_SESSIONS, NATIVE_POLL_INTERVAL_MS, type NativeUiSession,
 } from "../lib/native-chat-state";
 import "./native-chat.css";
@@ -45,6 +46,7 @@ export function NativeChat() {
   const [sendPending, setSendPending] = useState(false);
   const [pendingDecisions, setPendingDecisions] = useState<string[]>([]);
   const decisionsRef = useRef(new Set<string>());
+  const answerRef = useRef(new Set<string>());
   const ownerRef = useRef<PollOwner | null>(null);
   const sendRef = useRef(false);
   const actionRef = useRef(false);
@@ -248,6 +250,36 @@ export function NativeChat() {
     } catch (e) { hostLost(owner, `Approval response could not be confirmed: ${errorText(e)}`); }
   }
 
+  async function answerClarification(request: NativeClarificationRequest, answers: Record<string, string[]>) {
+    const owner = ownerRef.current;
+    const session = sessionsRef.current.find((item) => item.id === selected);
+    const latest = session?.clarifications.find((q) => q.clarificationId === request.clarificationId && q.turnId === request.turnId);
+    if (!owner || !session || session.id !== selected || !latest) return;
+    const turnId = latest.turnId;
+    const clarificationId = latest.clarificationId;
+    if (!session.activeTurnId || session.activeTurnId !== turnId) return;
+    if (session.cancelling || session.unavailable || lost) return;
+    if (latest.answering || answerRef.current.has(clarificationId)) return;
+    answerRef.current.add(clarificationId);
+    changeSessions((all) => all.map((item) => item.id === session.id ? markNativeClarificationAnswering(item, clarificationId, turnId) : item));
+    const generation = owner.project.generation;
+    const projectToken = owner.project.projectToken;
+    const sessionId = session.id;
+    try {
+      const ack = await nativeChatAnswer({ generation, projectToken, sessionId, turnId, clarificationId, answers });
+      if (owner.stopped || ownerRef.current !== owner) return;
+      if (!ack || ack.generation !== generation || ack.sessionId !== sessionId ||
+          ack.turnId !== turnId || ack.clarificationId !== clarificationId) return;
+      changeSessions((all) => all.map((item) => item.id === sessionId ? applyNativeClarificationAck(item, ack, generation) : item));
+    } catch {
+      if (!owner.stopped && ownerRef.current === owner && mounted.current) {
+        setError("Could not confirm the answer. Stop this turn before trying again.");
+      }
+    } finally {
+      answerRef.current.delete(clarificationId);
+    }
+  }
+
   function updateSettings(patch: Partial<Pick<NativeUiSession, "model" | "role" | "effort">>) {
     changeSessions((all) => all.map((s) => {
       if (s.id !== selected || s.busy || sendRef.current) return s;
@@ -284,7 +316,7 @@ export function NativeChat() {
         {project && current && <><div className="native-settings"><label>Model <select value={current.model} disabled={current.threadStarted || current.messages.length > 0 || current.busy || sendPending || lost} onChange={(e) => chooseModel(e.target.value)}>{project.models.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}</select></label><label>Access <select value={current.role} disabled={current.threadStarted || current.messages.length > 0 || current.busy || sendPending || lost} onChange={(e) => updateSettings({ role: e.target.value as NativeRole })}><option value="implement">Editing</option><option value="review">Read-only</option></select></label><label>Effort <select value={current.effort ?? ""} disabled={((current.threadStarted || current.messages.length > 0) && current.controller === "claude") || current.busy || sendPending || lost || !availableEfforts.length} onChange={(e) => updateSettings({ effort: e.target.value as NativeEffort })}>{availableEfforts.length ? availableEfforts.map((e) => <option key={e} value={e}>{e === "xhigh" ? "Extra high" : e === "max" ? "Max" : e[0].toUpperCase() + e.slice(1)}</option>) : <option value="">Default</option>}</select></label></div>
           {(current.threadStarted || current.messages.length > 0) && <p className="native-hint">{current.controller === "codex" ? "Start a new chat to change the model or access." : "Start a new chat to change these settings."}</p>}
           {projectController === "claude" && current.role === "review" && <p className="native-hint">Review mode limits Claude to read tools.</p>}
-          <div className="native-messages" aria-live="polite">{current.messages.length === 0 && <div className="native-welcome"><h1>What would you like to work on?</h1><p>Ask {controllerName} about this project or describe a change.</p></div>}{current.messages.map((m) => <article className={`native-message ${m.role}`} key={m.id}><div className="native-message-label">{m.role === "user" ? "You" : controllerName}</div>{m.text ? <FormattedMarkdown text={m.text} /> : m.isStreaming ? <span className="native-muted">Starting…</span> : null}{m.tools.map((t) => <div className="native-tool" key={t.id}>{t.title} · {t.status}</div>)}{m.statusText && <p className="native-muted">{m.statusText}</p>}{m.outcome && <p className={m.isError ? "native-outcome error" : "native-outcome"}>{m.outcome}{m.outcomeNote ? `: ${m.outcomeNote}` : ""}</p>}</article>)}<div ref={bottomRef} /></div>
+          <div className="native-messages" aria-live="polite">{current.messages.length === 0 && <div className="native-welcome"><h1>What would you like to work on?</h1><p>Ask {controllerName} about this project or describe a change.</p></div>}{current.messages.map((m) => <article className={`native-message ${m.role}`} key={m.id}><div className="native-message-label">{m.role === "user" ? "You" : controllerName}</div>{m.text ? <FormattedMarkdown text={m.text} /> : m.isStreaming ? <span className="native-muted">Starting…</span> : null}{m.tools.map((t) => <div className="native-tool" key={t.id}>{t.title} · {t.status}</div>)}{m.statusText && <p className="native-muted">{m.statusText}</p>}{m.outcome && <p className={m.isError ? "native-outcome error" : "native-outcome"}>{m.outcome}{m.outcomeNote ? `: ${m.outcomeNote}` : ""}</p>}{current.clarifications.filter((r) => r.turnId === m.id).map((r) => <NativeClarificationCard key={r.clarificationId} request={r} disabled={lost || current.cancelling || current.unavailable} onAnswer={(answers) => void answerClarification(r, answers)} />)}</article>)}<div ref={bottomRef} /></div>
           <div className="native-approvals">{current.approvals.map((a) => <section className="native-approval" key={a.approvalId} aria-label="Approval request"><strong>{a.approvalType === "command" ? "Command approval" : a.approvalType === "file" ? "File change approval" : "Tool approval"}</strong><pre>{a.text}</pre><div>{a.decisions.length ? a.decisions.map((d) => <button key={d} className="native-button" disabled={pendingDecisions.includes(a.approvalId) || current.cancelling || lost} onClick={() => void decide(a.approvalId, d)}>{d === "accept" ? "Accept" : d === "decline" ? "Decline" : "Cancel"}</button>) : <span>No supported decisions are available.</span>}</div></section>)}</div>
           <div className="native-composer"><label className="sr-only" htmlFor="native-prompt">Message {controllerName}</label><textarea id="native-prompt" value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={composerKey} placeholder={`Message ${controllerName}…`} disabled={lost || current.unavailable} rows={3} /><div className="native-composer-actions"><span>Enter to send · Shift+Enter for a new line</span>{current.busy ? <button className="native-button" onClick={() => void stop()} disabled={current.cancelling || lost}><Icon name="stop" size={14} />{current.cancelling ? "Stopping…" : "Stop"}</button> : <button className="native-primary" onClick={() => void send()} disabled={!draft.trim() || draft.length > 65536 || busy || lost || !current.model}><Icon name="arrow" size={15} /> Send</button>}</div></div></>}
       </div>

@@ -51,5 +51,20 @@
 .native-composer textarea { width: 100%; resize: vertical; min-height: 66px; max-height: 220px; padding: 6px; border: 0; background: transparent; }
 .native-composer-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: var(--muted); font-size: 12px; }
 .native-confirm-path { padding: 12px; border-radius: 6px; background: var(--input); overflow-wrap: anywhere; }
+.native-clarification { margin-top: 10px; padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
+.native-clarification-title { margin: 0 0 10px; font-size: 13px; font-weight: 600; }
+.native-clarification-question { border: 0; padding: 0; margin: 0 0 12px; }
+.native-clarification-question legend { padding: 0; font-weight: 600; }
+.native-clarification-text { margin: 4px 0 8px; line-height: 1.5; }
+.native-clarification-options { display: grid; gap: 6px; margin: 0 0 8px; }
+.native-clarification-option { display: flex; align-items: flex-start; gap: 8px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 7px; background: var(--raised); color: var(--text); cursor: pointer; }
+.native-clarification-option input { margin-top: 3px; flex: none; }
+.native-clarification-option span { display: grid; gap: 2px; }
+.native-clarification-option small { color: var(--muted); font-size: 12px; line-height: 1.5; }
+.native-clarification-custom { display: grid; gap: 6px; margin: 0 0 8px; font-size: 13px; color: var(--secondary); }
+.native-clarification-custom textarea { width: 100%; min-height: 64px; max-height: 220px; resize: vertical; padding: 8px 10px; }
+.native-clarification-error { color: var(--error); font-size: 13px; }
+.native-clarification-status { align-self: center; color: var(--muted); font-size: 13px; }
+.native-clarification-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 4px; }
 .native-dialog-actions { justify-content: flex-end; margin-top: 20px; }
 @media (max-width: 700px) { .native-sidebar { width: 155px; flex-basis: 155px; padding: 16px 10px; } .native-brand { flex-wrap: wrap; } .native-brand span { margin-left: 0; } .native-content { width: calc(100% - 24px); } .native-header { padding: 14px; } .native-composer-actions span { display: none; } }
