@@ -109,6 +109,11 @@ async fn native_chat_respond(app: AppHandle, args: Value) -> Result<Value, Strin
 }
 
 #[tauri::command]
+async fn native_chat_answer(app: AppHandle, args: Value) -> Result<Value, String> {
+    route_with_args(&app, "native_chat_answer", args).await
+}
+
+#[tauri::command]
 async fn direct_chat_cancel(app: AppHandle, args: Value) -> Result<Value, String> {
     route_with_args(&app, "direct_chat_cancel", args).await
 }
@@ -195,6 +200,7 @@ pub fn run() {
             direct_chat_send,
             native_chat_poll,
             native_chat_respond,
+            native_chat_answer,
             direct_chat_cancel,
             native_chat_close,
             native_pick_project_folder

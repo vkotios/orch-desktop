@@ -15,6 +15,7 @@ const NATIVE_COMMANDS = new Set([
   'direct_chat_send',
   'native_chat_poll',
   'native_chat_respond',
+  'native_chat_answer',
   'direct_chat_cancel',
   'native_chat_close',
 ]);
