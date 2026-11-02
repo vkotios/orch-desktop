@@ -18,18 +18,27 @@ const errorOf = (v) => v instanceof Error ? v : new Error(String(v));
 
 // Native JSON input is retained privately; canonical order permits structural
 // comparison of the independently received assistant and control frames.
+function canonical(v, depth = 0) {
+  if (depth > 64) throw new Error("Claude tool input exceeds depth bound");
+  if (Array.isArray(v)) return v.map((x) => canonical(x, depth + 1));
+  if (plain(v)) return Object.fromEntries(Object.keys(v).sort().map((k) => [k, canonical(v[k], depth + 1)]));
+  return v;
+}
 function snapshot(value) {
   if (!plain(value)) throw new Error("Claude tool input must be an object");
   const text = JSON.stringify(value);
   if (typeof text !== "string" || Buffer.byteLength(text, "utf8") > TOOL_INPUT_BYTES) throw new Error("Claude tool input exceeds bound");
   const copy = JSON.parse(text);
-  function canonical(v, depth = 0) {
-    if (depth > 64) throw new Error("Claude tool input exceeds depth bound");
-    if (Array.isArray(v)) return v.map((x) => canonical(x, depth + 1));
-    if (plain(v)) return Object.fromEntries(Object.keys(v).sort().map((k) => [k, canonical(v[k], depth + 1)]));
-    return v;
-  }
   return { value: copy, key: JSON.stringify(canonical(copy)) };
+}
+
+// The CLI may add only this native default between assistant and control
+// frames. The original snapshots remain unchanged for the answer payload.
+function questionComparisonKey(input) {
+  const value = input.value;
+  if (!Array.isArray(value.questions)) return input.key;
+  const questions = value.questions.map((q) => plain(q) && !Object.hasOwn(q, "multiSelect") ? { ...q, multiSelect: false } : q);
+  return JSON.stringify(canonical({ ...value, questions }));
 }
 
 export function createClaudeChatActor(options) {
@@ -139,7 +148,7 @@ export function createClaudeChatActor(options) {
   function promoteQuestion(a, rec) {
     const tool = a.tools.get(rec.toolId);
     if (!tool) return;
-    if (tool.name !== rec.name || tool.input.key !== rec.input.key) throw new Error("Claude permission request does not match assistant tool use");
+    if (tool.name !== rec.name || questionComparisonKey(tool.input) !== questionComparisonKey(rec.input)) throw new Error("Claude permission request does not match assistant tool use");
     if (tool.requested) throw new Error("duplicate Claude permission request for tool");
     tool.requested = true;
     clearTimeout(rec.timer);

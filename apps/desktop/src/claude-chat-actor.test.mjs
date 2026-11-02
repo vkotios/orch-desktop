@@ -43,6 +43,62 @@ const answerArgs = (id, answers) => ({ sessionId: "s1", turnId: "u1", clarificat
 
 describe("Claude clarification", () => {
   for (const order of ["request-first", "assistant-first"]) {
+    it(`accepts an omitted assistant multiSelect default in ${order} order`, async () => {
+      const h = fixture(); const ack = await h.actor.send(args()); const c = h.clients[0];
+      const control = { questions: [questionInput().questions[0]], context: { source: "native" } };
+      const assistantInput = structuredClone(control);
+      delete assistantInput.questions[0].multiSelect;
+      const originalControl = structuredClone(control), originalAssistant = structuredClone(assistantInput);
+      const request = () => c.request("req-default", questionRequest("tool-default", control));
+      const showTool = () => c.event(assistant(ack, [questionBlock("tool-default", assistantInput)]));
+      if (order === "request-first") { request(); showTool(); } else { showTool(); request(); }
+      const prompts = h.events.filter((e) => e.kind === "clarification");
+      expect(prompts).toHaveLength(1);
+      expect(prompts[0].questions).toHaveLength(1);
+      const pending = h.actor.answer(answerArgs(prompts[0].clarificationId, { "Which style?": ["Light"] }));
+      expect(c.responses).toEqual([{ id: "req-default", decision: { behavior: "allow", updatedInput: { ...originalControl, answers: { "Which style?": "Light" } } } }]);
+      c.resolve("req-default");
+      await expect(pending).resolves.toMatchObject({ submitted: true });
+      expect(control).toEqual(originalControl);
+      expect(assistantInput).toEqual(originalAssistant);
+      expect(h.fatals).toHaveLength(0);
+      await h.actor.close();
+    });
+  }
+
+  it("keeps all other question input differences significant", async () => {
+    const changes = [
+      (q) => { q.questions[0].multiSelect = true; },
+      (q) => { q.questions[0].multiSelect = null; },
+      (q) => { q.questions[0].multiSelect = "false"; },
+      (q) => { q.questions[0].question = "Different?"; },
+      (q) => { q.questions[0].options.reverse(); },
+      (q) => { q.questions[0].unrecognized = "different"; },
+      (q) => { q.nativeExtra.retained = false; },
+    ];
+    for (const change of changes) {
+      const h = fixture(); const ack = await h.actor.send(args()); const c = h.clients[0];
+      const control = questionInput(); const different = structuredClone(control);
+      change(different);
+      c.request("req", questionRequest("tool", control));
+      c.event(assistant(ack, [questionBlock("tool", different)]));
+      expect(h.fatals).toHaveLength(1);
+      expect(h.events.some((e) => e.kind === "clarification")).toBe(false);
+      expect(c.responses).toHaveLength(0);
+      await h.actor.close();
+    }
+  });
+
+  it("does not apply the question default to other tools", async () => {
+    const h = fixture(); const ack = await h.actor.send(args()); const c = h.clients[0];
+    c.request("req", { tool_use_id: "tool", tool_name: "Read", input: { questions: [{ label: "x", multiSelect: false }] } });
+    c.event(assistant(ack, [{ type: "tool_use", id: "tool", name: "Read", input: { questions: [{ label: "x" }] } }]));
+    expect(h.fatals).toHaveLength(1);
+    expect(h.events.some((e) => e.kind === "approval")).toBe(false);
+    await h.actor.close();
+  });
+
+  for (const order of ["request-first", "assistant-first"]) {
     it(`correlates ${order} and sends only explicit answers using the original input`, async () => {
       const h = fixture(); const ack = await h.actor.send(args()); const c = h.clients[0];
       const input = questionInput(); const original = structuredClone(input);
