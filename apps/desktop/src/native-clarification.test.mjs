@@ -142,6 +142,33 @@ describe("parseCodexClarification", () => {
     expect(() => parseCodexClarification(codexParams({ questions: [null] }))).toThrow();
   });
 
+  it("accepts an explicit empty description and encodes answers", () => {
+    const parsed = parseCodexClarification(codexParams({
+      questions: [codexQuestion({ options: [{ label: "Red", description: "" }, { label: "Blue", description: "The cool one" }] })],
+    }));
+    expect(parsed.questions[0].options[0]).toEqual({ label: "Red", description: "" });
+    const wire = encodeCodexClarificationAnswer(parsed, { q1: ["Red"] });
+    expect(wire).toEqual({ answers: { q1: { answers: ["Red"] } } });
+  });
+
+  it("bounds option descriptions at 2048 chars and rejects missing or mistyped descriptions", () => {
+    const ok = parseCodexClarification(codexParams({
+      questions: [codexQuestion({ options: [{ label: "A", description: "x".repeat(2048) }] })],
+    }));
+    expect(ok.questions[0].options[0].description).toHaveLength(2048);
+    expect(() => parseCodexClarification(codexParams({
+      questions: [codexQuestion({ options: [{ label: "A", description: "x".repeat(2049) }] })],
+    }))).toThrow(/description/);
+    expect(() => parseCodexClarification(codexParams({
+      questions: [codexQuestion({ options: [{ label: "A" }] })],
+    }))).toThrow(/description/);
+    for (const bad of [null, 42]) {
+      expect(() => parseCodexClarification(codexParams({
+        questions: [codexQuestion({ options: [{ label: "A", description: bad }] })],
+      }))).toThrow(/description/);
+    }
+  });
+
   it("rejects secret questions and malformed flags explicitly", () => {
     expect(() => parseCodexClarification(codexParams({ questions: [codexQuestion({ isSecret: true })] }))).toThrow(/isSecret/);
     expect(parseCodexClarification(codexParams({ questions: [codexQuestion({ isSecret: false })] })).questions[0].isOther).toBe(false);
@@ -241,6 +268,35 @@ describe("parseClaudeClarification", () => {
     const before = snapshot(input);
     parseClaudeClarification(input);
     expect(snapshot(input)).toBe(before);
+  });
+
+  it("accepts an explicit empty description and echoes the original input", () => {
+    const input = claudeInput({
+      questions: [claudeQuestion({ options: [{ label: "Red", description: "" }, { label: "Green", description: "Cool" }] })],
+    });
+    const parsed = parseClaudeClarification(input);
+    expect(parsed.questions[0].options[0]).toEqual({ label: "Red", description: "" });
+    const wire = encodeClaudeClarificationAnswer(input, parsed, { "Which color?": ["Red"] });
+    expect(wire.updatedInput.questions).toBe(input.questions);
+    expect(wire.updatedInput.answers).toEqual({ "Which color?": "Red" });
+  });
+
+  it("bounds option descriptions at 2048 chars and rejects missing or mistyped descriptions", () => {
+    const ok = parseClaudeClarification(claudeInput({
+      questions: [claudeQuestion({ options: [{ label: "A", description: "y".repeat(2048) }, { label: "B", description: "d" }] })],
+    }));
+    expect(ok.questions[0].options[0].description).toHaveLength(2048);
+    expect(() => parseClaudeClarification(claudeInput({
+      questions: [claudeQuestion({ options: [{ label: "A", description: "y".repeat(2049) }, { label: "B", description: "d" }] })],
+    }))).toThrow(/description/);
+    expect(() => parseClaudeClarification(claudeInput({
+      questions: [claudeQuestion({ options: [{ label: "A" }, { label: "B", description: "d" }] })],
+    }))).toThrow(/description/);
+    for (const bad of [null, 42]) {
+      expect(() => parseClaudeClarification(claudeInput({
+        questions: [claudeQuestion({ options: [{ label: "A", description: bad }, { label: "B", description: "d" }] })],
+      }))).toThrow(/description/);
+    }
   });
 
   it("rejects aggregate display text over the cap", () => {

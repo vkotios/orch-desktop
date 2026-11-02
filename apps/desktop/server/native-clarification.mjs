@@ -49,6 +49,13 @@ function nativeId(value, field) {
   return boundedString(value, field, MAX_NATIVE_ID);
 }
 
+function optionDescription(value, field) {
+  if (typeof value !== "string" || value.length > MAX_DESCRIPTION) {
+    throw new Error(`${field} description must be a string of at most ${MAX_DESCRIPTION} chars`);
+  }
+  return value;
+}
+
 function checkDisplayBudget(total, field) {
   if (total > MAX_AGGREGATE) {
     throw new Error(`${field} exceeds the aggregate display text cap of ${MAX_AGGREGATE} chars`);
@@ -64,9 +71,9 @@ function parseOption(raw, field, seenLabels) {
   const label = hasOwn(raw, "label") ? boundedString(raw.label, `${field} label`, MAX_LABEL) : null;
   if (label === null) throw new Error(`${field} label must be a nonempty string of at most ${MAX_LABEL} chars`);
   const description = hasOwn(raw, "description")
-    ? boundedString(raw.description, `${field} description`, MAX_DESCRIPTION)
+    ? optionDescription(raw.description, field)
     : null;
-  if (description === null) throw new Error(`${field} description must be a nonempty string of at most ${MAX_DESCRIPTION} chars`);
+  if (description === null) throw new Error(`${field} description must be a string of at most ${MAX_DESCRIPTION} chars`);
   if (seenLabels.has(label)) throw new Error(`${field} has a duplicate option label`);
   seenLabels.add(label);
   return freezeOption({ label, description });
