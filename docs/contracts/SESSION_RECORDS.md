@@ -78,7 +78,7 @@ Controller is `codex` or `claude`; role is `implement` or `review`. Pagination
 limits are integers 1–100; offsets and expected versions are nonnegative safe
 integers. Boolean flags are strictly typed. Version increments never wrap.
 
-Errors use static messages without input values or SQL:
+Mapped record errors use static messages without input values or SQL:
 
 | Code | Meaning |
 | --- | --- |
@@ -89,5 +89,6 @@ Errors use static messages without input values or SQL:
 | `ERR_VERSION_LIMIT` | Increment would exceed the safe integer range. |
 
 S1 storage errors, including `ERR_BUSY`, `ERR_STORAGE` and `ERR_CLOSED`, propagate.
-Native references, producer fences, turns, execution operations, large bodies,
-clarifications, events, recovery and UI consumers remain later work.
+Native references and producer fences are provided by the separate
+[SESSION_BINDINGS](SESSION_BINDINGS.md) module. Turns, execution operations,
+large bodies, clarifications, events, recovery and UI consumers remain later work.

@@ -1,6 +1,6 @@
 # SESSION_STORAGE — durable session/event store contract (CHO-03)
 
-Status: contract v1 accepted. S1 schema/lifecycle (`f0b4f72`) and S2a project/chat/draft records (`247f43d`) implemented and verified. Remaining native records, S3–S5 and application wiring are pending. S2a API: [SESSION_RECORDS](SESSION_RECORDS.md).
+Status: contract v1 accepted. S1 lifecycle (`f0b4f72`), S2a project/chat/draft records (`247f43d`) and S2b native bindings/producer fences (`f202eeb`) implemented and verified. Remaining execution records, S3–S5 and application wiring are pending. APIs: [SESSION_RECORDS](SESSION_RECORDS.md), [SESSION_BINDINGS](SESSION_BINDINGS.md).
 Authority: PRODUCT_SPEC SESSION-01–06, RUN-04/06, §9; IMPLEMENTATION_PLAN CHO-03; CHO-04 clarification milestone.
 Runtime: `node:sqlite` `DatabaseSync` (synchronous execution) on bundled Node 24.22.2.
 Official reference: [Node.js v24 SQLite](https://nodejs.org/docs/latest-v24.x/api/sqlite.html).

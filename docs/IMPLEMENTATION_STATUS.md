@@ -30,7 +30,19 @@ persistence and atomic receipt rollback. Controller and GLM review have no
 remaining High or Medium issue after direct validation of findings. See the
 [API contract](contracts/SESSION_RECORDS.md) and [CHO-03](work-packages/CHO-03.md).
 Application chats still use memory until the host/UI consumers are connected.
-Next: native record binding and producer ownership, then durable event coupling.
+Native record binding and producer ownership are implemented in S2b below.
+
+## Native reference and producer fence storage
+
+S2b source `f202eeb` persists immutable native references and producer fences with
+exact token/generation checks, no timeout takeover and verified terminal
+transitions. Claude's requested UUID remains separate from observed binding.
+All 448 package tests, type checking and web build pass. Separate process,
+simultaneous-claim and fault fixtures verify storage behavior; controller and
+complete independent GLM review leave no High or Medium issue. See
+[SESSION_BINDINGS](contracts/SESSION_BINDINGS.md). Live process verification and
+the app's host/UI consumers remain unwired. Next: execution records and durable
+event coupling.
 
 ## First foundation batch integrated
 

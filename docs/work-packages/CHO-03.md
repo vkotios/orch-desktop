@@ -1,6 +1,6 @@
 # CHO-03 — Durable sessions and recovery
 
-Status: in progress. S1 store foundation (`f0b4f72`) and S2a project/chat/draft records (`247f43d`) implemented and verified locally. Application consumers remain in memory.
+Status: in progress. S1 store (`f0b4f72`), S2a project/chat/draft records (`247f43d`) and S2b native bindings/producer fences (`f202eeb`) implemented and verified locally. Application consumers remain in memory.
 Authority: [implementation plan](../IMPLEMENTATION_PLAN.md) (CHO-03),
 [product spec](../PRODUCT_SPEC.md) (SESSION-01–06, RUN-04/06, AC-03/04/07/13),
 [CHO-04 milestones](CHO-04.md), storage contract: [SESSION_STORAGE](../contracts/SESSION_STORAGE.md).
@@ -67,6 +67,24 @@ validation leave no High or Medium issue. Non-BMP fidelity is verified against
 actual Git source and direct runtime roundtrips. No host/UI consumer or new
 native artifact is claimed.
 
+## Producer fences and native bindings
+
+S2b adds [SESSION_BINDINGS](../contracts/SESSION_BINDINGS.md): generation-checked
+producer ownership, verified release/death transitions and immutable native
+references. Held fences cannot transfer by age or manual override; a new token
+can reclaim a terminal fence only at the next generation. Claude requests remain
+distinct from matching observed native associations. Codex references preserve
+the observed thread ID; binding leaves model/role/provenance fields untouched.
+
+Source `f202eeb` passes 20 focused tests, all 448 package tests (44 shared,
+404 desktop), type checking and web build. Actual installed/bundled Node process
+fixtures establish reopening, stale-owner rejection, rollback and uniqueness;
+simultaneous child claims produce one owner. Independent GLM review completed
+all seven passes on retry; controller validation leaves no High or Medium issue.
+Injected proof callbacks are synthetic in these fixtures. Actual host process
+identity/proof freshness, provider observation and runtime consumers remain S3
+work; there is no native supervision or application recovery claim here.
+
 ## Implementation sequence
 
 - S1 — Complete locally. Store core only: file lifecycle/DB-identity admission, v1 schema,
@@ -75,9 +93,10 @@ native artifact is claimed.
   native claims, no runtime/recovery claims, no destructive migration.
   Exact I/O/error contracts and machine checks live in SESSION_STORAGE §7.
 - S2a — Complete locally: projects/conversations and draft saves/conflicts/receipts.
-- S2 remaining — Next: producer fences, native references, turns, execution
-  operations, clarifications and bounded large bodies; same-project/controller/
-  turn binding, ownership, uniqueness and native-configuration pinning. Complete
+- S2b — Complete locally: producer fences and native reference/request binding.
+- S2 remaining — Next: turns, execution operations, clarifications and bounded
+  large bodies; same-project/controller/turn binding, generation checks inside
+  each mutation transaction and native-configuration pinning. Complete
   explicit draft-conflict resolution before its UI workflow. No credentials or
   raw provider payloads enter normalized records.
 - S3 — Host/native event coupling: durable event+projection+outcome commits,
@@ -111,3 +130,10 @@ belongs to future platform qualification. These do not block the isolated S1 cor
 S2a Low follow-ups: avoid timestamp changes on no-op rename/archive before S4;
 code the defensive CAS failure and validate malformed stored receipt JSON/shape
 before S3 consumers. Current API writes valid receipts under one writer lock.
+
+S2b Low follow-ups before host/restore consumers: validate stored native-reference
+shape and requested/observed consistency, including already-set idempotent
+requests; align trusted-clock exceptions with host-facing error policy; review
+proof-before-collision error ordering if calls become externally exposed. Improve
+the factory no-I/O fixture when refactoring. Current API writes valid bindings and
+never mutates without verified ownership.
