@@ -74,6 +74,7 @@ CREATE TABLE operations(
   payload_hash TEXT NULL, result_json TEXT NULL,
   created_at_ms INTEGER NOT NULL, settled_at_ms INTEGER NULL,
   CHECK(kind IN ('draft_save','handoff') OR turn_id IS NOT NULL),
+  CHECK(kind <> 'draft_save' OR (payload_hash IS NOT NULL AND result_json IS NOT NULL)),
   FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
   FOREIGN KEY (conversation_id, turn_id) REFERENCES turns(conversation_id, id) ON DELETE CASCADE);
 CREATE TABLE clarifications(id TEXT PRIMARY KEY, turn_id TEXT NOT NULL, conversation_id TEXT NOT NULL,
@@ -277,7 +278,7 @@ divergence), `ERR_BUSY` (bounded busy timeout incl. competing initializer),
 `ERR_INVALID_TX` (nested transaction, close-in-tx, async write after return, or
 thenable callback). S1 machine checks: fresh open then reopen keeps the same
 instance id; PRAGMA WAL/FULL/FK read-back; malformed/foreign/future/version-0-nonempty files preserved
-byte-identical; commit persists, rollback and thenable-callback discard, nested and
+byte-identical; repeated close is a no-op; commit persists, rollback and thenable-callback discard, nested and
 close-in-tx and post-close and async-after-return reject; real-busy and competing
 initializer surface `ERR_BUSY` without writes by the losing attempt (the winning
 writer may advance the shared DB). Later slices own the

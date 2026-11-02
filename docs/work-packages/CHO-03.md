@@ -21,7 +21,7 @@ Rust already owns an app-local state root (`app_local_data_dir()/host-state`).
 1. `docs/contracts/SESSION_STORAGE.md`: versioned project/conversation/
    native-ref/turn/event/operation/draft/clarification records, concrete
    schema, DB-identity admission, CAS ownership fence, cursor/poll/crash/draft
-   rules, close semantics, S1 I/O-error contracts, per-slice acceptance.
+   rules, close semantics, S1 I/O-error contracts and acceptance, later-slice scope.
 2. This work package: bounded implementation sequence for later slices.
    Native resume and store migration are NOT implemented in this slice.
 
