@@ -1,6 +1,8 @@
 import type {
   NativeEffort,
   NativeController,
+  NativeClarificationAck,
+  NativeClarificationRequest,
   NativeModelInfo,
   NativeOutcomeKind,
   NativePollEvent,
@@ -22,6 +24,7 @@ import type {
 export const NATIVE_POLL_INTERVAL_MS = 150;
 export const NATIVE_MAX_SESSIONS = 8;
 export const NATIVE_MAX_APPROVALS = 8;
+export const NATIVE_MAX_CLARIFICATIONS = 4;
 export const NATIVE_ACTIVATION_TIMEOUT_MS = 15_000;
 
 export interface NativeToolStep {
@@ -67,6 +70,7 @@ export interface NativeUiSession {
   effort?: NativeEffort;
   messages: NativeChatMessage[];
   approvals: NativeApprovalRequest[];
+  clarifications: NativeClarificationRequest[];
   activeTurnId: string | null;
   busy: boolean;
   cancelling: boolean;
@@ -99,6 +103,7 @@ export function createNativeUiSession(
     effort,
     messages: [],
     approvals: [],
+    clarifications: [],
     activeTurnId: null,
     busy: false,
     cancelling: false,
@@ -175,6 +180,7 @@ function finishTurn(
     ...session,
     messages,
     approvals: [],
+    clarifications: [],
     activeTurnId: null,
     busy: false,
     cancelling: false,
@@ -355,6 +361,39 @@ export function applyNativeUiEvent(
       if (!event.approvalId) return session;
       return { ...session, approvals: session.approvals.filter((a) => a.approvalId !== event.approvalId || a.turnId !== turnId) };
     }
+    case "clarification": {
+      if (session.cancelling || !event.clarificationId || !event.nativeItemId ||
+          typeof event.isBlocking !== "boolean" || !Array.isArray(event.questions) ||
+          event.questions.length === 0 || event.questions.length > 4 ||
+          session.clarifications.length >= NATIVE_MAX_CLARIFICATIONS ||
+          session.clarifications.some((q) => q.clarificationId === event.clarificationId)) return session;
+      if (!event.questions.every((q) => q && typeof q.id === "string" && q.id.length > 0 &&
+          typeof q.header === "string" && typeof q.question === "string" &&
+          typeof q.multiSelect === "boolean" && typeof q.isOther === "boolean" &&
+          (q.options === null || (Array.isArray(q.options) && q.options.length <= 8 &&
+            q.options.every((o) => o && typeof o.label === "string" && typeof o.description === "string"))))) return session;
+      const clarification: NativeClarificationRequest = {
+        clarificationId: event.clarificationId, nativeItemId: event.nativeItemId,
+        isBlocking: event.isBlocking, questions: event.questions, sessionId: session.id, turnId, answering: false,
+      };
+      return { ...session, clarifications: [...session.clarifications, clarification] };
+    }
+    case "clarification_resolved": {
+      if (!event.clarificationId) return session;
+      return { ...session, clarifications: session.clarifications.filter((q) => q.clarificationId !== event.clarificationId || q.turnId !== turnId) };
+    }
+    case "clarification_answered": {
+      if (!event.clarificationId || typeof event.submitted !== "boolean") return session;
+      const matching = session.clarifications.some((q) => q.clarificationId === event.clarificationId && q.turnId === turnId);
+      if (!matching) return session;
+      if (event.submitted || event.reason === "stale") {
+        return { ...session, clarifications: session.clarifications.filter((q) => !(q.clarificationId === event.clarificationId && q.turnId === turnId)) };
+      }
+      if (event.reason !== "invalid" && event.reason !== "not_sent") return session;
+      return { ...session, clarifications: session.clarifications.map((q) => q.clarificationId === event.clarificationId && q.turnId === turnId
+        ? { ...q, answering: false, answerError: typeof event.message === "string" ? event.message.slice(0, 512) : undefined }
+        : q) };
+    }
     case "error": {
       return updateAssistant(session, turnId, (m) => ({ ...m, statusText: event.text || "The turn reported an error.", isError: true }));
     }
@@ -397,7 +436,37 @@ export function applyNativePollBatch(
 /** Marks a turn as stopping; displayed approvals are invalidated with it. */
 export function markNativeCancelling(session: NativeUiSession): NativeUiSession {
   if (!session.activeTurnId || session.cancelling) return session;
-  return { ...session, cancelling: true, approvals: [] };
+  return { ...session, cancelling: true, approvals: [], clarifications: [] };
+}
+
+/** Mark the current prompt before invoking the queued answer command. */
+export function markNativeClarificationAnswering(session: NativeUiSession, clarificationId: string, turnId: string): NativeUiSession {
+  if (session.activeTurnId !== turnId || session.cancelling || session.unavailable) return session;
+  const question = session.clarifications.find((q) => q.clarificationId === clarificationId && q.turnId === turnId);
+  if (!question || question.answering) return session;
+  return { ...session, clarifications: session.clarifications.map((q) => q === question ? { ...q, answering: true, answerError: undefined } : q) };
+}
+
+/** Clear local pending state when submission fails before it can be queued. */
+export function resetNativeClarificationAnswering(session: NativeUiSession, clarificationId: string, turnId: string, message?: string): NativeUiSession {
+  if (session.activeTurnId !== turnId) return session;
+  const question = session.clarifications.find((q) => q.clarificationId === clarificationId && q.turnId === turnId);
+  if (!question) return session;
+  return { ...session, clarifications: session.clarifications.map((q) => q === question ? { ...q, answering: false, answerError: message?.slice(0, 512) } : q) };
+}
+
+/** Queue admission is not answer submission or provider completion. */
+export function applyNativeClarificationAck(
+  session: NativeUiSession, ack: NativeClarificationAck, generation: string,
+): NativeUiSession {
+  if (ack.generation !== generation || ack.sessionId !== session.id ||
+      !session.activeTurnId || ack.turnId !== session.activeTurnId ||
+      !session.clarifications.some((q) => q.clarificationId === ack.clarificationId && q.turnId === ack.turnId)) return session;
+  if (ack.controller !== session.controller) return markNativeUnavailable(session, "Conflicting native controller.");
+  if (ack.queued === false && ack.reason === "stale") {
+    return { ...session, clarifications: session.clarifications.filter((q) => !(q.clarificationId === ack.clarificationId && q.turnId === ack.turnId)) };
+  }
+  return session;
 }
 
 export function failNativeTurn(session: NativeUiSession, turnId: string, note: string, outcome: "failed" | "unknown"): NativeUiSession {
@@ -408,5 +477,5 @@ export function failNativeTurn(session: NativeUiSession, turnId: string, note: s
 
 export function markNativeUnavailable(session: NativeUiSession, note: string): NativeUiSession {
   const stopped = session.activeTurnId ? failNativeTurn(session, session.activeTurnId, note, "unknown") : session;
-  return { ...stopped, unavailable: true, approvals: [], busy: false, cancelling: false };
+  return { ...stopped, unavailable: true, approvals: [], clarifications: [], busy: false, cancelling: false };
 }

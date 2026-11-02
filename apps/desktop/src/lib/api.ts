@@ -228,6 +228,45 @@ export type NativeOutcomeKind =
   | "unknown";
 export type NativeDecision = "accept" | "decline" | "cancel";
 
+export interface NativeClarificationQuestion {
+  id: string;
+  header: string;
+  question: string;
+  options: Array<{ label: string; description: string }> | null;
+  multiSelect: boolean;
+  isOther: boolean;
+}
+
+export interface NativeClarificationRequest {
+  clarificationId: string;
+  nativeItemId: string;
+  isBlocking: boolean;
+  questions: NativeClarificationQuestion[];
+  sessionId: string;
+  turnId: string;
+  answering: boolean;
+  answerError?: string;
+}
+
+export interface NativeClarificationAck {
+  generation: string;
+  controller: NativeController;
+  sessionId: string;
+  turnId: string;
+  clarificationId: string;
+  queued: boolean;
+  reason?: "stale";
+}
+
+export interface NativeClarificationAnswerArgs {
+  generation: string;
+  projectToken: string;
+  sessionId: string;
+  turnId: string;
+  clarificationId: string;
+  answers: Record<string, string[]>;
+}
+
 export interface NativeModelInfo {
   id: string;
   name: string;
@@ -286,6 +325,9 @@ export interface NativePollEvent {
     | "status"
     | "approval"
     | "approval_resolved"
+    | "clarification"
+    | "clarification_resolved"
+    | "clarification_answered"
     | "turn_complete"
     | "error";
   sessionId?: string;
@@ -305,6 +347,13 @@ export interface NativePollEvent {
   approvalId?: string;
   approvalType?: "command" | "file" | "tool";
   decisions?: NativeDecision[];
+  clarificationId?: string;
+  nativeItemId?: string;
+  isBlocking?: boolean;
+  questions?: NativeClarificationQuestion[];
+  submitted?: boolean;
+  reason?: "stale" | "invalid" | "not_sent";
+  message?: string;
 }
 
 export interface NativePollResult {
@@ -387,6 +436,10 @@ export function nativeChatRespond(
   args: NativeRespondArgs,
 ): Promise<unknown> {
   return invokeNative<unknown>("native_chat_respond", { ...args });
+}
+
+export function nativeChatAnswer(args: NativeClarificationAnswerArgs): Promise<NativeClarificationAck> {
+  return invokeNative<NativeClarificationAck>("native_chat_answer", { ...args });
 }
 
 export interface NativeCancelArgs {
