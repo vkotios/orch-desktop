@@ -1,6 +1,6 @@
 # SESSION_STORAGE — durable session/event store contract (CHO-03)
 
-Status: contract v1 accepted. S1 lifecycle (`f0b4f72`), S2a project/chat/draft records (`247f43d`), S2b native bindings/producer fences (`f202eeb`) and S2c turn intents/dispatch journals (`c853ef0`) implemented and verified. Remaining S2 execution records, S3–S5 and application wiring are pending. APIs: [SESSION_RECORDS](SESSION_RECORDS.md), [SESSION_BINDINGS](SESSION_BINDINGS.md), [SESSION_TURNS](SESSION_TURNS.md).
+Status: contract v1 accepted. S1 lifecycle (`f0b4f72`), S2a project/chat/draft records (`247f43d`), S2b native bindings/producer fences (`f202eeb`), S2c turn intents/dispatch journals (`c853ef0`) and S2d bounded bodies (`82f742c`) implemented and verified. Remaining S2 execution records, S3–S5 and application wiring are pending. APIs: [SESSION_RECORDS](SESSION_RECORDS.md), [SESSION_BINDINGS](SESSION_BINDINGS.md), [SESSION_TURNS](SESSION_TURNS.md), [SESSION_BODIES](SESSION_BODIES.md).
 Authority: PRODUCT_SPEC SESSION-01–06, RUN-04/06, §9; IMPLEMENTATION_PLAN CHO-03; CHO-04 clarification milestone.
 Runtime: `node:sqlite` `DatabaseSync` (synchronous execution) on bundled Node 24.22.2.
 Official reference: [Node.js v24 SQLite](https://nodejs.org/docs/latest-v24.x/api/sqlite.html).
@@ -139,8 +139,10 @@ in one SQLite transaction (atomic); `seq` is per-conversation, assigned at commi
 immutable afterwards. Bounds: prompt and draft at most 65536 UTF-16 code units
 (matches today's composer limit); oversized bodies persist in `large_bodies`
 (byte-exact, verified by `sha256_hex`) with events carrying `{body_ref, chunks}`.
-Until bounded body records land, S2c accepts inline prompts only up to 32768
-UTF-8 bytes as well as the UTF-16 limit; larger prompts explicitly reject.
+S2c still accepts inline prompts only up to 32768 UTF-8 bytes as well as the
+UTF-16 limit; larger prompts explicitly reject. S2d body storage is available via
+[SESSION_BODIES](SESSION_BODIES.md), with an initial 1MiB UTF-8 body limit;
+turn/body-reference integration remains pending.
 Empty-draft edits need not create a chat. Imports create conversations/turns/events
 only, with NULL native ids and no `native_refs` rows — never fabricated native
 associations. Draft idempotency: each save carries a stable save/mutation id plus a

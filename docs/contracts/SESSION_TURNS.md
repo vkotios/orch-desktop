@@ -95,9 +95,11 @@ result. Separate successful public calls do not establish a joint atomic commit.
 
 UUIDs are canonical lowercase. Prompt text is nonempty and bounded by both
 65536 UTF-16 units and 32768 UTF-8 bytes. NUL and unpaired surrogates reject;
-accepted text is preserved exactly. Oversize rejects without truncation; bounded
-large-body records are deferred. History is normalized facts, at most one per
-kind and 8KiB JSON; receipts are at most 2KiB. Raw provider payloads, credentials
+accepted text is preserved exactly. Oversize rejects without truncation. Bounded
+body storage is available in [SESSION_BODIES](SESSION_BODIES.md); this turn API
+still accepts inline text only, with body-reference integration deferred. History
+is normalized facts, at most one per kind and 8KiB JSON; receipts are at most 2KiB.
+Raw provider payloads, credentials
 and proof evidence do not belong in these records.
 
 Errors: `ERR_INVALID_RECORD`, `ERR_NOT_FOUND`, `ERR_FENCE_CONFLICT`,
@@ -111,7 +113,7 @@ this API does not repair corruption.
 The current list bounds returned metadata but internally loads full prompt/history
 and sibling operation rows. SQL projection/filtering and exhaustive imported
 journal validation remain follow-ups before large histories/restore. Execution
-operations beyond the turn journal, clarification records, large bodies, durable
+operations beyond the turn journal, clarification records, body-reference integration, durable
 events, actual host proof, UI history and recovery are not implemented here.
 Conversation model/role edits are not exposed today. Any future edit API must
 reconcile existing immutable queued snapshots before changing conversation config.

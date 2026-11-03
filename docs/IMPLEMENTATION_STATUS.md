@@ -54,8 +54,18 @@ All 485 package tests, type checking and web build pass. Separate process,
 concurrent-dispatch and SQL-fault fixtures verify persistence and atomicity;
 controller and complete independent GLM review leave no High or Medium issue.
 See [SESSION_TURNS](contracts/SESSION_TURNS.md). Application chats still use memory.
-Next: remaining execution records/clarifications/bodies, then durable host events,
+Next: remaining execution records/clarifications/body-reference integration, then durable host events,
 UI history/drafts and restart recovery without replay.
+
+## Bounded normalized body storage
+
+S2d source `82f742c` stores immutable UTF-8 bodies with SHA-256 and bounded
+byte-chunk reads; ownership checks and idempotency run in one writer transaction.
+All 499 package tests, type checking and web build pass. Installed/bundled
+process fixtures verify exact bytes across restart/chunk boundaries and atomic
+rollback. Controller and complete GLM 5.3 high/Vibe review leave no High or Medium
+issue. See [SESSION_BODIES](contracts/SESSION_BODIES.md). The app still uses memory,
+and S2c prompts remain inline until body references and host consumers are wired.
 
 ## First foundation batch integrated
 

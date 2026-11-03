@@ -1,6 +1,6 @@
 # CHO-03 — Durable sessions and recovery
 
-Status: in progress. S1 store (`f0b4f72`), S2a project/chat/draft records (`247f43d`), S2b native bindings/producer fences (`f202eeb`) and S2c turn intents/dispatch journals (`c853ef0`) implemented and verified locally. Application consumers remain in memory.
+Status: in progress. S1 store (`f0b4f72`), S2a project/chat/draft records (`247f43d`), S2b native bindings/producer fences (`f202eeb`), S2c turn intents/dispatch journals (`c853ef0`) and S2d bounded bodies (`82f742c`) implemented and verified locally. Application consumers remain in memory.
 Authority: [implementation plan](../IMPLEMENTATION_PLAN.md) (CHO-03),
 [product spec](../PRODUCT_SPEC.md) (SESSION-01–06, RUN-04/06, AC-03/04/07/13),
 [CHO-04 milestones](CHO-04.md), storage contract: [SESSION_STORAGE](../contracts/SESSION_STORAGE.md).
@@ -103,6 +103,23 @@ Controller and independent GLM 5.3 high/Vibe review leave no High or Medium issu
 Actual host proof, provider effects, durable events and application consumers
 remain unwired. Composition results are provisional until outer commit.
 
+## Bounded body records
+
+S2d source `82f742c` adds [SESSION_BODIES](../contracts/SESSION_BODIES.md):
+immutable normalized UTF-8 bodies up to 1MiB with exact byte length and SHA-256.
+Producer proof/fence checks occur inside every put transaction, including retries.
+Historical reads return metadata or at most 16KiB of raw bytes encoded as base64;
+split Unicode sequences reconstruct exactly. Metadata preflight bounds retry reads;
+clients verify assembled bytes against the stored hash.
+
+All 499 package tests (44 shared, 455 desktop), including 14 body tests, type
+checking and web build pass. Separate installed Node 24.11.1 and bundled Node
+24.22.2 process fixtures verify restart fidelity, new-owner immutable reuse,
+scoped reads, composition rollback and INSERT-fault atomicity. Controller and
+independent GLM 5.3 high/Vibe review leave no High or Medium issue. No host/UI
+consumer, provider effect or larger composer capacity is claimed. S2c inline
+prompts retain their 32KiB UTF-8 cap until body references are integrated.
+
 ## Implementation sequence
 
 - S1 — Complete locally. Store core only: file lifecycle/DB-identity admission, v1 schema,
@@ -113,8 +130,9 @@ remain unwired. Composition results are provisional until outer commit.
 - S2a — Complete locally: projects/conversations and draft saves/conflicts/receipts.
 - S2b — Complete locally: producer fences and native reference/request binding.
 - S2c — Complete locally: turn intents and paired dispatch journals.
-- S2 remaining — Next: other execution operations, clarifications and bounded
-  large bodies; same-project/controller/turn binding, generation checks inside
+- S2d — Complete locally: immutable bounded body storage and byte-chunk reads.
+- S2 remaining — Next: other execution operations, clarifications and turn/body
+  reference integration; same-project/controller/turn binding, generation checks inside
   each mutation transaction and native-configuration pinning. Complete
   explicit draft-conflict resolution before its UI workflow. No credentials or
   raw provider payloads enter normalized records.
@@ -169,3 +187,11 @@ runtime probes already cover four malformed-ref cases. Before exposing model/rol
 editing, reconcile queued immutable snapshots with conversation equality checks;
 no such edit API exists today. Import/restore must also define journals for imported
 turns before routing them through this API's required handoff-pair reads.
+
+S2d Low follow-ups before host consumers: decide other-chat body-ID conflicts
+before loading that row's content. Currently a corrupt foreign row fails with
+static `ERR_STORAGE` before the conflict check; no text is returned or rewritten.
+Promote private checks for the 16KiB chunk cap, SQL INSERT-fault rollback,
+frozen transaction results and exact-retry no-touch behavior into the persistent
+suite, replacing the decorative function-freeze assertion. Measure SQL byte-length
+and BLOB-cast work before bulk streaming; JavaScript results remain bounded.
