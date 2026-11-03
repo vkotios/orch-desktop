@@ -1,6 +1,6 @@
 # CHO-03 — Durable sessions and recovery
 
-Status: in progress. S1 store (`f0b4f72`), S2a project/chat/draft records (`247f43d`), S2b native bindings/producer fences (`f202eeb`), S2c turn intents/dispatch journals (`c853ef0`), S2d bounded bodies (`82f742c`) and S2e Stop journals (`7a6131e`) implemented and verified locally. Application consumers remain in memory.
+Status: in progress. S1 store (`f0b4f72`), S2a project/chat/draft records (`247f43d`), S2b native bindings/producer fences (`f202eeb`), S2c turn intents/dispatch journals (`c853ef0`), S2d bounded bodies (`82f742c`), S2e Stop journals (`7a6131e`) and S2f approval journals (`3a90601`) implemented and verified locally. Application consumers remain in memory.
 Authority: [implementation plan](../IMPLEMENTATION_PLAN.md) (CHO-03),
 [product spec](../PRODUCT_SPEC.md) (SESSION-01–06, RUN-04/06, AC-03/04/07/13),
 [CHO-04 milestones](CHO-04.md), storage contract: [SESSION_STORAGE](../contracts/SESSION_STORAGE.md).
@@ -138,6 +138,27 @@ rollback; target turn, conversation, reference and fence rows remain unchanged.
 Controller and complete independent GLM 5.3 high/Vibe review leave no High or
 Medium issue. No provider effect or native-host persistence wiring is claimed.
 
+## Approval request and response journals
+
+S2f source `3a90601` adds [SESSION_APPROVALS](../contracts/SESSION_APPROVALS.md):
+metadata-only native request incarnations, immutable offered choices and a
+one-shot committed response admission. UI approval UUID, typed native request ID,
+connection, observed native identities and host/fence provenance stay distinct.
+Fresh registration, choice and begin require strict current pending-request
+proof in addition to ownership proof. A reused native ID gets a new approval UUID;
+old decisions never answer it. Response written means transport write, not native
+ACK or tool execution. Unknown, proven not_sent and unactionable remain separate
+terminal facts; there is no automatic retry or grant. Parent turns stay untouched.
+
+All 566 package tests (44 shared, 522 desktop), including 36 approval tests, type
+checking and web build pass. Separate installed/bundled Node process probes
+verify one concurrent dispatch winner, reopen/no readmission, stale-request denial,
+typed-ID reuse, rollback, new-owner rejection, terminal unknown/withdrawal, late
+Claude write facts and escaped native IDs. Controller source review and complete
+independent GLM 5.3 high/Vibe review leave no High or Medium finding. The host
+proof/pending-map callbacks are synthetic in these probes; host/UI/event consumers
+remain unwired. Approval text/history display will use durable events/bodies.
+
 ## Implementation sequence
 
 - S1 — Complete locally. Store core only: file lifecycle/DB-identity admission, v1 schema,
@@ -150,7 +171,8 @@ Medium issue. No provider effect or native-host persistence wiring is claimed.
 - S2c — Complete locally: turn intents and paired dispatch journals.
 - S2d — Complete locally: immutable bounded body storage and byte-chunk reads.
 - S2e — Complete locally: Stop intents and one-shot interrupt dispatch journals.
-- S2 remaining — Next: approval/clarification operations, clarification records and turn/body
+- S2f — Complete locally: approval incarnations, immutable offered decisions and one-shot response journals.
+- S2 remaining — Next: clarification-answer operations, clarification records and turn/body
   reference integration; same-project/controller/turn binding, generation checks inside
   each mutation transaction and native-configuration pinning. Complete
   explicit draft-conflict resolution before its UI workflow. No credentials or
@@ -222,3 +244,19 @@ Promote private probes for proof denial on non-request mutations, unknown from
 queued/written states, and missing-conversation reads into the persistent suite.
 These paths are runtime-verified; the existing factory no-I/O canary can also be
 strengthened during test cleanup.
+
+S2f Low follow-ups before host/restore consumers: promote the private verified
+terminal-registration retry, unactionable success, supplied-target unknown,
+wrong written-target, cross-chat collision and generation-2 owner-reclaim cases
+into the persistent suite. Strengthen full before/after row assertions and the
+composite outer-rollback test. Both installed and bundled runtime probes already
+verify these behaviors; the review's initial Medium test-absence concerns were
+regraded after that direct verification, with no remaining High or Medium issue.
+
+For defensive corrupted/imported rows, require the observed Claude ref on every
+compatibility read and classify malformed stored turn IDs as storage errors.
+Align regressing-clock error classification and simplify the unreachable host
+conflict fallback during routine host integration. Current failures roll back or
+fail closed. Measure the 64-candidate collision bound and inherited parent
+prompt/sibling reads before admitting many simultaneous connections or large
+histories. These follow-ups do not authorize automatic replay or grants.

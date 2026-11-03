@@ -112,8 +112,9 @@ this API does not repair corruption.
 
 The current list bounds returned metadata but internally loads full prompt/history
 and sibling operation rows. SQL projection/filtering and exhaustive imported
-journal validation remain follow-ups before large histories/restore. Approval and
-clarification operations, clarification records, body-reference integration,
+journal validation remain follow-ups before large histories/restore. Approval
+journals are available in [SESSION_APPROVALS](SESSION_APPROVALS.md). Clarification
+operations/records, body-reference integration,
 durable events, actual host proof, UI history and recovery are not implemented here.
 Conversation model/role edits are not exposed today. Any future edit API must
 reconcile existing immutable queued snapshots before changing conversation config.

@@ -168,6 +168,19 @@ The foundation batch and focused native Codex/Claude debug conversation mileston
 
 CHO-04 remains in progress and its claim stays held for the continuing controller work. All runs in this slice have recorded dispositions; detached reviews are finalized with clean containment. Original worker worktrees and private native receipts are preserved.
 
+## Approval journal storage
+
+S2f source `3a90601` persists native request incarnations, offered decisions and
+one-shot response journals. Strict owner and pending-request proof gate each new
+action; written, proven not_sent, unknown and withdrawn requests remain distinct.
+All 566 package tests, type checking and web build pass. Installed/bundled Node
+process and dispatch-race probes pass; controller and complete GLM 5.3 high/Vibe
+review leave no High or Medium finding. See
+[SESSION_APPROVALS](contracts/SESSION_APPROVALS.md). Host/UI/event consumers and
+actual request-map verification remain unwired; approval content will use future
+durable events/bodies. Next: clarification records/answer journals, body-reference
+integration and draft-conflict resolution, followed by S3 host persistence.
+
 ## Native clarification milestone
 
 Source checkpoint: `926110a`, extending the accepted Codex/Claude debug conversations. Native questions now appear as explicit single-choice, multiple-choice or custom-text cards. Nothing is selected or sent automatically. Answers remain separate from tool permissions and bind the current project, process generation, chat, turn and native question. Invalid or proven unsent answers remain editable; an unknown submission requires Stop before retrying.
