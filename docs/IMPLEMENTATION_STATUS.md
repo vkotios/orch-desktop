@@ -1,6 +1,6 @@
 # CHO Desktop implementation status
 
-Updated: 2026-11-02. Integration branch: `codex/cho-v01-foundation`. Native Codex/Claude conversations and the clarification source milestone are accepted locally; source checkpoint `926110a` is verified by controller checks and independent GLM review.
+Updated: 2026-11-03. Integration branch: `codex/cho-v01-foundation`. Native Codex/Claude conversations and the clarification source milestone are accepted locally; source checkpoint `926110a` is verified by controller checks and independent GLM review.
 
 Product contract: [specification](PRODUCT_SPEC.md). Sequence: [plan](IMPLEMENTATION_PLAN.md). Sonnet findings: [validated dispositions](reviews/FINDINGS_DISPOSITION.md). Current package: [CHO-03 durable sessions](work-packages/CHO-03.md). Native Codex and Claude runtime and focused rendered conversation checks pass; broader [CHO-04 qualification](work-packages/CHO-04.md) remains open.
 
@@ -18,8 +18,9 @@ High or Medium findings. Separate bundled-runtime fixtures verify process
 restart, abrupt-exit rollback, WAL recovery, schema preservation and pager-FULL
 rollback. Initial sandbox permission failures were rerun successfully with
 normal Windows permissions. No new native artifact or rendered durability
-claim is made: application chats, drafts and events still use memory. Next is
-S2 record APIs, followed by host coupling, UI history/drafts and explicit recovery.
+claim is made: application chats, drafts and events still use memory. Accepted
+S2 records and dispatch journals are summarized below; remaining execution records,
+host coupling, UI history/drafts and explicit recovery are pending.
 
 ## Project/chat records and draft persistence
 
@@ -41,8 +42,20 @@ All 448 package tests, type checking and web build pass. Separate process,
 simultaneous-claim and fault fixtures verify storage behavior; controller and
 complete independent GLM review leave no High or Medium issue. See
 [SESSION_BINDINGS](contracts/SESSION_BINDINGS.md). Live process verification and
-the app's host/UI consumers remain unwired. Next: execution records and durable
-event coupling.
+the app's host/UI consumers remain unwired. Turn intents and dispatch journals
+are implemented in S2c below; other execution records and durable events remain.
+
+## Turn intent and dispatch journal storage
+
+S2c source `c853ef0` persists exact turn intents and one-shot dispatch journals
+with ownership/proof checks inside each mutation. Native correlations, late write
+facts, exact terminal retries and unknown outcomes cannot authorize resend.
+All 485 package tests, type checking and web build pass. Separate process,
+concurrent-dispatch and SQL-fault fixtures verify persistence and atomicity;
+controller and complete independent GLM review leave no High or Medium issue.
+See [SESSION_TURNS](contracts/SESSION_TURNS.md). Application chats still use memory.
+Next: remaining execution records/clarifications/bodies, then durable host events,
+UI history/drafts and restart recovery without replay.
 
 ## First foundation batch integrated
 

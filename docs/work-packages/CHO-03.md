@@ -1,6 +1,6 @@
 # CHO-03 — Durable sessions and recovery
 
-Status: in progress. S1 store (`f0b4f72`), S2a project/chat/draft records (`247f43d`) and S2b native bindings/producer fences (`f202eeb`) implemented and verified locally. Application consumers remain in memory.
+Status: in progress. S1 store (`f0b4f72`), S2a project/chat/draft records (`247f43d`), S2b native bindings/producer fences (`f202eeb`) and S2c turn intents/dispatch journals (`c853ef0`) implemented and verified locally. Application consumers remain in memory.
 Authority: [implementation plan](../IMPLEMENTATION_PLAN.md) (CHO-03),
 [product spec](../PRODUCT_SPEC.md) (SESSION-01–06, RUN-04/06, AC-03/04/07/13),
 [CHO-04 milestones](CHO-04.md), storage contract: [SESSION_STORAGE](../contracts/SESSION_STORAGE.md).
@@ -85,6 +85,24 @@ Injected proof callbacks are synthetic in these fixtures. Actual host process
 identity/proof freshness, provider observation and runtime consumers remain S3
 work; there is no native supervision or application recovery claim here.
 
+## Turn intents and dispatch journals
+
+S2c source `c853ef0` adds [SESSION_TURNS](../contracts/SESSION_TURNS.md):
+atomic turn/journal creation, exact idempotent queue receipts, one-shot dispatch
+admission and correlated written/observed/terminal facts. Fence/proof and paired
+owner/host provenance are checked inside every mutation transaction. A dispatching
+turn may still have queued intent; neither permits a retry send. Unknown is
+terminal and never automatically replayed. Native bindings are not invented.
+
+All 485 package tests (44 shared, 441 desktop), including 37 turn tests, type
+checking and web build pass. UPDATE-trigger faults verify settlement rolls back
+turn identity/outcome and operation receipt/history together. Separate installed
+Node 24.11.1 and bundled Node 24.22.2 process fixtures verify reopening and no
+re-admission; bundled concurrent children grant exactly one dispatch permission.
+Controller and independent GLM 5.3 high/Vibe review leave no High or Medium issue.
+Actual host proof, provider effects, durable events and application consumers
+remain unwired. Composition results are provisional until outer commit.
+
 ## Implementation sequence
 
 - S1 — Complete locally. Store core only: file lifecycle/DB-identity admission, v1 schema,
@@ -94,7 +112,8 @@ work; there is no native supervision or application recovery claim here.
   Exact I/O/error contracts and machine checks live in SESSION_STORAGE §7.
 - S2a — Complete locally: projects/conversations and draft saves/conflicts/receipts.
 - S2b — Complete locally: producer fences and native reference/request binding.
-- S2 remaining — Next: turns, execution operations, clarifications and bounded
+- S2c — Complete locally: turn intents and paired dispatch journals.
+- S2 remaining — Next: other execution operations, clarifications and bounded
   large bodies; same-project/controller/turn binding, generation checks inside
   each mutation transaction and native-configuration pinning. Complete
   explicit draft-conflict resolution before its UI workflow. No credentials or
@@ -137,3 +156,16 @@ requests; align trusted-clock exceptions with host-facing error policy; review
 proof-before-collision error ordering if calls become externally exposed. Improve
 the factory no-I/O fixture when refactoring. Current API writes valid bindings and
 never mutates without verified ownership.
+
+S2c Low follow-ups before large-history/restore consumers: filter handoff siblings
+in SQL and project metadata without loading full prompt/history; strengthen
+imported journal state/identity cross-validation. These are internal unconsumed
+APIs; current writes create consistent journals under one writer lock.
+Before host consumers, revalidate existing native refs on exact queue retries;
+currently the retry returns `created: false` without that check, while subsequent
+dispatch admission rejects malformed refs without changing the pair. Add persistent
+malformed-ref and explicit Codex `effort: null` regression cases; separate bundled
+runtime probes already cover four malformed-ref cases. Before exposing model/role
+editing, reconcile queued immutable snapshots with conversation equality checks;
+no such edit API exists today. Import/restore must also define journals for imported
+turns before routing them through this API's required handoff-pair reads.

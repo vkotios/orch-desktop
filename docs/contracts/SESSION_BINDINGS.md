@@ -29,7 +29,10 @@ remains S3 work.
 
 Future producer-owned writes must check the current fence and proof inside
 their own mutation transaction. A separate `getProducer` call is a history read,
-not authorization for a later transaction.
+not authorization for a later transaction. S2c [SESSION_TURNS](SESSION_TURNS.md)
+checks the fence and paired host-generation provenance inside each turn mutation.
+Its internal transaction API allows future event/projection/outcome composition;
+results remain provisional until the outer transaction commits.
 
 ## API
 
