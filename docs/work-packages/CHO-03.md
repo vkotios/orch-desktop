@@ -1,6 +1,6 @@
 # CHO-03 — Durable sessions and recovery
 
-Status: in progress. S1 store (`f0b4f72`), S2a project/chat/draft records (`247f43d`), S2b native bindings/producer fences (`f202eeb`), S2c turn intents/dispatch journals (`c853ef0`) and S2d bounded bodies (`82f742c`) implemented and verified locally. Application consumers remain in memory.
+Status: in progress. S1 store (`f0b4f72`), S2a project/chat/draft records (`247f43d`), S2b native bindings/producer fences (`f202eeb`), S2c turn intents/dispatch journals (`c853ef0`), S2d bounded bodies (`82f742c`) and S2e Stop journals (`7a6131e`) implemented and verified locally. Application consumers remain in memory.
 Authority: [implementation plan](../IMPLEMENTATION_PLAN.md) (CHO-03),
 [product spec](../PRODUCT_SPEC.md) (SESSION-01–06, RUN-04/06, AC-03/04/07/13),
 [CHO-04 milestones](CHO-04.md), storage contract: [SESSION_STORAGE](../contracts/SESSION_STORAGE.md).
@@ -120,6 +120,24 @@ independent GLM 5.3 high/Vibe review leave no High or Medium issue. No host/UI
 consumer, provider effect or larger composer capacity is claimed. S2c inline
 prompts retain their 32KiB UTF-8 cap until body references are integrated.
 
+## Stop intent and dispatch journal
+
+S2e source `7a6131e` adds [SESSION_STOPS](../contracts/SESSION_STOPS.md):
+one Stop intent per turn, exact request retries, one-shot dispatch and separate
+written/acknowledged/unknown/not_needed facts. Current proof, fence and stored
+parent/Stop provenance are checked inside each mutation transaction. Codex waits
+for an observed native turn; Claude supports a confirmed write before observed
+session binding. Acknowledgement never changes the target turn's outcome.
+
+All 530 package tests (44 shared, 486 desktop), including 31 Stop tests, type
+checking and web build pass. Installed Node 24.11.1 and bundled Node 24.22.2
+process fixtures verify restart, one winner in concurrent dispatch admission,
+no resend, immutable terminal receipts, requested-to-observed Claude targets and
+escaped 512-unit IDs within 8KiB. Trigger faults and outer transactions establish
+rollback; target turn, conversation, reference and fence rows remain unchanged.
+Controller and complete independent GLM 5.3 high/Vibe review leave no High or
+Medium issue. No provider effect or native-host persistence wiring is claimed.
+
 ## Implementation sequence
 
 - S1 — Complete locally. Store core only: file lifecycle/DB-identity admission, v1 schema,
@@ -131,7 +149,8 @@ prompts retain their 32KiB UTF-8 cap until body references are integrated.
 - S2b — Complete locally: producer fences and native reference/request binding.
 - S2c — Complete locally: turn intents and paired dispatch journals.
 - S2d — Complete locally: immutable bounded body storage and byte-chunk reads.
-- S2 remaining — Next: other execution operations, clarifications and turn/body
+- S2e — Complete locally: Stop intents and one-shot interrupt dispatch journals.
+- S2 remaining — Next: approval/clarification operations, clarification records and turn/body
   reference integration; same-project/controller/turn binding, generation checks inside
   each mutation transaction and native-configuration pinning. Complete
   explicit draft-conflict resolution before its UI workflow. No credentials or
@@ -195,3 +214,11 @@ Promote private checks for the 16KiB chunk cap, SQL INSERT-fault rollback,
 frozen transaction results and exact-retry no-touch behavior into the persistent
 suite, replacing the decorative function-freeze assertion. Measure SQL byte-length
 and BLOB-cast work before bulk streaming; JavaScript results remain bounded.
+
+S2e Low follow-ups before host/restore consumers: add an explicit observed-state
+guard alongside the Codex native-turn-ID check when strengthening corrupted-row
+validation. Valid S2c APIs populate that ID only through native observation.
+Promote private probes for proof denial on non-request mutations, unknown from
+queued/written states, and missing-conversation reads into the persistent suite.
+These paths are runtime-verified; the existing factory no-I/O canary can also be
+strengthened during test cleanup.

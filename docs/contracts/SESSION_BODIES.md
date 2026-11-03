@@ -60,5 +60,6 @@ Detected corruption is not repaired. No automatic provider retry occurs.
 Future S3 writes must compose body/event/projection/outcome changes in one outer
 transaction. Separate public calls are separate commits. Do not perform provider
 effects in a transaction callback or treat an inTransaction result as committed.
-Operation journals, clarification persistence, conflict resolution, host coupling,
+Stop journals are available in [SESSION_STOPS](SESSION_STOPS.md). Approval and
+clarification journals, conflict resolution, host coupling,
 UI history and restart/import/export recovery remain separate work.

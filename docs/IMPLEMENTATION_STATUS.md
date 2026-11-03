@@ -67,6 +67,18 @@ rollback. Controller and complete GLM 5.3 high/Vibe review leave no High or Medi
 issue. See [SESSION_BODIES](contracts/SESSION_BODIES.md). The app still uses memory,
 and S2c prompts remain inline until body references and host consumers are wired.
 
+## Durable Stop-intent journal
+
+S2e source `7a6131e` records one Stop intent per turn with one-shot interrupt
+admission, correlated write/ACK facts and terminal unknown/not_needed semantics.
+Stop acknowledgement never marks a turn interrupted or proves owned cleanup.
+All 530 package tests, type checking and web build pass. Installed/bundled
+process probes verify restart, a single dispatch winner and unchanged parent
+turns; controller and complete GLM 5.3 high/Vibe review leave no High or Medium
+issue. See [SESSION_STOPS](contracts/SESSION_STOPS.md). Native consumers remain
+unwired. Next: approval/clarification records and body references, then durable
+host events, UI history/drafts and explicit recovery without replay.
+
 ## First foundation batch integrated
 
 The prototype checkpoint (`d477cf6`) preserved the desktop and its required coordinator/Grok dependencies together. Review-driven spec/plan corrections were committed in `f9a5549`. The five worker slices below are now integrated locally.

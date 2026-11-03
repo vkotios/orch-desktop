@@ -83,8 +83,8 @@ require a matching native fact after dispatch admission. Failed before dispatch
 may omit a fact; after admission it requires one, otherwise use unknown. Exact
 terminal retries must match both outcome and the original fact tuple, including
 null. Unknown stays terminal and never authorizes automatic replay; it does not
-establish that the native process has stopped. Stop and recovery remain separate
-work.
+establish that the native process has stopped. Stop journal storage is available
+in [SESSION_STOPS](SESSION_STOPS.md); native wiring and recovery remain pending.
 
 `inTransaction` results are provisional until the **outer** transaction commits.
 Future event/projection/outcome writes must compose in one outer transaction.
@@ -112,8 +112,8 @@ this API does not repair corruption.
 
 The current list bounds returned metadata but internally loads full prompt/history
 and sibling operation rows. SQL projection/filtering and exhaustive imported
-journal validation remain follow-ups before large histories/restore. Execution
-operations beyond the turn journal, clarification records, body-reference integration, durable
-events, actual host proof, UI history and recovery are not implemented here.
+journal validation remain follow-ups before large histories/restore. Approval and
+clarification operations, clarification records, body-reference integration,
+durable events, actual host proof, UI history and recovery are not implemented here.
 Conversation model/role edits are not exposed today. Any future edit API must
 reconcile existing immutable queued snapshots before changing conversation config.
