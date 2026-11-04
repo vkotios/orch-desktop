@@ -19,7 +19,7 @@ restart, abrupt-exit rollback, WAL recovery, schema preservation and pager-FULL
 rollback. Initial sandbox permission failures were rerun successfully with
 normal Windows permissions. No new native artifact or rendered durability
 claim is made: application chats, drafts and events still use memory. Accepted
-S2 records and dispatch journals are summarized below; body-reference integration,
+S2 records, dispatch journals and turn/body references are summarized below;
 explicit draft-conflict resolution,
 host coupling, UI history/drafts and explicit recovery are pending.
 
@@ -55,7 +55,7 @@ All 485 package tests, type checking and web build pass. Separate process,
 concurrent-dispatch and SQL-fault fixtures verify persistence and atomicity;
 controller and complete independent GLM review leave no High or Medium issue.
 See [SESSION_TURNS](contracts/SESSION_TURNS.md). Application chats still use memory.
-Next: body-reference integration and draft-conflict resolution, then durable host events,
+Next: draft-conflict resolution, then durable host events,
 UI history/drafts and restart recovery without replay.
 
 ## Bounded normalized body storage
@@ -66,7 +66,7 @@ All 499 package tests, type checking and web build pass. Installed/bundled
 process fixtures verify exact bytes across restart/chunk boundaries and atomic
 rollback. Controller and complete GLM 5.3 high/Vibe review leave no High or Medium
 issue. See [SESSION_BODIES](contracts/SESSION_BODIES.md). The app still uses memory,
-and S2c prompts remain inline until body references and host consumers are wired.
+and S2h now adds turn/body references. Application host consumers remain unwired.
 
 ## Durable Stop-intent journal
 
@@ -77,8 +77,8 @@ All 530 package tests, type checking and web build pass. Installed/bundled
 process probes verify restart, a single dispatch winner and unchanged parent
 turns; controller and complete GLM 5.3 high/Vibe review leave no High or Medium
 issue. See [SESSION_STOPS](contracts/SESSION_STOPS.md). Native consumers remain
-unwired. Approval and clarification journals are available below. Next: body
-references and draft-conflict resolution, then durable
+unwired. Approval, clarification and turn/body journals are available below.
+Next: draft-conflict resolution, then durable
 host events, UI history/drafts and explicit recovery without replay.
 
 ## First foundation batch integrated
@@ -180,8 +180,7 @@ process and dispatch-race probes pass; controller and complete GLM 5.3 high/Vibe
 review leave no High or Medium finding. See
 [SESSION_APPROVALS](contracts/SESSION_APPROVALS.md). Host/UI/event consumers and
 actual request-map verification remain unwired; approval content will use future
-durable events/bodies. Clarification journals are available below. Next: body-reference
-integration and draft-conflict resolution, followed by S3 host persistence.
+durable events/bodies. Clarification journals are available below. Next: draft-conflict resolution, followed by S3 host persistence.
 
 ## Clarification journal storage
 
@@ -194,7 +193,7 @@ installed/bundled Node process, race and rollback probes. Controller and complet
 GLM 5.3 high/Vibe review leave no unresolved High or Medium issue after validation.
 See [SESSION_CLARIFICATIONS](contracts/SESSION_CLARIFICATIONS.md). Application
 chats still use memory; host/UI/events, actual owner/pending-map verification
-and restart recovery remain pending. Next: body references and draft-conflict
+and restart recovery remain pending. Next: draft-conflict
 resolution, then S3 durable host integration.
 
 ## Native clarification milestone
@@ -212,3 +211,13 @@ The built Codex window passes actual question rendering with no default answer, 
 The final Codex bundled probe successfully displayed a native async question, rejected an invalid answer, and acknowledged the explicit answer before the subscription reported its usage limit. Its failed terminal outcome and clean owned-client shutdown are retained as failure-path evidence; they are not a successful final response. Earlier successful runtime and rendered checks remain separately bound to their source/artifacts. Naming the unavailable blocking request tool in default-mode prompts is not a valid async fixture; the application does not silently change modes to satisfy it.
 
 This completes the bounded clarification source milestone, not CHO-04 or a product release. Chats, answers and project trust remain in memory. Next: CHO-03 durable chats/drafts/native references and restart recovery without execution replay. Retain submitted question/answer history in that design; complete broader UI polish, delegation/admission boundaries and installed-release qualification through their own packages.
+
+## Turn/body-reference storage
+
+S2h source `a502ad3` links immutable same-chat bodies to turn intents with
+metadata-only reads and existing bounded chunks. Legacy inline hashes and caps
+remain compatible. All 655 tests, typecheck/build and both-runtime child-process
+probes pass; controller and full GLM 5.3 high/Vibe review leave no unresolved
+High or Medium issue. See [SESSION_TURNS](contracts/SESSION_TURNS.md).
+Application consumers remain in memory. Next: explicit draft-conflict resolution,
+then durable host/events, UI persistence and restart recovery.

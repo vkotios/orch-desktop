@@ -1,6 +1,6 @@
 # Session turns API — CHO-03 S2c
 
-Source checkpoint: `c853ef0`. This trusted internal Node module persists turn
+Source checkpoints: `c853ef0` (inline journals), `a502ad3` (S2h body references). This trusted internal Node module persists turn
 intents and their dispatch journals for existing conversations. The application
 host and UI do not consume it yet. See [SESSION_STORAGE](SESSION_STORAGE.md),
 [SESSION_RECORDS](SESSION_RECORDS.md) and [SESSION_BINDINGS](SESSION_BINDINGS.md).
@@ -35,7 +35,7 @@ need projectId/conversationId, with turnId for an individual turn.
 
 | Method | Behavior |
 | --- | --- |
-| `queueTurn({ ...scope, turnId, operationId, prompt, claudeInputUuid = null, effort })` | Atomically insert a queued turn and one paired handoff operation; return `{ created, turn }`. |
+| `queueTurn({ ...scope, turnId, operationId, prompt, promptRef = null, claudeInputUuid = null, effort })` | Atomically insert a queued turn and one paired handoff operation; return `{ created, turn }`. |
 | `beginDispatch({ ...scope, turnId, operationId })` | One-shot queued → dispatching admission. For valid stored data, repeats reject `ERR_DISPATCH_CONFLICT`; malformed native refs fail `ERR_STORAGE` first. |
 | `recordWritten({ ...scope, turnId, operationId })` | Record an actual transport write after dispatch admission. This is not acknowledgement or completion. |
 | `recordObserved({ ...scope, turnId, operationId, nativeFact })` | Validate a native observation against the persisted observed binding and turn correlation. |
@@ -44,7 +44,10 @@ need projectId/conversationId, with turnId for an individual turn.
 | `listTurns({ projectId, conversationId, limit = 50, offset = 0 })` | Sequence-ordered metadata; omit prompt and history. Limit 1–100, nonnegative safe-integer offset. |
 | `inTransaction(tx)` | The same data methods on an active S1 transaction from the same store lineage, without nesting. |
 
-Full records contain id, conversationId, operationId, seq, prompt, controller,
+Full records additionally expose promptRef and promptBody (both null for inline
+turns). Reference turns have prompt null, promptRef UUID, and promptBody metadata
+{id, conversationId, byteLength, sha256Hex, createdAtMs}; no full text is loaded.
+Lists omit prompt, promptBody and history. Full records contain id, conversationId, operationId, seq, prompt, controller,
 modelRequested, role, effort, claudeInputUuid, nativeTurnId, intentState, outcome,
 dispatchState, ownerGeneration, hostGeneration, createdAtMs, settledAtMs and
 history. Historical reads require no live proof. Returned metadata is not
@@ -52,7 +55,8 @@ permission to dispatch.
 
 Controller/model/role come from the conversation. Codex effort may be supplied
 per turn; Claude effort remains pinned. Claude requires a globally unique input
-UUID; Codex requires null. Queue retries use a stable hash including exact text,
+UUID; Codex requires null. Queue retries use a stable hash including exact inline
+text or tagged body ID/length/digest,
 configuration and ownership provenance. An exact retry returns `created: false`
 with the current record and no writes, including after dispatch or settlement.
 That retry currently skips native-ref revalidation; subsequent dispatch admission
@@ -97,8 +101,10 @@ UUIDs are canonical lowercase. Prompt text is nonempty and bounded by both
 65536 UTF-16 units and 32768 UTF-8 bytes. NUL and unpaired surrogates reject;
 accepted text is preserved exactly. Oversize rejects without truncation. Bounded
 body storage is available in [SESSION_BODIES](SESSION_BODIES.md); this turn API
-still accepts inline text only, with body-reference integration deferred. History
-is normalized facts, at most one per kind and 8KiB JSON; receipts are at most 2KiB.
+also accepts promptRef pointing to an existing nonempty body in the same chat.
+With a reference, prompt must be absent or null; supplying any string conflicts.
+The inline cap stays unchanged; referenced bodies retain the 1MiB body cap.
+History is normalized facts, at most one per kind and 8KiB JSON; receipts are at most 2KiB.
 Raw provider payloads, credentials
 and proof evidence do not belong in these records.
 
@@ -114,7 +120,32 @@ The current list bounds returned metadata but internally loads full prompt/histo
 and sibling operation rows. SQL projection/filtering and exhaustive imported
 journal validation remain follow-ups before large histories/restore. Approval
 journals are available in [SESSION_APPROVALS](SESSION_APPROVALS.md), and question/answer
-journals in [SESSION_CLARIFICATIONS](SESSION_CLARIFICATIONS.md). Body-reference integration,
-durable events, actual host proof, UI history and recovery are not implemented here.
+journals in [SESSION_CLARIFICATIONS](SESSION_CLARIFICATIONS.md). Durable events, actual host proof, UI history and recovery are not implemented here.
 Conversation model/role edits are not exposed today. Any future edit API must
 reconcile existing immutable queued snapshots before changing conversation config.
+
+## Body-reference integration — S2h
+
+Source `a502ad3` resolves scoped body metadata inside the same owner-checked
+transaction as queueing. The stored reference form uses prompt_text empty and
+prompt_ref UUID; readers/admissions reject dangling or dual-populated forms.
+Fresh missing/foreign bodies return ERR_NOT_FOUND, empty bodies ERR_INVALID_RECORD,
+and malformed stored metadata ERR_STORAGE. Metadata checks compare stored and
+SQL-computed UTF-8 byte lengths without selecting body_text into JavaScript.
+They do not recompute the full digest on every read; immutable body writes verify
+it, and future import/restore must define its own admission checks.
+
+Inline hash tuples stay compatible. Reference hashes include a tagged body ID,
+byte length and digest; switching body IDs or inline/reference forms conflicts
+even for identical text. Exact retries validate the reference but create no
+new dispatch right. Use SESSION_BODIES chunk reads to obtain text separately.
+Body creation and turn queueing can compose through inTransaction under one
+outer commit; no native effect may run inside it. No schema change, automatic
+body creation, native submission or increased composer/IPC capacity is implied.
+
+Verification: 15 focused tests and all 655 package tests, type checking and web
+build pass. Installed Node 24.11.1 and bundled Node 24.22.2 child-process probes
+verify body/turn atomic composition, large Unicode chunks, reopen, baseline
+inline-journal retry compatibility and one-shot dispatch. Proofs are synthetic;
+application host/UI consumers remain unwired. Controller and complete independent
+GLM 5.3 high/Vibe review leave no unresolved High or Medium issue.

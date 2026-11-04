@@ -2,7 +2,8 @@
 
 Source checkpoint: `82f742c`. This internal Node API stores immutable normalized
 text bodies and returns bounded byte chunks. It has no host, UI, poll or provider
-consumer yet. See [SESSION_STORAGE](SESSION_STORAGE.md) and
+consumer yet. Internal turn references are available in S2h (`a502ad3`);
+inline prompts retain their prior cap. See [SESSION_STORAGE](SESSION_STORAGE.md) and
 [SESSION_TURNS](SESSION_TURNS.md).
 
 `createSessionBodies({ store, verifyOwnerEvidence, now = Date.now })` returns a
@@ -62,6 +63,7 @@ transaction. Separate public calls are separate commits. Do not perform provider
 effects in a transaction callback or treat an inTransaction result as committed.
 Stop journals are available in [SESSION_STOPS](SESSION_STOPS.md), approval
 journals in [SESSION_APPROVALS](SESSION_APPROVALS.md), and question/answer journals
-in [SESSION_CLARIFICATIONS](SESSION_CLARIFICATIONS.md). Body-reference integration,
-conflict resolution, host coupling,
+in [SESSION_CLARIFICATIONS](SESSION_CLARIFICATIONS.md). Turn body references are
+available in [SESSION_TURNS](SESSION_TURNS.md).
+Conflict resolution, host coupling,
 UI history and restart/import/export recovery remain separate work.

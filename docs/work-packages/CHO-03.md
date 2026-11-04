@@ -1,6 +1,6 @@
 # CHO-03 — Durable sessions and recovery
 
-Status: in progress. S1 store (`f0b4f72`), S2a project/chat/draft records (`247f43d`), S2b native bindings/producer fences (`f202eeb`), S2c turn intents/dispatch journals (`c853ef0`), S2d bounded bodies (`82f742c`), S2e Stop journals (`7a6131e`), S2f approval journals (`3a90601`) and S2g clarification/answer journals (`61bdbe9`) implemented and verified locally. Application consumers remain in memory.
+Status: in progress. S1 store (`f0b4f72`), S2a project/chat/draft records (`247f43d`), S2b native bindings/producer fences (`f202eeb`), S2c turn intents/dispatch journals (`c853ef0`), S2d bounded bodies (`82f742c`), S2e Stop journals (`7a6131e`), S2f approval journals (`3a90601`) and S2g clarification/answer journals (`61bdbe9`) implemented and verified locally. S2h turn/body references (`a502ad3`) are also verified locally. Application consumers remain in memory.
 Authority: [implementation plan](../IMPLEMENTATION_PLAN.md) (CHO-03),
 [product spec](../PRODUCT_SPEC.md) (SESSION-01–06, RUN-04/06, AC-03/04/07/13),
 [CHO-04 milestones](CHO-04.md), storage contract: [SESSION_STORAGE](../contracts/SESSION_STORAGE.md).
@@ -193,10 +193,9 @@ actual process/pending-map qualification remain unwired.
 - S2e — Complete locally: Stop intents and one-shot interrupt dispatch journals.
 - S2f — Complete locally: approval incarnations, immutable offered decisions and one-shot response journals.
 - S2g — Complete locally: normalized question incarnations and explicit answer attempts with one-shot dispatch.
-- S2 remaining — Next: turn/body
-  reference integration; same-project/controller/turn binding, generation checks inside
-  each mutation transaction and native-configuration pinning. Complete
-  explicit draft-conflict resolution before its UI workflow. No credentials or
+- S2h — Complete locally: explicit turn/body references, bounded metadata/chunk reads and legacy inline compatibility.
+- S2 remaining — Next: explicit draft-conflict resolution before its UI workflow;
+  preserve same-project/controller binding, generation checks and pinned configuration. No credentials or
   raw provider payloads enter normalized records.
 - S3 — Host/native event coupling: durable event+projection+outcome commits,
   replay-by-cursor poll replacing destructive drain, ownership checks, paged
@@ -295,3 +294,24 @@ raise their cost. Preserve strict proof checks and no replay during that work.
 Avoid redundant same-value retirement updates during routine host cleanup.
 The reachable new-attempt and settlement clock-order defects are fixed and
 covered by five persistent tests plus both-runtime full-row probes.
+
+## Turn/body-reference integration — S2h
+
+Source `a502ad3` supports explicit nonempty same-chat body references without
+copying full body text into turns or read results. Legacy inline hashes/caps
+remain compatible; references participate in immutable intent hashes and owner-
+checked queue/admission transactions. Bodyput+queue can share one outer commit.
+All 655 package tests (44 shared, 611 desktop), including 15 new reference tests,
+type checking and web build pass. Both Node runtimes pass actual child-process
+reopen/chunk/legacy-retry/one-shot probes. Root and full GLM review leave no
+unresolved High or Medium issue. No app/host/UI persistence or recovery claim.
+
+Before host/import consumers: consolidate duplicate metadata validators, measure
+SQL byte-length scans and inherited parent/sibling reads, strengthen complete
+row assertions in fault/stale-owner tests and add Claude/reference-parent
+coverage. Immutable body API writes validate content; corruption/import digest
+qualification remains separate. These follow-ups do not authorize replay.
+Low cleanup before consumers: enforce the inline nonempty invariant on corrupted
+stored rows, clarify the static missing-body message, refresh the old inline-cap
+comment and remove the unused test rawAll helper. Current public queue writes
+cannot produce empty inline turns; error codes remain the caller contract.
