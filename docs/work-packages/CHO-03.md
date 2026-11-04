@@ -1,6 +1,6 @@
 # CHO-03 — Durable sessions and recovery
 
-Status: in progress. S1 store (`f0b4f72`), S2a project/chat/draft records (`247f43d`), S2b native bindings/producer fences (`f202eeb`), S2c turn intents/dispatch journals (`c853ef0`), S2d bounded bodies (`82f742c`), S2e Stop journals (`7a6131e`), S2f approval journals (`3a90601`) and S2g clarification/answer journals (`61bdbe9`) implemented and verified locally. S2h turn/body references (`a502ad3`) are also verified locally. Application consumers remain in memory.
+Status: in progress. S1 store (`f0b4f72`), S2a project/chat/draft records (`247f43d`), S2b native bindings/producer fences (`f202eeb`), S2c turn intents/dispatch journals (`c853ef0`), S2d bounded bodies (`82f742c`), S2e Stop journals (`7a6131e`), S2f approval journals (`3a90601`) and S2g clarification/answer journals (`61bdbe9`) implemented and verified locally. S2h turn/body references (`a502ad3`) and S2i draft-conflict resolution (`8bec4c1`) are also verified locally. Application consumers remain in memory.
 Authority: [implementation plan](../IMPLEMENTATION_PLAN.md) (CHO-03),
 [product spec](../PRODUCT_SPEC.md) (SESSION-01–06, RUN-04/06, AC-03/04/07/13),
 [CHO-04 milestones](CHO-04.md), storage contract: [SESSION_STORAGE](../contracts/SESSION_STORAGE.md).
@@ -194,9 +194,8 @@ actual process/pending-map qualification remain unwired.
 - S2f — Complete locally: approval incarnations, immutable offered decisions and one-shot response journals.
 - S2g — Complete locally: normalized question incarnations and explicit answer attempts with one-shot dispatch.
 - S2h — Complete locally: explicit turn/body references, bounded metadata/chunk reads and legacy inline compatibility.
-- S2 remaining — Next: explicit draft-conflict resolution before its UI workflow;
-  preserve same-project/controller binding, generation checks and pinned configuration. No credentials or
-  raw provider payloads enter normalized records.
+- S2i — Complete locally: explicit keep/drop resolution, version checks and immutable idempotent resolution receipts.
+- S2 standalone storage APIs are implemented; consumer prerequisites and S3–S5 remain open.
 - S3 — Host/native event coupling: durable event+projection+outcome commits,
   replay-by-cursor poll replacing destructive drain, ownership checks, paged
   resync, interrupt-and-close with persisted Stop intent, visible
@@ -315,3 +314,23 @@ Low cleanup before consumers: enforce the inline nonempty invariant on corrupted
 stored rows, clarify the static missing-body message, refresh the old inline-cap
 comment and remove the unused test rawAll helper. Current public queue writes
 cannot produce empty inline turns; error codes remain the caller contract.
+
+## Explicit draft-conflict resolution — S2i
+
+S2i source `8bec4c1` adds explicit version-checked draft-conflict resolution.
+Keeping requires reviewed text; dropping preserves the current draft. A stale
+choice leaves the conflict open and returns an immutable stale receipt, requiring
+a new explicit ID after refresh. Original conflict text and save receipts survive.
+All 664 package tests, including 9 resolution tests, type checking and
+web build pass. Installed/bundled Node child-process probes establish reopen,
+historical receipts and a two-process CAS race with one success and one stale
+attempt. Root and complete GLM 5.3 high/Vibe review leave no unresolved High or
+Medium finding. The application still uses memory; host/UI consumers are pending.
+
+Before host/UI/import consumers: promote additional full-row, merged-text,
+clock and receipt-shape cases as needed; maintain strict version checks and
+static error handling. This does not qualify imported/corrupted databases.
+Low follow-ups: close reopened test stores in finally on assertion failure,
+correct the S2a label in the new S2i test header, strengthen corrupt operation
+provenance/current-draft version checks, and align inherited trusted-clock and
+legacy saveDraft lost-CAS error classification before host error presentation.

@@ -20,7 +20,6 @@ rollback. Initial sandbox permission failures were rerun successfully with
 normal Windows permissions. No new native artifact or rendered durability
 claim is made: application chats, drafts and events still use memory. Accepted
 S2 records, dispatch journals and turn/body references are summarized below;
-explicit draft-conflict resolution,
 host coupling, UI history/drafts and explicit recovery are pending.
 
 ## Project/chat records and draft persistence
@@ -55,7 +54,7 @@ All 485 package tests, type checking and web build pass. Separate process,
 concurrent-dispatch and SQL-fault fixtures verify persistence and atomicity;
 controller and complete independent GLM review leave no High or Medium issue.
 See [SESSION_TURNS](contracts/SESSION_TURNS.md). Application chats still use memory.
-Next: draft-conflict resolution, then durable host events,
+Next: durable host events,
 UI history/drafts and restart recovery without replay.
 
 ## Bounded normalized body storage
@@ -78,7 +77,7 @@ process probes verify restart, a single dispatch winner and unchanged parent
 turns; controller and complete GLM 5.3 high/Vibe review leave no High or Medium
 issue. See [SESSION_STOPS](contracts/SESSION_STOPS.md). Native consumers remain
 unwired. Approval, clarification and turn/body journals are available below.
-Next: draft-conflict resolution, then durable
+Draft-conflict resolution is available below. Next: durable
 host events, UI history/drafts and explicit recovery without replay.
 
 ## First foundation batch integrated
@@ -180,7 +179,7 @@ process and dispatch-race probes pass; controller and complete GLM 5.3 high/Vibe
 review leave no High or Medium finding. See
 [SESSION_APPROVALS](contracts/SESSION_APPROVALS.md). Host/UI/event consumers and
 actual request-map verification remain unwired; approval content will use future
-durable events/bodies. Clarification journals are available below. Next: draft-conflict resolution, followed by S3 host persistence.
+durable events/bodies. Clarification journals are available below. Next: S3 host persistence.
 
 ## Clarification journal storage
 
@@ -193,8 +192,8 @@ installed/bundled Node process, race and rollback probes. Controller and complet
 GLM 5.3 high/Vibe review leave no unresolved High or Medium issue after validation.
 See [SESSION_CLARIFICATIONS](contracts/SESSION_CLARIFICATIONS.md). Application
 chats still use memory; host/UI/events, actual owner/pending-map verification
-and restart recovery remain pending. Next: draft-conflict
-resolution, then S3 durable host integration.
+and restart recovery remain pending. S2i resolution is available below;
+next is S3 durable host integration.
 
 ## Native clarification milestone
 
@@ -219,5 +218,19 @@ metadata-only reads and existing bounded chunks. Legacy inline hashes and caps
 remain compatible. All 655 tests, typecheck/build and both-runtime child-process
 probes pass; controller and full GLM 5.3 high/Vibe review leave no unresolved
 High or Medium issue. See [SESSION_TURNS](contracts/SESSION_TURNS.md).
-Application consumers remain in memory. Next: explicit draft-conflict resolution,
-then durable host/events, UI persistence and restart recovery.
+Application consumers remain in memory. Next: durable host/events, UI persistence and restart recovery.
+
+## Explicit draft-conflict resolution
+
+S2i source `8bec4c1` adds explicit version-checked draft-conflict resolution.
+Keeping requires reviewed text; dropping preserves the current draft. A stale
+choice leaves the conflict open and returns an immutable stale receipt, requiring
+a new explicit ID after refresh. Original conflict text and save receipts survive.
+All 664 package tests, including 9 resolution tests, type checking and
+web build pass. Installed/bundled Node child-process probes establish reopen,
+historical receipts and a two-process CAS race with one success and one stale
+attempt. Root and complete GLM 5.3 high/Vibe review leave no unresolved High or
+Medium finding. The application still uses memory; host/UI consumers are pending.
+
+See [SESSION_RECORDS](contracts/SESSION_RECORDS.md). Next: durable host/event
+coupling, then UI persistence and restart recovery.
