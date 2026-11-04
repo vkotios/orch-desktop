@@ -34,6 +34,7 @@ const MAX_DRAFT = 65536;
 const MAX_QUERY = 512;
 
 const DRAFT_SAVE_V1 = "draft-save-v1";
+const DRAFT_RESOLVE_V1 = "draft-resolve-v1";
 
 function recordError(code, message) {
   const error = new Error(message);
@@ -178,6 +179,57 @@ function validateQuery(value) {
   }
 }
 
+function validateAction(value) {
+  if (value !== "kept" && value !== "dropped") {
+    throw invalid("action");
+  }
+}
+
+function validateStoredText(value, max, detail) {
+  if (
+    typeof value !== "string" ||
+    value.length > max ||
+    value.includes("\0") ||
+    hasLoneSurrogate(value)
+  ) {
+    throw recordError("ERR_STORAGE", `session records ${detail} unreadable`);
+  }
+}
+
+function validateStoredTimestamp(value, detail) {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw recordError("ERR_STORAGE", `session records ${detail} unreadable`);
+  }
+}
+
+function validateStoredVersion(value, detail) {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw recordError("ERR_STORAGE", `session records ${detail} unreadable`);
+  }
+}
+
+function validateResolveReceipt(parsed, resolutionId, conversationId, conflictId, action) {
+  const storageErr = () =>
+    recordError("ERR_STORAGE", "session records resolve receipt unreadable");
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw storageErr();
+  }
+  if (Object.keys(parsed).length !== 8) throw storageErr();
+  if (parsed.resolutionId !== resolutionId) throw storageErr();
+  if (parsed.conversationId !== conversationId) throw storageErr();
+  if (parsed.conflictId !== conflictId) throw storageErr();
+  if (parsed.action !== action) throw storageErr();
+  if (parsed.v !== 1) throw storageErr();
+  if (parsed.status !== "resolved" && parsed.status !== "stale") throw storageErr();
+  if (parsed.status === "resolved") {
+    if (parsed.resolution !== action) throw storageErr();
+  } else {
+    if (parsed.resolution !== "open") throw storageErr();
+  }
+  if (!Number.isSafeInteger(parsed.version) || parsed.version < 0) throw storageErr();
+  if (parsed.status === "resolved" && action === "kept" && parsed.version < 1) throw storageErr();
+}
+
 function resolveClock(now) {
   const stamp = now();
   if (!Number.isSafeInteger(stamp) || stamp < 0) {
@@ -238,6 +290,8 @@ const SQL_LIST_CONFLICTS_OPEN =
   "SELECT client_save_id, base_version, resolution, created_at_ms FROM draft_conflicts WHERE conversation_id = ? AND resolution = 'open' ORDER BY created_at_ms ASC, client_save_id ASC LIMIT ? OFFSET ?";
 const SQL_GET_CONFLICT =
   "SELECT client_save_id, base_version, resolution, created_at_ms, text FROM draft_conflicts WHERE conversation_id = ? AND client_save_id = ?";
+const SQL_UPDATE_CONFLICT_RESOLUTION =
+  "UPDATE draft_conflicts SET resolution = ? WHERE conversation_id = ? AND client_save_id = ? AND resolution = 'open'";
 const SQL_GET_OPERATION =
   "SELECT conversation_id, kind, payload_hash, result_json FROM operations WHERE id = ?";
 const SQL_INSERT_OPERATION =
@@ -282,6 +336,32 @@ function draftPayloadHash(projectId, conversationId, expectedVersion, text) {
         conversationId,
         expectedVersion,
         text,
+      ]),
+      "utf8"
+    )
+    .digest("hex");
+}
+
+function draftResolvePayloadHash(
+  projectId,
+  conversationId,
+  conflictId,
+  resolutionId,
+  expectedVersion,
+  action,
+  canonicalText
+) {
+  return createHash("sha256")
+    .update(
+      JSON.stringify([
+        DRAFT_RESOLVE_V1,
+        projectId,
+        conversationId,
+        conflictId,
+        resolutionId,
+        expectedVersion,
+        action,
+        canonicalText,
       ]),
       "utf8"
     )
@@ -682,6 +762,238 @@ export function createSessionRecords(options) {
     });
   }
 
+  function resolveDraftConflict(args) {
+    const {
+      projectId,
+      conversationId,
+      conflictId,
+      resolutionId,
+      expectedVersion,
+      action,
+      text,
+    } = requireArgs(args);
+    validateUuid(projectId, "project id");
+    validateUuid(conversationId, "conversation id");
+    validateUuid(conflictId, "conflict id");
+    validateUuid(resolutionId, "resolution id");
+    validateExpectedVersion(expectedVersion);
+    validateAction(action);
+
+    let canonicalText;
+    if (action === "kept") {
+      if (text === undefined || text === null) {
+        throw invalid("text required for kept");
+      }
+      validateText(text, 0, MAX_DRAFT, "draft text");
+      canonicalText = text;
+    } else {
+      if (text !== undefined && text !== null) {
+        throw invalid("text must be absent or null for dropped");
+      }
+      canonicalText = null;
+    }
+
+    const stamp = resolveClock(now);
+    const hash = draftResolvePayloadHash(
+      projectId,
+      conversationId,
+      conflictId,
+      resolutionId,
+      expectedVersion,
+      action,
+      canonicalText
+    );
+
+    return store.transaction((tx) => {
+      // Ownership: conversation must belong to project.
+      if (!tx.get(SQL_CONVERSATION_BY_KEY, [conversationId, projectId])) {
+        throw notFound();
+      }
+
+      // Receipt lookup BEFORE fresh version/conflict checks so exact retries
+      // return the original receipt regardless of later edits or resolution.
+      const prior = tx.get(SQL_GET_OPERATION, [resolutionId]);
+      if (prior) {
+        if (
+          prior.conversation_id !== conversationId ||
+          prior.kind !== "draft_save" ||
+          prior.payload_hash !== hash
+        ) {
+          throw idempotencyConflict();
+        }
+        if (
+          typeof prior.result_json !== "string" ||
+          Buffer.byteLength(prior.result_json, "utf8") > 2048
+        ) {
+          throw recordError(
+            "ERR_STORAGE",
+            "session records resolve receipt unreadable"
+          );
+        }
+        let parsed;
+        try {
+          parsed = JSON.parse(prior.result_json);
+        } catch {
+          throw recordError(
+            "ERR_STORAGE",
+            "session records resolve receipt unreadable"
+          );
+        }
+        validateResolveReceipt(
+          parsed,
+          resolutionId,
+          conversationId,
+          conflictId,
+          action
+        );
+        return parsed;
+      }
+
+      // Scoped conflict lookup.
+      const conflict = tx.get(SQL_GET_CONFLICT, [conversationId, conflictId]);
+      if (!conflict) throw notFound();
+
+      // Validate stored conflict integrity.
+      validateStoredText(conflict.text, MAX_DRAFT, "conflict text");
+      validateStoredVersion(conflict.base_version, "conflict base_version");
+      validateStoredTimestamp(conflict.created_at_ms, "conflict created_at_ms");
+      if (
+        conflict.resolution !== "open" &&
+        conflict.resolution !== "kept" &&
+        conflict.resolution !== "dropped"
+      ) {
+        throw recordError(
+          "ERR_STORAGE",
+          "session records conflict resolution unreadable"
+        );
+      }
+      if (conflict.resolution !== "open") {
+        throw recordError(
+          "ERR_DRAFT_CONFLICT_STATE",
+          "draft conflict already resolved"
+        );
+      }
+
+      // Read current draft (absent = version 0).
+      const current = tx.get(SQL_GET_DRAFT, [conversationId]);
+      let currentVersion = 0;
+      if (current) {
+        validateStoredText(current.text, MAX_DRAFT, "draft text");
+        validateStoredVersion(current.version, "draft version");
+        validateStoredTimestamp(current.updated_at_ms, "draft updated_at_ms");
+        currentVersion = current.version;
+      }
+
+      // Timestamp ordering (fresh only; retries skip this).
+      if (stamp < conflict.created_at_ms) {
+        throw invalid("clock");
+      }
+      if (action === "kept" && current && stamp < current.updated_at_ms) {
+        throw invalid("clock");
+      }
+
+      let receipt;
+
+      if (expectedVersion !== currentVersion) {
+        // Stale: persist only the resolution receipt; no draft/conflict mutation.
+        receipt = {
+          resolutionId,
+          conversationId,
+          conflictId,
+          action,
+          status: "stale",
+          version: currentVersion,
+          resolution: "open",
+          v: 1,
+        };
+      } else if (action === "kept") {
+        const next = currentVersion + 1;
+        if (!Number.isSafeInteger(next)) throw versionLimit();
+        if (current) {
+          const updated = tx.run(SQL_UPDATE_DRAFT_CAS, [
+            canonicalText,
+            next,
+            stamp,
+            conversationId,
+            expectedVersion,
+          ]);
+          if (Number(updated.changes) !== 1) {
+            throw recordError(
+              "ERR_STORAGE",
+              "session records draft update lost"
+            );
+          }
+        } else {
+          tx.run(SQL_INSERT_DRAFT, [conversationId, canonicalText, next, stamp]);
+        }
+        tx.run(SQL_TOUCH_CONVERSATION, [stamp, conversationId]);
+        const marked = tx.run(SQL_UPDATE_CONFLICT_RESOLUTION, [
+          "kept",
+          conversationId,
+          conflictId,
+        ]);
+        if (Number(marked.changes) !== 1) {
+          throw recordError(
+            "ERR_STORAGE",
+            "session records conflict update lost"
+          );
+        }
+        receipt = {
+          resolutionId,
+          conversationId,
+          conflictId,
+          action,
+          status: "resolved",
+          version: next,
+          resolution: "kept",
+          v: 1,
+        };
+      } else {
+        // dropped: mark conflict dropped only; draft and conversation untouched.
+        const marked = tx.run(SQL_UPDATE_CONFLICT_RESOLUTION, [
+          "dropped",
+          conversationId,
+          conflictId,
+        ]);
+        if (Number(marked.changes) !== 1) {
+          throw recordError(
+            "ERR_STORAGE",
+            "session records conflict update lost"
+          );
+        }
+        receipt = {
+          resolutionId,
+          conversationId,
+          conflictId,
+          action,
+          status: "resolved",
+          version: currentVersion,
+          resolution: "dropped",
+          v: 1,
+        };
+      }
+
+      const serialized = JSON.stringify(receipt);
+      if (Buffer.byteLength(serialized, "utf8") > 2048) {
+        throw recordError(
+          "ERR_STORAGE",
+          "session records resolve receipt too large"
+        );
+      }
+
+      tx.run(SQL_INSERT_OPERATION, [
+        resolutionId,
+        conversationId,
+        hash,
+        serialized,
+        stamp,
+        stamp,
+      ]);
+
+      return receipt;
+    });
+  }
+
   return Object.freeze({
     createProject,
     getProject,
@@ -696,5 +1008,6 @@ export function createSessionRecords(options) {
     saveDraft,
     listDraftConflicts,
     getDraftConflict,
+    resolveDraftConflict,
   });
 }
