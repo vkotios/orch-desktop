@@ -1,6 +1,6 @@
 # CHO-03 — Durable sessions and recovery
 
-Status: in progress. S1 store (`f0b4f72`), S2a project/chat/draft records (`247f43d`), S2b native bindings/producer fences (`f202eeb`), S2c turn intents/dispatch journals (`c853ef0`), S2d bounded bodies (`82f742c`), S2e Stop journals (`7a6131e`) and S2f approval journals (`3a90601`) implemented and verified locally. Application consumers remain in memory.
+Status: in progress. S1 store (`f0b4f72`), S2a project/chat/draft records (`247f43d`), S2b native bindings/producer fences (`f202eeb`), S2c turn intents/dispatch journals (`c853ef0`), S2d bounded bodies (`82f742c`), S2e Stop journals (`7a6131e`), S2f approval journals (`3a90601`) and S2g clarification/answer journals (`61bdbe9`) implemented and verified locally. Application consumers remain in memory.
 Authority: [implementation plan](../IMPLEMENTATION_PLAN.md) (CHO-03),
 [product spec](../PRODUCT_SPEC.md) (SESSION-01–06, RUN-04/06, AC-03/04/07/13),
 [CHO-04 milestones](CHO-04.md), storage contract: [SESSION_STORAGE](../contracts/SESSION_STORAGE.md).
@@ -159,6 +159,26 @@ independent GLM 5.3 high/Vibe review leave no High or Medium finding. The host
 proof/pending-map callbacks are synthetic in these probes; host/UI/event consumers
 remain unwired. Approval text/history display will use durable events/bodies.
 
+## Clarification questions and answer journals
+
+S2g source `61bdbe9` adds [SESSION_CLARIFICATIONS](../contracts/SESSION_CLARIFICATIONS.md):
+normalized question incarnations and explicit answer-attempt journals, committed
+before response effects. Each attempt has one dispatch admission; correcting
+invalid or conclusively unsent answers requires a new explicit attempt and fresh
+pending-question proof. Request routes record transport writes; async Codex
+requires its matching expected-turn ACK. Unknown outcomes never authorize replay.
+Late success after retirement records the attempt without changing the retired
+question row. Parent turns remain unchanged.
+
+All 640 package tests (44 shared, 596 desktop), including 74 clarification tests,
+type checking and web build pass. Actual installed/bundled Node process probes
+verify a single dispatch winner, reopen/no readmission, correction attempts,
+current-proof denial, terminal retries, generation-2 rejection, late Claude facts
+and outer/fault rollback. Controller source review and complete independent
+GLM 5.3 high/Vibe review leave no unresolved High or Medium issue after validation.
+Owner and pending-proof callbacks are synthetic; host/UI/event consumers and
+actual process/pending-map qualification remain unwired.
+
 ## Implementation sequence
 
 - S1 — Complete locally. Store core only: file lifecycle/DB-identity admission, v1 schema,
@@ -172,7 +192,8 @@ remain unwired. Approval text/history display will use durable events/bodies.
 - S2d — Complete locally: immutable bounded body storage and byte-chunk reads.
 - S2e — Complete locally: Stop intents and one-shot interrupt dispatch journals.
 - S2f — Complete locally: approval incarnations, immutable offered decisions and one-shot response journals.
-- S2 remaining — Next: clarification-answer operations, clarification records and turn/body
+- S2g — Complete locally: normalized question incarnations and explicit answer attempts with one-shot dispatch.
+- S2 remaining — Next: turn/body
   reference integration; same-project/controller/turn binding, generation checks inside
   each mutation transaction and native-configuration pinning. Complete
   explicit draft-conflict resolution before its UI workflow. No credentials or
@@ -260,3 +281,17 @@ conflict fallback during routine host integration. Current failures roll back or
 fail closed. Measure the 64-candidate collision bound and inherited parent
 prompt/sibling reads before admitting many simultaneous connections or large
 histories. These follow-ups do not authorize automatic replay or grants.
+
+S2g Low follow-ups before host/import/restore consumers: strengthen nested stored
+question/attempt shapes, typed IDs, provenance and cross-journal/answer-projection
+validation; require native refs on historical reads; align corrupt-row and
+oversized-new-envelope errors, native-ID bounds and stale-host error classes,
+and simplify the dead registration fallback. Normal APIs create consistent rows; these are
+defensive checks for corruption/import, not a recovery qualification. Promote
+private full-row, real owner-reclaim, multi-process and SQL-fault probes into
+the persistent suite and correct misleading cap/rollback test names. Measure
+inherited full parent prompt/sibling reads before large histories; answer receipts
+raise their cost. Preserve strict proof checks and no replay during that work.
+Avoid redundant same-value retirement updates during routine host cleanup.
+The reachable new-attempt and settlement clock-order defects are fixed and
+covered by five persistent tests plus both-runtime full-row probes.

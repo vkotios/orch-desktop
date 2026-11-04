@@ -61,6 +61,7 @@ Future S3 writes must compose body/event/projection/outcome changes in one outer
 transaction. Separate public calls are separate commits. Do not perform provider
 effects in a transaction callback or treat an inTransaction result as committed.
 Stop journals are available in [SESSION_STOPS](SESSION_STOPS.md), approval
-journals in [SESSION_APPROVALS](SESSION_APPROVALS.md). Clarification journals,
+journals in [SESSION_APPROVALS](SESSION_APPROVALS.md), and question/answer journals
+in [SESSION_CLARIFICATIONS](SESSION_CLARIFICATIONS.md). Body-reference integration,
 conflict resolution, host coupling,
 UI history and restart/import/export recovery remain separate work.

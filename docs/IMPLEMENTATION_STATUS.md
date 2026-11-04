@@ -1,6 +1,6 @@
 # CHO Desktop implementation status
 
-Updated: 2026-11-03. Integration branch: `codex/cho-v01-foundation`. Native Codex/Claude conversations and the clarification source milestone are accepted locally; source checkpoint `926110a` is verified by controller checks and independent GLM review.
+Updated: 2026-11-04. Integration branch: `codex/cho-v01-foundation`. Native Codex/Claude conversations and the clarification source milestone are accepted locally; source checkpoint `926110a` is verified by controller checks and independent GLM review.
 
 Product contract: [specification](PRODUCT_SPEC.md). Sequence: [plan](IMPLEMENTATION_PLAN.md). Sonnet findings: [validated dispositions](reviews/FINDINGS_DISPOSITION.md). Current package: [CHO-03 durable sessions](work-packages/CHO-03.md). Native Codex and Claude runtime and focused rendered conversation checks pass; broader [CHO-04 qualification](work-packages/CHO-04.md) remains open.
 
@@ -19,7 +19,8 @@ restart, abrupt-exit rollback, WAL recovery, schema preservation and pager-FULL
 rollback. Initial sandbox permission failures were rerun successfully with
 normal Windows permissions. No new native artifact or rendered durability
 claim is made: application chats, drafts and events still use memory. Accepted
-S2 records and dispatch journals are summarized below; remaining execution records,
+S2 records and dispatch journals are summarized below; body-reference integration,
+explicit draft-conflict resolution,
 host coupling, UI history/drafts and explicit recovery are pending.
 
 ## Project/chat records and draft persistence
@@ -54,7 +55,7 @@ All 485 package tests, type checking and web build pass. Separate process,
 concurrent-dispatch and SQL-fault fixtures verify persistence and atomicity;
 controller and complete independent GLM review leave no High or Medium issue.
 See [SESSION_TURNS](contracts/SESSION_TURNS.md). Application chats still use memory.
-Next: remaining execution records/clarifications/body-reference integration, then durable host events,
+Next: body-reference integration and draft-conflict resolution, then durable host events,
 UI history/drafts and restart recovery without replay.
 
 ## Bounded normalized body storage
@@ -76,7 +77,8 @@ All 530 package tests, type checking and web build pass. Installed/bundled
 process probes verify restart, a single dispatch winner and unchanged parent
 turns; controller and complete GLM 5.3 high/Vibe review leave no High or Medium
 issue. See [SESSION_STOPS](contracts/SESSION_STOPS.md). Native consumers remain
-unwired. Next: approval/clarification records and body references, then durable
+unwired. Approval and clarification journals are available below. Next: body
+references and draft-conflict resolution, then durable
 host events, UI history/drafts and explicit recovery without replay.
 
 ## First foundation batch integrated
@@ -178,8 +180,22 @@ process and dispatch-race probes pass; controller and complete GLM 5.3 high/Vibe
 review leave no High or Medium finding. See
 [SESSION_APPROVALS](contracts/SESSION_APPROVALS.md). Host/UI/event consumers and
 actual request-map verification remain unwired; approval content will use future
-durable events/bodies. Next: clarification records/answer journals, body-reference
+durable events/bodies. Clarification journals are available below. Next: body-reference
 integration and draft-conflict resolution, followed by S3 host persistence.
+
+## Clarification journal storage
+
+S2g source `61bdbe9` persists normalized questions and explicit answer attempts
+with one-shot dispatch, fresh pending proof and route-specific success facts.
+Invalid/proven-unsent answers remain correctable with a new explicit attempt;
+unknown outcomes cannot replay, and late success preserves retired questions.
+All 640 package tests, type checking and web build pass, together with actual
+installed/bundled Node process, race and rollback probes. Controller and complete
+GLM 5.3 high/Vibe review leave no unresolved High or Medium issue after validation.
+See [SESSION_CLARIFICATIONS](contracts/SESSION_CLARIFICATIONS.md). Application
+chats still use memory; host/UI/events, actual owner/pending-map verification
+and restart recovery remain pending. Next: body references and draft-conflict
+resolution, then S3 durable host integration.
 
 ## Native clarification milestone
 
