@@ -45,6 +45,7 @@ const MAX_EFFORT = 64;
 const MAX_NATIVE_ID = 512;
 const MAX_HISTORY_BYTES = 8192;
 const MAX_RESULT_BYTES = 2048;
+const SHA256_HEX_RE = /^[0-9a-f]{64}$/;
 
 const TURN_INTENT_V1 = "turn-intent-v1";
 
@@ -186,6 +187,63 @@ function validateOffset(value) {
   }
 }
 
+// Resolve a body reference scoped to the conversation. Returns validated
+// metadata without loading body_text into JS. Queue-time: missing/foreign
+// is ERR_NOT_FOUND, empty is ERR_INVALID_RECORD, malformed stored row is
+// ERR_STORAGE.
+function resolveBodyRef(tx, bodyId, conversationId) {
+  validateUuid(bodyId, "prompt ref");
+  const row = tx.get(SQL_BODY_META_BY_ID, [bodyId, conversationId]);
+  if (!row) throw errNotFound();
+  if (row.conversation_id !== conversationId) throw errNotFound();
+  if (row.body_type !== "text") throw errStorage();
+  if (!Number.isSafeInteger(row.byte_len) || row.byte_len < 0 || row.byte_len > 1048576) {
+    throw errStorage();
+  }
+  if (row.byte_len === 0) throw errInvalid("prompt ref body is empty");
+  if (typeof row.sha256_hex !== "string" || !SHA256_HEX_RE.test(row.sha256_hex)) {
+    throw errStorage();
+  }
+  if (!Number.isSafeInteger(row.created_at_ms) || row.created_at_ms < 0) {
+    throw errStorage();
+  }
+  if (row.utf8_bytes !== row.byte_len) throw errStorage();
+  return {
+    id: row.id,
+    conversationId: row.conversation_id,
+    byteLength: row.byte_len,
+    sha256Hex: row.sha256_hex,
+    createdAtMs: row.created_at_ms,
+  };
+}
+
+// Read-time body validation: any inconsistency (dangling, malformed,
+// empty, type mismatch) is stored corruption → ERR_STORAGE.
+function validateStoredBodyRef(tx, bodyId, conversationId) {
+  if (typeof bodyId !== "string" || !UUID_RE.test(bodyId)) throw errStorage();
+  const row = tx.get(SQL_BODY_META_BY_ID, [bodyId, conversationId]);
+  if (!row) throw errStorage();
+  if (row.conversation_id !== conversationId) throw errStorage();
+  if (row.body_type !== "text") throw errStorage();
+  if (!Number.isSafeInteger(row.byte_len) || row.byte_len < 1 || row.byte_len > 1048576) {
+    throw errStorage();
+  }
+  if (typeof row.sha256_hex !== "string" || !SHA256_HEX_RE.test(row.sha256_hex)) {
+    throw errStorage();
+  }
+  if (!Number.isSafeInteger(row.created_at_ms) || row.created_at_ms < 0) {
+    throw errStorage();
+  }
+  if (row.utf8_bytes !== row.byte_len) throw errStorage();
+  return {
+    id: row.id,
+    conversationId: row.conversation_id,
+    byteLength: row.byte_len,
+    sha256Hex: row.sha256_hex,
+    createdAtMs: row.created_at_ms,
+  };
+}
+
 function resolveStamp(now) {
   let stamp;
   try {
@@ -234,7 +292,7 @@ const SQL_CONVERSATION_FULL =
 const SQL_OP_BY_ID =
   "SELECT id, conversation_id, turn_id, kind, owner_generation, host_generation, state, history_json, payload_hash, result_json, created_at_ms, settled_at_ms FROM operations WHERE id = ?";
 const SQL_TURN_BY_KEY =
-  "SELECT id, conversation_id, seq, prompt_text, model_requested, effort, role, claude_input_uuid, intent_state, native_turn_id, outcome, created_at_ms FROM turns WHERE conversation_id = ? AND id = ?";
+  "SELECT id, conversation_id, seq, prompt_text, prompt_ref, model_requested, effort, role, claude_input_uuid, intent_state, native_turn_id, outcome, created_at_ms FROM turns WHERE conversation_id = ? AND id = ?";
 const SQL_OPS_BY_TURN =
   "SELECT id, conversation_id, turn_id, kind, owner_generation, host_generation, state, history_json, payload_hash, result_json, created_at_ms, settled_at_ms FROM operations WHERE conversation_id = ? AND turn_id = ?";
 const SQL_REF_BY_CONVERSATION =
@@ -243,7 +301,7 @@ const SQL_TURN_BY_INPUT_UUID =
   "SELECT conversation_id, id FROM turns WHERE claude_input_uuid = ?";
 const SQL_MAX_SEQ = "SELECT MAX(seq) AS max_seq FROM turns WHERE conversation_id = ?";
 const SQL_INSERT_TURN =
-  "INSERT INTO turns(id, conversation_id, seq, prompt_text, prompt_ref, model_requested, effort, role, claude_input_uuid, intent_state, native_turn_id, outcome, created_at_ms) VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, 'queued', NULL, NULL, ?)";
+  "INSERT INTO turns(id, conversation_id, seq, prompt_text, prompt_ref, model_requested, effort, role, claude_input_uuid, intent_state, native_turn_id, outcome, created_at_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', NULL, NULL, ?)";
 const SQL_INSERT_OP =
   "INSERT INTO operations(id, conversation_id, turn_id, kind, owner_generation, host_generation, state, history_json, payload_hash, result_json, created_at_ms, settled_at_ms) VALUES (?, ?, ?, 'handoff', ?, ?, 'queued', ?, ?, ?, ?, NULL)";
 const SQL_TOUCH_CONVERSATION = "UPDATE conversations SET updated_at_ms = ? WHERE id = ?";
@@ -260,7 +318,9 @@ const SQL_SET_TURN_OBSERVED =
 const SQL_SET_TURN_TERMINAL =
   "UPDATE turns SET intent_state = ?, outcome = ?, native_turn_id = ? WHERE conversation_id = ? AND id = ? AND outcome IS NULL";
 const SQL_LIST_TURNS =
-  "SELECT id, conversation_id, seq, prompt_text, model_requested, effort, role, claude_input_uuid, intent_state, native_turn_id, outcome, created_at_ms FROM turns WHERE conversation_id = ? ORDER BY seq ASC LIMIT ? OFFSET ?";
+  "SELECT id, conversation_id, seq, prompt_text, prompt_ref, model_requested, effort, role, claude_input_uuid, intent_state, native_turn_id, outcome, created_at_ms FROM turns WHERE conversation_id = ? ORDER BY seq ASC LIMIT ? OFFSET ?";
+const SQL_BODY_META_BY_ID =
+  "SELECT id, conversation_id, byte_len, sha256_hex, created_at_ms, typeof(body_text) AS body_type, length(CAST(body_text AS BLOB)) AS utf8_bytes FROM large_bodies WHERE id = ? AND conversation_id = ?";
 
 // Stored conversation config, validated on every read: malformed stored
 // controller/model/effort/role/requested values are corruption, not input.
@@ -488,7 +548,7 @@ function appendHistoryFact(history, entry) {
 // Full turn record with every stored invariant checked: exactly one handoff
 // operation pair, well-formed provenance, journal/result consistency, and
 // op-state/turn-intent agreement. Reads never truncate prompt or history.
-function buildTurnRecord(conv, turnRow, opRow) {
+function buildTurnRecord(tx, conv, turnRow, opRow) {
   if (!turnRow || typeof turnRow !== "object") throw errStorage();
   if (opRow.kind !== "handoff") throw errStorage();
   if (opRow.conversation_id !== turnRow.conversation_id || opRow.turn_id !== turnRow.id) {
@@ -582,12 +642,29 @@ function buildTurnRecord(conv, turnRow, opRow) {
   });
   checkJsonCap(opRow.history_json, MAX_HISTORY_BYTES);
   checkJsonCap(opRow.result_json, MAX_RESULT_BYTES);
+  // Prompt shape: inline (prompt_ref NULL, prompt_text non-empty) or
+  // reference (prompt_ref UUID, prompt_text '' sentinel). Dual populated
+  // or dangling/malformed ref is stored corruption.
+  const storedRef = turnRow.prompt_ref ?? null;
+  let prompt;
+  let promptRef = null;
+  let promptBody = null;
+  if (storedRef !== null) {
+    if (turnRow.prompt_text !== "") throw errStorage();
+    promptBody = validateStoredBodyRef(tx, storedRef, turnRow.conversation_id);
+    promptRef = storedRef;
+    prompt = null;
+  } else {
+    prompt = turnRow.prompt_text;
+  }
   return {
     id: turnRow.id,
     conversationId: turnRow.conversation_id,
     operationId: opRow.id,
     seq: turnRow.seq,
-    prompt: turnRow.prompt_text,
+    prompt,
+    promptRef,
+    promptBody,
     controller: conv.controller,
     modelRequested: conv.modelRequested,
     role: conv.role,
@@ -629,7 +706,7 @@ function loadPair(tx, conv, turnId, operationId) {
   if (siblings.filter((row) => row.kind === "handoff").length !== 1) {
     throw errStorage();
   }
-  return { turnRow, opRow, record: buildTurnRecord(conv, turnRow, opRow) };
+  return { turnRow, opRow, record: buildTurnRecord(tx, conv, turnRow, opRow) };
 }
 
 // The stored paired op carries the owning provenance: every mutation after
@@ -711,7 +788,15 @@ function runQueueTurn(tx, authorizer, args, stamp) {
   const scope = validateScopeShape(input);
   validateUuid(input.turnId, "turn id");
   validateUuid(input.operationId, "operation id");
-  validatePrompt(input.prompt);
+  const promptRef = input.promptRef ?? null;
+  if (promptRef !== null) {
+    if (input.prompt !== undefined && input.prompt !== null) {
+      throw errInvalid("prompt and promptRef are mutually exclusive");
+    }
+    validateUuid(promptRef, "prompt ref");
+  } else {
+    validatePrompt(input.prompt);
+  }
   const hasEffortArg = Object.hasOwn(input, "effort");
   const effortArg = hasEffortArg ? input.effort : undefined;
   if (effortArg !== undefined && effortArg !== null) validateEffortValue(effortArg);
@@ -725,11 +810,19 @@ function runQueueTurn(tx, authorizer, args, stamp) {
   }
   const effort = resolveEffort(conv, effortArg);
   authorizer.authorizeLiveWrite(tx, scope);
+  let bodyMeta = null;
+  let promptSlot;
+  if (promptRef !== null) {
+    bodyMeta = resolveBodyRef(tx, promptRef, scope.conversationId);
+    promptSlot = { kind: "body_ref", id: bodyMeta.id, byteLength: bodyMeta.byteLength, sha256Hex: bodyMeta.sha256Hex };
+  } else {
+    promptSlot = input.prompt;
+  }
   const hash = hashForRequest({
     projectId: scope.projectId,
     conversationId: scope.conversationId,
     turnId: input.turnId,
-    prompt: input.prompt,
+    prompt: promptSlot,
     conv,
     effort,
     claudeInputUuid,
@@ -775,11 +868,13 @@ function runQueueTurn(tx, authorizer, args, stamp) {
   checkJsonCap(historyText, MAX_HISTORY_BYTES);
   const resultText = JSON.stringify({ v: 1, kind: "queue", hash });
   checkJsonCap(resultText, MAX_RESULT_BYTES);
+  const promptText = promptRef !== null ? "" : input.prompt;
   tx.run(SQL_INSERT_TURN, [
     input.turnId,
     scope.conversationId,
     seq,
-    input.prompt,
+    promptText,
+    promptRef,
     conv.modelRequested,
     effort,
     conv.role,
@@ -1082,12 +1177,13 @@ function runGetTurn(tx, args) {
   const opRows = tx.all(SQL_OPS_BY_TURN, [input.conversationId, input.turnId]);
   const handoffs = opRows.filter((row) => row.kind === "handoff");
   if (handoffs.length !== 1) throw errStorage();
-  return buildTurnRecord(conv, turnRow, handoffs[0]);
+  return buildTurnRecord(tx, conv, turnRow, handoffs[0]);
 }
 
 function toTurnMetadata(record) {
   const metadata = { ...record };
   delete metadata.prompt;
+  delete metadata.promptBody;
   delete metadata.history;
   return metadata;
 }
@@ -1109,7 +1205,7 @@ function runListTurns(tx, args) {
     const opRows = tx.all(SQL_OPS_BY_TURN, [input.conversationId, turnRow.id]);
     const handoffs = opRows.filter((row) => row.kind === "handoff");
     if (handoffs.length !== 1) throw errStorage();
-    return toTurnMetadata(buildTurnRecord(conv, turnRow, handoffs[0]));
+    return toTurnMetadata(buildTurnRecord(tx, conv, turnRow, handoffs[0]));
   });
 }
 
@@ -1135,7 +1231,16 @@ export function createSessionTurns(options) {
     validateScopeShape(input);
     validateUuid(input.turnId, "turn id");
     validateUuid(input.operationId, "operation id");
-    validatePrompt(input.prompt);
+    // Pre-validate the XOR prompt shape so malformed calls fail before
+    // touching the store; runQueueTurn re-validates for the composed path.
+    if (input.promptRef !== undefined && input.promptRef !== null) {
+      if (input.prompt !== undefined && input.prompt !== null) {
+        throw errInvalid("prompt and promptRef are mutually exclusive");
+      }
+      validateUuid(input.promptRef, "prompt ref");
+    } else {
+      validatePrompt(input.prompt);
+    }
     return store.transaction((tx) => runQueueTurn(tx, authorizer, args, stamp));
   }
 
