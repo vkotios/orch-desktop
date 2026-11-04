@@ -196,7 +196,8 @@ actual process/pending-map qualification remain unwired.
 - S2h — Complete locally: explicit turn/body references, bounded metadata/chunk reads and legacy inline compatibility.
 - S2i — Complete locally: explicit keep/drop resolution, version checks and immutable idempotent resolution receipts.
 - S2 standalone storage APIs are implemented; consumer prerequisites and S3–S5 remain open.
-- S3 — Host/native event coupling: durable event+projection+outcome commits,
+- S3a — Complete locally: durable event/cursor/snapshot storage (`b104e83`), no mailbox replacement yet.
+- S3 remaining — Host/native event coupling: durable event+projection+outcome commits,
   replay-by-cursor poll replacing destructive drain, ownership checks, paged
   resync, interrupt-and-close with persisted Stop intent, visible
   disk-full/corruption handling.
@@ -334,3 +335,29 @@ Low follow-ups: close reopened test stores in finally on assertion failure,
 correct the S2a label in the new S2i test header, strengthen corrupt operation
 provenance/current-draft version checks, and align inherited trusted-clock and
 legacy saveDraft lost-CAS error classification before host error presentation.
+
+## Durable event/cursor/snapshot storage — S3a
+
+S3a source `b104e83` adds canonical durable events, per-chat sequence cursors
+and atomic bounded snapshots. Expected-sequence checks prevent stale summary
+writes; duplicate keys replay the original fact without double projection.
+Reads are non-destructive, count/byte bounded and advance only returned facts.
+All 674 package tests, including 10 event tests, type checking and web
+build pass. Installed/bundled Node child-process probes establish reopen, a
+single concurrent sequence winner, exact replay/byte budgets/cursor errors and
+ABORT/IGNORE snapshot-fault plus outer body/event rollback. Controller and
+complete GLM 5.3 high/Vibe review leave no unresolved High or Medium issue.
+The native mailbox, host polling and UI remain unwired to this store.
+
+Next: typed normalized event/reducer contracts and atomic event/journal/outcome
+coupling, actual owner/access proofs, then host replay polling and visible
+storage failures. Generic state JSON is not a qualified UI projection.
+Before S5 import: define the read-only imported projection and history-reader
+contract. Each import must create its matching bounded snapshot atomically with
+transcript records, needed bodies and import receipts; it must not create native
+bindings, producer fences or execution rights. Import remains unimplemented.
+Low follow-ups before host/import consumers: clarify the null-cursor comment
+(null intentionally starts at zero), add kind-only key conflicts, true foreign
+body refs, orphan/malformed snapshot and payload cases, transaction commit and
+deleted-body cases to persistent tests. Measure repeated canonicalization and
+bounded candidate-page serialization before high-volume streaming.

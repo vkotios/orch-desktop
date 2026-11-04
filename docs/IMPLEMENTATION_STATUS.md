@@ -234,3 +234,19 @@ Medium finding. The application still uses memory; host/UI consumers are pending
 
 See [SESSION_RECORDS](contracts/SESSION_RECORDS.md). Next: durable host/event
 coupling, then UI persistence and restart recovery.
+
+## Durable event/cursor/snapshot storage
+
+S3a source `b104e83` adds canonical durable events, per-chat sequence cursors
+and atomic bounded snapshots. Expected-sequence checks prevent stale summary
+writes; duplicate keys replay the original fact without double projection.
+Reads are non-destructive, count/byte bounded and advance only returned facts.
+All 674 package tests, including 10 event tests, type checking and web
+build pass. Installed/bundled Node child-process probes establish reopen, a
+single concurrent sequence winner, exact replay/byte budgets/cursor errors and
+ABORT/IGNORE snapshot-fault plus outer body/event rollback. Controller and
+complete GLM 5.3 high/Vibe review leave no unresolved High or Medium issue.
+The native mailbox, host polling and UI remain unwired to this store.
+
+See [SESSION_EVENTS](contracts/SESSION_EVENTS.md). Next: typed host coupling
+and replay polling, followed by UI persistence and explicit recovery.

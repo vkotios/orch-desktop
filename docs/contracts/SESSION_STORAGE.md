@@ -1,6 +1,6 @@
 # SESSION_STORAGE — durable session/event store contract (CHO-03)
 
-Status: contract v1 accepted. S1 lifecycle (`f0b4f72`), S2a project/chat/draft records (`247f43d`), S2b native bindings/producer fences (`f202eeb`), S2c turn intents/dispatch journals (`c853ef0`), S2d bounded bodies (`82f742c`), S2e Stop journals (`7a6131e`), S2f approval journals (`3a90601`) and S2g clarification/answer journals (`61bdbe9`) implemented and verified. S2h turn/body references (`a502ad3`) are implemented and verified. S2i draft-conflict resolution (`8bec4c1`) is verified locally. S3–S5 and application wiring remain pending. APIs: [SESSION_RECORDS](SESSION_RECORDS.md), [SESSION_BINDINGS](SESSION_BINDINGS.md), [SESSION_TURNS](SESSION_TURNS.md), [SESSION_BODIES](SESSION_BODIES.md), [SESSION_STOPS](SESSION_STOPS.md), [SESSION_APPROVALS](SESSION_APPROVALS.md), [SESSION_CLARIFICATIONS](SESSION_CLARIFICATIONS.md).
+Status: contract v1 accepted. S1 lifecycle (`f0b4f72`), S2a project/chat/draft records (`247f43d`), S2b native bindings/producer fences (`f202eeb`), S2c turn intents/dispatch journals (`c853ef0`), S2d bounded bodies (`82f742c`), S2e Stop journals (`7a6131e`), S2f approval journals (`3a90601`) and S2g clarification/answer journals (`61bdbe9`) implemented and verified. S2h turn/body references (`a502ad3`) are implemented and verified. S2i draft-conflict resolution (`8bec4c1`) is verified locally. S3a event/cursor/snapshot storage (`b104e83`) is verified locally. Remaining S3 host coupling, S4–S5 and application wiring are pending. APIs: [SESSION_RECORDS](SESSION_RECORDS.md), [SESSION_BINDINGS](SESSION_BINDINGS.md), [SESSION_TURNS](SESSION_TURNS.md), [SESSION_BODIES](SESSION_BODIES.md), [SESSION_STOPS](SESSION_STOPS.md), [SESSION_APPROVALS](SESSION_APPROVALS.md), [SESSION_CLARIFICATIONS](SESSION_CLARIFICATIONS.md), [SESSION_EVENTS](SESSION_EVENTS.md).
 Authority: PRODUCT_SPEC SESSION-01–06, RUN-04/06, §9; IMPLEMENTATION_PLAN CHO-03; CHO-04 clarification milestone.
 Runtime: `node:sqlite` `DatabaseSync` (synchronous execution) on bundled Node 24.22.2.
 Official reference: [Node.js v24 SQLite](https://nodejs.org/docs/latest-v24.x/api/sqlite.html).
@@ -139,13 +139,15 @@ in one SQLite transaction (atomic); `seq` is per-conversation, assigned at commi
 immutable afterwards. Bounds: prompt and draft at most 65536 UTF-16 code units
 (matches today's composer limit); oversized bodies persist in `large_bodies`
 (byte-exact, verified by `sha256_hex`) with events carrying `{body_ref, chunks}`.
-S2c still accepts inline prompts only up to 32768 UTF-8 bytes as well as the
-UTF-16 limit; larger prompts explicitly reject. S2d body storage is available via
+Inline turn prompts retain the 32768 UTF-8 byte and UTF-16 limits; larger inline
+prompts explicitly reject. S2d body storage is available via
 [SESSION_BODIES](SESSION_BODIES.md), with an initial 1MiB UTF-8 body limit;
-turn/body-reference integration remains pending.
-Empty-draft edits need not create a chat. Imports create conversations/turns/events
-only, with NULL native ids and no `native_refs` rows — never fabricated native
-associations. Draft idempotency: each save carries a stable save/mutation id plus a
+S2h explicit turn/body references are available via [SESSION_TURNS](SESSION_TURNS.md);
+inline prompt caps remain unchanged.
+Empty-draft edits need not create a chat. Future imports create transcript records
+(conversations/turns/events and required bodies), matching bounded snapshots and
+import receipts atomically, with NULL native ids and no `native_refs` or producer
+fences — never fabricated native associations or execution rights. Draft idempotency: each save carries a stable save/mutation id plus a
 payload hash. The save id is the globally unique client UUID in `operations.id`,
 with kind `draft_save`, required `payload_hash` and `result_json`; `draft_conflicts.client_save_id`
 uses that same id. Lookup also verifies conversation/kind/hash before returning
@@ -199,7 +201,7 @@ is no destructive migration or backup API in S1.
 Durable cursor is `(instance_uuid, conversation_id, seq)`. Normalized facts are
 recorded before any durable ACK or display. Append is idempotent on caller-stable
 `event_key` with canonical `payload_json`: same key + same canonical payload returns
-the existing `seq` with no double projection; same key + different payload is a key
+the existing `seq` when kind also matches, with no double projection; same key + different kind or payload is a key
 conflict. Cursor checks reject wrong-conversation/project, negative, beyond-tip, and
 other-instance cursors with defined errors. Poll is replay-by-cursor
 (`SELECT ... WHERE conversation_id=? AND seq>? ORDER BY seq`), not a destructive
@@ -207,7 +209,8 @@ drain. One poll returns at most 32 events AND at most 128KiB TOTAL serialized by
 including a fixed 2KiB envelope/overhead margin; each event payload is capped (32KiB
 default), stopping before either bound trips, with caller limits applied inside the
 bounds. `snapshots.projection_json` is a bounded (32KiB) current-state summary with
-`{version, conversationId, lastSeq, bodyRefs}`; it is not the complete transcript.
+`{version, conversationId, lastSeq, bodyRefs, state}`; state is a bounded summary
+supplied by the trusted future typed reducer, not the complete transcript.
 Historical data remains in paged events/bodies. Oversized summary content uses a
 body ref. A body needs no chunk table: immutable `body_text` is read by bounded SQL
 `substr(CAST(body_text AS BLOB), offsetBytes+1, lengthBytes)`. S2 body reads require
@@ -252,8 +255,12 @@ truncation on the older development Node SQLite reader; bundled Node 24.22.2
 preserves NUL natively. See SESSION_RECORDS for the consistent input policy. Titles,
 archive, search, and export are future consumers of these same tables, not separate
 stores. Transcript imports are atomic per batch and idempotent via
-`imports(source, source_key)`; they create conversations/turns/events only, with
-NULL native ids and no `native_refs` rows.
+`imports(source, source_key)`. They create transcript records, required bodies,
+a matching bounded snapshot at the final imported sequence, and import receipts
+in the same batch. Native ids remain NULL; no `native_refs`, producer fences or
+execution permissions are created. Finalize the imported read-only projection
+and history-reader contract before S5 implementation: imported histories cannot
+omit the snapshot required by S3a or pretend to be native handoff journals.
 
 ## 6. Versions and migration
 
