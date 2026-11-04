@@ -867,6 +867,110 @@ describe("session-clarifications", () => {
     });
   });
 
+  describe("clock-order enforcement", () => {
+    it("queue before question creation rejects ERR_INVALID_RECORD valid and invalid", () => {
+      const dir = tmp(); let t = 1000;
+      const { records, bindings, turns, clarifications, file } = openFresh(dir, { now: () => t });
+      seedProject(records, P1); seedCodex(records, CX, P1); claim(bindings, P1, CX);
+      observedCodex(turns, bindings, P1, CX, TH1, T1, uid(900));
+      clarifications.registerClarification(regCodex(P1, CX, T1, Q1));
+      const qBefore = rawGet(file, "SELECT status,question_json FROM clarifications WHERE id=?", [Q1]);
+      t = 999;
+      expectCode(() => clarifications.queueAnswer({ ...sc(P1, CX), turnId: T1, clarificationId: Q1, operationId: A1, answers: { "choice-1": ["A"] }, pendingEvidence: null }), "ERR_INVALID_RECORD");
+      expectCode(() => clarifications.queueAnswer({ ...sc(P1, CX), turnId: T1, clarificationId: Q1, operationId: A2, answers: { "choice-1": [] }, pendingEvidence: null }), "ERR_INVALID_RECORD");
+      const qAfter = rawGet(file, "SELECT status,question_json FROM clarifications WHERE id=?", [Q1]);
+      expect(qAfter.status).toBe(qBefore.status);
+      expect(qAfter.question_json).toBe(qBefore.question_json);
+      const ops = rawAll(file, "SELECT id FROM operations WHERE decision=?", [Q1]);
+      expect(ops.length).toBe(0);
+    });
+    it("settle before begin dispatch rejects ERR_INVALID_RECORD raw unchanged", () => {
+      const dir = tmp(); let t = 1000;
+      const { records, bindings, turns, clarifications, file } = openFresh(dir, { now: () => t });
+      seedProject(records, P1); seedCodex(records, CX, P1); claim(bindings, P1, CX);
+      observedCodex(turns, bindings, P1, CX, TH1, T1, uid(900));
+      clarifications.registerClarification(regCodex(P1, CX, T1, Q1));
+      t = 1100;
+      clarifications.queueAnswer({ ...sc(P1, CX), turnId: T1, clarificationId: Q1, operationId: A1, answers: { "choice-1": ["A"] }, pendingEvidence: null });
+      t = 1200;
+      clarifications.beginAnswerDispatch({ ...sc(P1, CX), turnId: T1, clarificationId: Q1, operationId: A1, pendingEvidence: null });
+      const qBefore = rawGet(file, "SELECT status,question_json FROM clarifications WHERE id=?", [Q1]);
+      const opBefore = rawGet(file, "SELECT state,history_json,result_json,settled_at_ms FROM operations WHERE id=?", [A1]);
+      t = 1150;
+      expectCode(() => clarifications.settleAnswer({ ...sc(P1, CX), turnId: T1, clarificationId: Q1, operationId: A1, outcome: "not_sent", request: null }), "ERR_INVALID_RECORD");
+      const qAfter = rawGet(file, "SELECT status,question_json FROM clarifications WHERE id=?", [Q1]);
+      const opAfter = rawGet(file, "SELECT state,history_json,result_json,settled_at_ms FROM operations WHERE id=?", [A1]);
+      expect(qAfter.status).toBe(qBefore.status);
+      expect(qAfter.question_json).toBe(qBefore.question_json);
+      expect(opAfter.state).toBe(opBefore.state);
+      expect(opAfter.history_json).toBe(opBefore.history_json);
+      expect(opAfter.result_json).toBe(opBefore.result_json);
+      expect(opAfter.settled_at_ms).toBe(opBefore.settled_at_ms);
+    });
+    it("settle at or after begin succeeds", () => {
+      const dir = tmp(); let t = 1000;
+      const { records, bindings, turns, clarifications } = openFresh(dir, { now: () => t });
+      seedProject(records, P1); seedCodex(records, CX, P1); claim(bindings, P1, CX);
+      observedCodex(turns, bindings, P1, CX, TH1, T1, uid(900));
+      clarifications.registerClarification(regCodex(P1, CX, T1, Q1));
+      t = 1100;
+      clarifications.queueAnswer({ ...sc(P1, CX), turnId: T1, clarificationId: Q1, operationId: A1, answers: { "choice-1": ["A"] }, pendingEvidence: null });
+      t = 1200;
+      const disp = clarifications.beginAnswerDispatch({ ...sc(P1, CX), turnId: T1, clarificationId: Q1, operationId: A1, pendingEvidence: null });
+      t = 1200;
+      const r = clarifications.settleAnswer({ ...sc(P1, CX), turnId: T1, clarificationId: Q1, operationId: A1, outcome: "written", request: disp.request });
+      expect(r.attempt.state).toBe("written");
+      expect(r.clarification.status).toBe("answered");
+    });
+    it("exact queue retry with earlier timestamp returns created:false raw unchanged", () => {
+      const dir = tmp(); let t = 1000;
+      const { records, bindings, turns, clarifications, file } = openFresh(dir, { now: () => t });
+      seedProject(records, P1); seedCodex(records, CX, P1); claim(bindings, P1, CX);
+      observedCodex(turns, bindings, P1, CX, TH1, T1, uid(900));
+      clarifications.registerClarification(regCodex(P1, CX, T1, Q1));
+      t = 1100;
+      const args = { ...sc(P1, CX), turnId: T1, clarificationId: Q1, operationId: A1, answers: { "choice-1": ["A"] }, pendingEvidence: null };
+      clarifications.queueAnswer(args);
+      const opBefore = rawGet(file, "SELECT state,history_json,result_json FROM operations WHERE id=?", [A1]);
+      t = 500;
+      const r = clarifications.queueAnswer(args);
+      expect(r.created).toBe(false);
+      expect(r.attempt.id).toBe(A1);
+      const opAfter = rawGet(file, "SELECT state,history_json,result_json FROM operations WHERE id=?", [A1]);
+      expect(opAfter.state).toBe(opBefore.state);
+      expect(opAfter.history_json).toBe(opBefore.history_json);
+      expect(opAfter.result_json).toBe(opBefore.result_json);
+    });
+    it("exact terminal retry with earlier timestamp returns same records raw unchanged", () => {
+      const dir = tmp(); let t = 1000;
+      const { records, bindings, turns, clarifications, file } = openFresh(dir, { now: () => t });
+      seedProject(records, P1); seedCodex(records, CX, P1); claim(bindings, P1, CX);
+      observedCodex(turns, bindings, P1, CX, TH1, T1, uid(900));
+      clarifications.registerClarification(regCodex(P1, CX, T1, Q1));
+      t = 1100;
+      clarifications.queueAnswer({ ...sc(P1, CX), turnId: T1, clarificationId: Q1, operationId: A1, answers: { "choice-1": ["A"] }, pendingEvidence: null });
+      t = 1200;
+      const disp = clarifications.beginAnswerDispatch({ ...sc(P1, CX), turnId: T1, clarificationId: Q1, operationId: A1, pendingEvidence: null });
+      const settleArgs = { ...sc(P1, CX), turnId: T1, clarificationId: Q1, operationId: A1, outcome: "written", request: disp.request };
+      clarifications.settleAnswer(settleArgs);
+      const qBefore = rawGet(file, "SELECT status,answer_json,answered_at_ms FROM clarifications WHERE id=?", [Q1]);
+      const opBefore = rawGet(file, "SELECT state,history_json,result_json,settled_at_ms FROM operations WHERE id=?", [A1]);
+      t = 500;
+      const r = clarifications.settleAnswer(settleArgs);
+      expect(r.attempt.state).toBe("written");
+      expect(r.clarification.status).toBe("answered");
+      const qAfter = rawGet(file, "SELECT status,answer_json,answered_at_ms FROM clarifications WHERE id=?", [Q1]);
+      const opAfter = rawGet(file, "SELECT state,history_json,result_json,settled_at_ms FROM operations WHERE id=?", [A1]);
+      expect(qAfter.status).toBe(qBefore.status);
+      expect(qAfter.answer_json).toBe(qBefore.answer_json);
+      expect(qAfter.answered_at_ms).toBe(qBefore.answered_at_ms);
+      expect(opAfter.state).toBe(opBefore.state);
+      expect(opAfter.history_json).toBe(opBefore.history_json);
+      expect(opAfter.result_json).toBe(opBefore.result_json);
+      expect(opAfter.settled_at_ms).toBe(opBefore.settled_at_ms);
+    });
+  });
+
   describe("answer map shape", () => {
     it("Date answer map rejects ERR_INVALID_RECORD before attempt", () => {
       const dir = tmp(); const { records, bindings, turns, clarifications, file } = openFresh(dir);

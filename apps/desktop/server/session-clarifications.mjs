@@ -579,6 +579,7 @@ function runQueue(tx, auth, pv, turnsTx, args, ts) {
     }
     throw eIdem();
   }
+  if (ts < clar.createdAtMs) throw eInv("clock");
   if (clar.status !== "pending" && clar.status !== "invalid") throw eCS();
   if (tr.intentState !== "observed") throw eCS();
   if (tr.outcome !== null) throw eCS();
@@ -681,8 +682,6 @@ function runSettle(tx, auth, turnsTx, args, ts) {
   if (opRow.owner_generation !== scope.ownerGeneration || opRow.host_generation !== scope.hostGeneration) throw eFence();
   const clar = buildClar(cRow);
   const attempt = buildAttempt(opRow);
-  if (ts < attempt.createdAtMs) throw eInv("clock");
-  if (ts < clar.createdAtMs) throw eInv("clock");
   const ref = readRef(tx, scope.projectId, scope.conversationId, conv);
   // Exact terminal retry
   if (AT_TERM.has(opRow.state)) {
@@ -695,6 +694,10 @@ function runSettle(tx, auth, turnsTx, args, ts) {
     }
     return { attempt, clarification: clar };
   }
+  if (ts < attempt.createdAtMs) throw eInv("clock");
+  if (ts < clar.createdAtMs) throw eInv("clock");
+  const lastHist = attempt.history[attempt.history.length - 1];
+  if (ts < lastHist.atMs) throw eInv("clock");
   // written: requires dispatching, route codex_request|claude_request
   if (inp.outcome === "written") {
     if (opRow.state !== "dispatching") throw eAS();
