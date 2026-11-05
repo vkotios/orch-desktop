@@ -266,3 +266,23 @@ The host, native mailbox and UI still use memory; application durability remains
 unqualified until those consumers are implemented and tested.
 
 See [SESSION_TURN_OUTCOMES](contracts/SESSION_TURN_OUTCOMES.md).
+
+## Body-backed normalized message deltas
+
+S3c source `ccb8a30` adds normalized body-backed message deltas with typed
+event receipts and a bounded last-message-turn watermark. Native turn identity
+comes from the observed journal; stable part IDs preserve retries without
+content deduplication. New bodies, events and snapshots commit together, while
+existing snapshot references and outcome state survive without per-delta growth.
+All 727 package tests, including 31 message-delta tests, type checking
+and web build pass. Installed/bundled Node process probes with synthetic owner proofs
+verify Codex/Claude
+correlation, Unicode and empty bodies, terminal historical retries, 65 deltas
+without reference growth, a competing sequence winner with losing-body rollback,
+ABORT/IGNORE body/event/snapshot faults, proof denial, outer observation rollback
+and dangling-body rejection without repair. Controller and complete GLM 5.3
+high/Vibe review leave no unresolved High or Medium issue.
+The native mailbox, host polling and UI still use memory. Full transcript
+projection and application restart durability are not yet qualified.
+
+See [SESSION_MESSAGE_DELTAS](contracts/SESSION_MESSAGE_DELTAS.md).

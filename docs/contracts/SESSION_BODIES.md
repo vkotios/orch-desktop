@@ -67,3 +67,7 @@ in [SESSION_CLARIFICATIONS](SESSION_CLARIFICATIONS.md). Turn body references are
 available in [SESSION_TURNS](SESSION_TURNS.md).
 Conflict resolution, host coupling,
 UI history and restart/import/export recovery remain separate work.
+
+S3c composes immutable delta bodies, typed events and a metadata watermark; see
+[SESSION_MESSAGE_DELTAS](SESSION_MESSAGE_DELTAS.md). This remains an internal
+consumer; actual native producers and the UI are not wired to body storage.

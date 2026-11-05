@@ -86,3 +86,7 @@ The native mailbox, host polling and UI remain unwired to this store.
 S3b now composes terminal journal settlement and typed outcome publication in one
 transaction; see [SESSION_TURN_OUTCOMES](SESSION_TURN_OUTCOMES.md). Other typed
 projections and actual host polling remain pending.
+
+S3c body-backed normalized text deltas are available through
+[SESSION_MESSAGE_DELTAS](SESSION_MESSAGE_DELTAS.md). Event bodies are read
+separately; the metadata watermark is not a full transcript projection.

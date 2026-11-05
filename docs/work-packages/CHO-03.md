@@ -198,6 +198,7 @@ actual process/pending-map qualification remain unwired.
 - S2 standalone storage APIs are implemented; consumer prerequisites and S3–S5 remain open.
 - S3a — Complete locally: durable event/cursor/snapshot storage (`b104e83`), no mailbox replacement yet.
 - S3b — Complete locally: atomic terminal-outcome/event coupling (`6d06a67`), no host/UI consumer yet.
+- S3c — Complete locally: typed body-backed message deltas (`ccb8a30`); native/UI consumers remain pending.
 - S3 remaining — Host/native event coupling: durable event+projection+outcome commits,
   replay-by-cursor poll replacing destructive drain, ownership checks, paged
   resync, interrupt-and-close with persisted Stop intent, visible
@@ -389,3 +390,40 @@ publishing a same-owner terminal journal without an existing outcome event.
 Process races and full rollback already have separate installed/bundled-runtime
 evidence. Keep the trusted-clock assumption and preserve/reserve snapshot space
 for the outcome namespace in future projection writers.
+
+## Body-backed message deltas — S3c
+
+S3c source `ccb8a30` adds normalized body-backed message deltas with typed
+event receipts and a bounded last-message-turn watermark. Native turn identity
+comes from the observed journal; stable part IDs preserve retries without
+content deduplication. New bodies, events and snapshots commit together, while
+existing snapshot references and outcome state survive without per-delta growth.
+All 727 package tests, including 31 message-delta tests, type checking
+and web build pass. Installed/bundled Node process probes with synthetic owner proofs
+verify Codex/Claude
+correlation, Unicode and empty bodies, terminal historical retries, 65 deltas
+without reference growth, a competing sequence winner with losing-body rollback,
+ABORT/IGNORE body/event/snapshot faults, proof denial, outer observation rollback
+and dangling-body rejection without repair. Controller and complete GLM 5.3
+high/Vibe review leave no unresolved High or Medium issue.
+The native mailbox, host polling and UI still use memory. Full transcript
+projection and application restart durability are not yet qualified.
+
+See [SESSION_MESSAGE_DELTAS](../contracts/SESSION_MESSAGE_DELTAS.md). Next: typed
+tool/permission facts and transcript/history reader projection, actual owner and
+access proof, host replay polling, visible storage errors and Stop/close coupling.
+Future writers preserve both metadata namespaces and reserve snapshot capacity.
+The future actor consumer must allocate stable part IDs once and verify native
+message-level correlation before append; this API does not observe provider
+frames or infer message completion. Do not equate acknowledgements with process
+termination or introduce execution replay.
+
+Before host/error-UI/recovery consumers: classify an observed-state journal
+missing its observed entry as `ERR_STORAGE` rather than `ERR_TURN_STATE`
+(both currently fail closed; public APIs cannot create that malformed row).
+Promote persistent cases for changed native-message identity on retry, retry
+after owner release, terminal admission with an already-existing body, missing
+chat and dispatching-without-observation. Broader typed-marker variants remain
+useful; direct process probes already cover null-marker retry and prior native
+fact corruption. Optional cleanup: unused local stamp/constants/helper return
+and repeated text/body validation, measured before high-volume host streaming.
