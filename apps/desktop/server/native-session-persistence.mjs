@@ -6,6 +6,9 @@
 // transactions. verifyOwnerEvidence is supplied by the host/native-chat owner.
 
 import { randomUUID } from "node:crypto";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { openSessionStore } from "./session-store.mjs";
 import { createSessionRecords } from "./session-records.mjs";
 import { createSessionBindings } from "./session-bindings.mjs";
@@ -15,6 +18,44 @@ import { createSessionToolFacts } from "./session-tool-facts.mjs";
 import { createSessionTurnOutcomes } from "./session-turn-outcomes.mjs";
 import { createSessionEvents } from "./session-events.mjs";
 import { createSessionBodies } from "./session-bodies.mjs";
+
+function defaultLivenessPath() {
+  if (typeof process.env.CHO_PRODUCER_LIVENESS === "string" && process.env.CHO_PRODUCER_LIVENESS.trim()) {
+    return path.resolve(process.env.CHO_PRODUCER_LIVENESS.trim());
+  }
+  return path.join(os.homedir(), ".cho-desktop", "producer-liveness.json");
+}
+
+function processIsAlive(pid) {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function readLivenessMap(filePath) {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) && parsed.entries
+      && typeof parsed.entries === "object" && !Array.isArray(parsed.entries)
+      ? { ...parsed.entries }
+      : {};
+  } catch (err) {
+    if (err && err.code === "ENOENT") return {};
+    throw err;
+  }
+}
+
+function writeLivenessMap(filePath, entries) {
+  const dir = path.dirname(filePath);
+  fs.mkdirSync(dir, { recursive: true });
+  const tmp = `${filePath}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify({ v: 1, entries }, null, 2), "utf8");
+  fs.renameSync(tmp, filePath);
+}
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -48,6 +89,9 @@ export function createNativeSessionPersistence(options) {
   if (typeof verifyOwnerEvidence !== "function") {
     throw new TypeError("createNativeSessionPersistence requires verifyOwnerEvidence");
   }
+  const livenessPath = typeof options.livenessPath === "string" && options.livenessPath.length > 0
+    ? options.livenessPath
+    : defaultLivenessPath();
 
   const store = openSessionStore({ databasePath });
   const records = createSessionRecords({ store, now });
@@ -139,18 +183,64 @@ export function createNativeSessionPersistence(options) {
       });
     }
 
-    // Reclaim a fence left held by a previous host process so reopen can write.
+    // Reclaim a held fence only with proof the prior owner process is dead,
+    // or release+reclaim when this same host process lost its in-memory meta.
     let fence = bindings.getProducer({ projectId, conversationId });
     if (fence?.state === "held") {
-      bindings.settleProducer({
-        projectId,
-        conversationId,
-        ownerToken: fence.ownerToken,
-        generation: fence.generation,
-        state: "dead",
-        evidence: { ...(evidence && typeof evidence === "object" ? evidence : {}), reason: "host-reclaim" },
-      });
-      fence = bindings.getProducer({ projectId, conversationId });
+      const entries = readLivenessMap(livenessPath);
+      const prior = entries[conversationId];
+      const priorPid = prior && Number.isSafeInteger(prior.pid) ? prior.pid : null;
+      const priorHost = prior && typeof prior.hostGeneration === "string" ? prior.hostGeneration : null;
+      const sameOwnerRecord =
+        prior
+        && prior.ownerToken === fence.ownerToken
+        && prior.generation === fence.generation;
+      if (
+        sameOwnerRecord
+        && priorHost === hostGeneration
+        && priorPid === process.pid
+      ) {
+        bindings.settleProducer({
+          projectId,
+          conversationId,
+          ownerToken: fence.ownerToken,
+          generation: fence.generation,
+          state: "released",
+          evidence,
+        });
+        delete entries[conversationId];
+        writeLivenessMap(livenessPath, entries);
+        fence = bindings.getProducer({ projectId, conversationId });
+      } else if (
+        sameOwnerRecord
+        && priorPid != null
+        && priorHost != null
+        && priorHost !== hostGeneration
+        && !processIsAlive(priorPid)
+      ) {
+        bindings.settleProducer({
+          projectId,
+          conversationId,
+          ownerToken: fence.ownerToken,
+          generation: fence.generation,
+          state: "dead",
+          evidence: {
+            ...(evidence && typeof evidence === "object" ? evidence : {}),
+            reason: "host-reclaim",
+            priorPid,
+            priorHostGeneration: priorHost,
+          },
+        });
+        delete entries[conversationId];
+        writeLivenessMap(livenessPath, entries);
+        fence = bindings.getProducer({ projectId, conversationId });
+      } else if (processIsAlive(priorPid) && priorHost !== hostGeneration) {
+        throw new Error("session producer fence is held by another live host");
+      } else if (fence.state === "held") {
+        throw new Error(
+          "session producer fence is still held and prior owner liveness cannot be proven; close the other CHO host or start a new chat",
+        );
+      }
     }
 
     const ownerToken = randomUUID();
@@ -162,6 +252,17 @@ export function createNativeSessionPersistence(options) {
       expectedGeneration,
       evidence,
     });
+
+    const entries = readLivenessMap(livenessPath);
+    entries[conversationId] = {
+      pid: process.pid,
+      hostGeneration,
+      ownerToken: claim.ownerToken,
+      generation: claim.generation,
+      projectId,
+      claimedAtMs: typeof now === "function" ? now() : Date.now(),
+    };
+    writeLivenessMap(livenessPath, entries);
 
     const tip = events.getSnapshot({ projectId, conversationId });
     const native = bindings.getNativeRef({ projectId, conversationId });
@@ -179,6 +280,39 @@ export function createNativeSessionPersistence(options) {
     };
     conversations.set(conversationId, meta);
     return meta;
+  }
+
+  function releaseProducer({ conversationId, evidence = null }) {
+    assertOpen();
+    const meta = conversations.get(conversationId);
+    if (!meta) return null;
+    const result = bindings.settleProducer({
+      projectId: meta.projectId,
+      conversationId,
+      ownerToken: meta.ownerToken,
+      generation: meta.ownerGeneration,
+      state: "released",
+      evidence,
+    });
+    const entries = readLivenessMap(livenessPath);
+    if (entries[conversationId]) {
+      delete entries[conversationId];
+      writeLivenessMap(livenessPath, entries);
+    }
+    conversations.delete(conversationId);
+    return result;
+  }
+
+  function releaseAllProducers({ evidence = null } = {}) {
+    assertOpen();
+    const ids = [...conversations.keys()];
+    for (const conversationId of ids) {
+      try {
+        releaseProducer({ conversationId, evidence });
+      } catch {
+        // Best-effort release during shutdown; caller still closes the store.
+      }
+    }
   }
 
   function readBodyText(projectId, conversationId, bodyId) {
@@ -735,6 +869,8 @@ export function createNativeSessionPersistence(options) {
     getSnapshot,
     listConversations,
     hydrateConversation,
+    releaseProducer,
+    releaseAllProducers,
     close,
   });
 }

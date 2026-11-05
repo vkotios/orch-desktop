@@ -19,8 +19,13 @@ function makePersistence() {
   const persistence = createNativeSessionPersistence({
     databasePath: join(dir, "sessions.sqlite3"),
     hostGeneration,
-    verifyOwnerEvidence: (facts) =>
-      facts?.evidence?.connectionId === connectionId,
+    livenessPath: join(dir, "liveness.json"),
+    verifyOwnerEvidence: (facts) => {
+      if (facts?.action === "dead" && facts?.evidence?.reason === "host-reclaim") {
+        return Number.isSafeInteger(facts.evidence.priorPid) && facts.evidence.priorPid !== process.pid;
+      }
+      return facts?.evidence?.connectionId === connectionId;
+    },
   });
   owned.push(persistence);
   return { persistence, hostGeneration, evidence: { connectionId }, dir };

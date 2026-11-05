@@ -42,7 +42,9 @@ describe("delegation associations", () => {
     expect(listed).toHaveLength(1);
     expect(listed[0].disposition).toBe("accepted");
 
-    expect(() => store.setDisposition(created.id, "discarded")).toThrow(/already accepted/);
+    const finished = store.setDisposition(created.id, "finished", "orch finish only");
+    expect(finished.disposition).toBe("finished");
+    expect(() => store.setDisposition(created.id, "discarded")).toThrow(/cannot move/);
 
     const reopened = createDelegationAssociations({ filePath });
     expect(reopened.get(created.id)?.runId).toBe("run-1");

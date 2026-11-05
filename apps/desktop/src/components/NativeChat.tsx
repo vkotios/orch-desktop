@@ -65,7 +65,13 @@ function sessionFromHydrated(p: Project, hydrated: NativeHydratedConversation): 
   };
 }
 
-type DraftMeta = { version: number; saveTimer?: ReturnType<typeof setTimeout> };
+type DraftMeta = {
+  version: number;
+  saveTimer?: ReturnType<typeof setTimeout>;
+  chain?: Promise<void>;
+  inflight?: boolean;
+  pendingText?: string | null;
+};
 
 export function NativeChat() {
   const [project, setProject] = useState<Project | null>(null);
@@ -168,6 +174,18 @@ export function NativeChat() {
     }
   }
 
+  function cancelDraftTimer(conversationId: string) {
+    const prior = draftMetaRef.current.get(conversationId);
+    if (prior?.saveTimer) clearTimeout(prior.saveTimer);
+    if (prior) {
+      draftMetaRef.current.set(conversationId, {
+        ...prior,
+        saveTimer: undefined,
+        pendingText: null,
+      });
+    }
+  }
+
   function queueDraftSave(conversationId: string, text: string) {
     const owner = ownerRef.current;
     if (!owner || lost) return;
@@ -175,26 +193,85 @@ export function NativeChat() {
     if (prior.saveTimer) clearTimeout(prior.saveTimer);
     const saveTimer = setTimeout(() => {
       const meta = draftMetaRef.current.get(conversationId) ?? { version: 0 };
-      const session = sessionsRef.current.find((s) => s.id === conversationId);
-      void nativeChatSaveDraft({
+      draftMetaRef.current.set(conversationId, { ...meta, saveTimer: undefined, pendingText: text });
+      const run = async () => {
+        let current = draftMetaRef.current.get(conversationId) ?? { version: 0 };
+        while (typeof current.pendingText === "string") {
+          const toSave = current.pendingText;
+          current = { ...current, pendingText: null, inflight: true };
+          draftMetaRef.current.set(conversationId, current);
+          const session = sessionsRef.current.find((s) => s.id === conversationId);
+          try {
+            const result = await nativeChatSaveDraft({
+              generation: owner.project.generation,
+              projectToken: owner.project.projectToken,
+              conversationId,
+              saveId: crypto.randomUUID(),
+              expectedVersion: current.version,
+              text: toSave,
+              modelRequested: session?.model ?? null,
+              effort: session?.effort ?? null,
+              role: session?.role ?? "implement",
+            });
+            const next = draftMetaRef.current.get(conversationId) ?? current;
+            if (result.saved && result.receipt && typeof result.receipt.version === "number") {
+              if (result.receipt.status === "conflict") {
+                draftMetaRef.current.set(conversationId, {
+                  ...next,
+                  version: result.receipt.version,
+                  inflight: false,
+                });
+                break;
+              }
+              draftMetaRef.current.set(conversationId, {
+                ...next,
+                version: result.receipt.version,
+                inflight: false,
+              });
+            } else {
+              draftMetaRef.current.set(conversationId, { ...next, inflight: false });
+            }
+          } catch {
+            const next = draftMetaRef.current.get(conversationId) ?? current;
+            draftMetaRef.current.set(conversationId, { ...next, inflight: false });
+            break;
+          }
+          current = draftMetaRef.current.get(conversationId) ?? { version: 0 };
+        }
+      };
+      const chain = (meta.chain ?? Promise.resolve()).then(run, run);
+      draftMetaRef.current.set(conversationId, {
+        ...(draftMetaRef.current.get(conversationId) ?? meta),
+        chain,
+      });
+    }, 400);
+    draftMetaRef.current.set(conversationId, { ...prior, saveTimer, pendingText: text });
+  }
+
+  async function flushDraftClear(conversationId: string, session: NativeUiSession, owner: PollOwner) {
+    cancelDraftTimer(conversationId);
+    const meta = draftMetaRef.current.get(conversationId) ?? { version: 0 };
+    const wait = meta.chain ?? Promise.resolve();
+    await wait.catch(() => {});
+    const latest = draftMetaRef.current.get(conversationId) ?? meta;
+    try {
+      const result = await nativeChatSaveDraft({
         generation: owner.project.generation,
         projectToken: owner.project.projectToken,
         conversationId,
         saveId: crypto.randomUUID(),
-        expectedVersion: meta.version,
-        text,
-        modelRequested: session?.model ?? null,
-        effort: session?.effort ?? null,
-        role: session?.role ?? "implement",
-      }).then((result) => {
-        if (result.saved && result.receipt && typeof result.receipt.version === "number") {
-          draftMetaRef.current.set(conversationId, { version: result.receipt.version });
-        }
-      }).catch(() => {
-        // Draft persistence is best-effort; composer remains usable.
+        expectedVersion: latest.version,
+        text: "",
+        modelRequested: session.model,
+        effort: session.effort ?? null,
+        role: session.role,
       });
-    }, 400);
-    draftMetaRef.current.set(conversationId, { ...prior, saveTimer });
+      if (result.saved && result.receipt && typeof result.receipt.version === "number") {
+        draftMetaRef.current.set(conversationId, { version: result.receipt.version });
+      }
+    } catch {
+      // Clearing the durable draft is best-effort around send.
+    }
   }
 
   useEffect(() => {
@@ -321,22 +398,7 @@ export function NativeChat() {
     const turnId = crypto.randomUUID();
     changeSessions((all) => all.map((s) => s.id === session.id ? beginNativeTurn(s, turnId, prompt) : s));
     setDraft(""); setError("");
-    draftMetaRef.current.set(session.id, { version: draftMetaRef.current.get(session.id)?.version ?? 0 });
-    void nativeChatSaveDraft({
-      generation: owner.project.generation,
-      projectToken: owner.project.projectToken,
-      conversationId: session.id,
-      saveId: crypto.randomUUID(),
-      expectedVersion: draftMetaRef.current.get(session.id)?.version ?? 0,
-      text: "",
-      modelRequested: session.model,
-      effort: session.effort ?? null,
-      role: session.role,
-    }).then((result) => {
-      if (result.saved && result.receipt && typeof result.receipt.version === "number") {
-        draftMetaRef.current.set(session.id, { version: result.receipt.version });
-      }
-    }).catch(() => {});
+    void flushDraftClear(session.id, session, owner);
     try {
       const response = await nativeChatSend({ generation: owner.project.generation, projectToken: owner.project.projectToken,
         sessionId: session.id, turnId, model: session.model, prompt, role: session.role, ...(session.effort ? { effort: session.effort } : {}) });

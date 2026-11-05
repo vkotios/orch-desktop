@@ -99,6 +99,8 @@ export function createNativeChatService(options) {
     durableProject: null,
     // Claude active-turn durable handle keyed while a turn is in flight.
     claudeDurable: null,
+    // True while close() is settling durable state before marking closed.
+    shuttingDown: false,
   };
 
   function ownerEvidence() {
@@ -115,18 +117,40 @@ export function createNativeChatService(options) {
   function verifyPersistenceOwner(facts) {
     // Bindings/turns pass { action, projectId, conversationId, ownerToken,
     // generation, evidence }. Live writes require the prepared connection id.
-    if (state.dead || state.closed) return false;
+    // Shutting down still authorizes settlement/release before state.closed.
+    if (state.dead) return false;
+    if (state.closed && !state.shuttingDown) return false;
     const prepared = state.prepared;
-    if (!prepared || (prepared.controller !== "codex" && prepared.controller !== "claude")) return false;
+    if (!prepared || (prepared.controller !== "codex" && prepared.controller !== "claude")) {
+      // During shutdown prepared may already be cleared; allow only proven dead
+      // reclaim against explicit prior-process evidence.
+      if (facts?.action === "dead" && evidenceProcessDead(facts?.evidence)) return true;
+      return false;
+    }
     const liveId = prepared.connectionId
       ?? (prepared.controller === "codex" ? prepared.client?.connectionId : null)
       ?? null;
     if (liveId === null) return false;
     const evidence = facts !== null && typeof facts === "object" ? facts.evidence : null;
     if (evidence === null || typeof evidence !== "object") return false;
-    // Reclaim a fence left held by a previous host generation.
-    if (facts.action === "dead" && evidence.reason === "host-reclaim") return true;
+    // Reclaim only with proof the previous owner process is gone.
+    if (facts.action === "dead" && evidence.reason === "host-reclaim") {
+      return evidenceProcessDead(evidence);
+    }
     return evidence.connectionId === liveId;
+  }
+  function evidenceProcessDead(evidence) {
+    if (evidence === null || typeof evidence !== "object") return false;
+    if (evidence.reason !== "host-reclaim") return false;
+    const priorPid = evidence.priorPid;
+    if (!Number.isSafeInteger(priorPid) || priorPid <= 0) return false;
+    if (priorPid === process.pid) return false;
+    try {
+      process.kill(priorPid, 0);
+      return false; // still alive
+    } catch {
+      return true; // ESRCH / access — treat as not a live owner we must defer to
+    }
   }
 
   // Optional CHO-03 dual-write. Unit tests omit databasePath; the host passes
@@ -146,6 +170,7 @@ export function createNativeChatService(options) {
     persistence = createNativeSessionPersistence({
       databasePath: persistenceDatabasePath,
       hostGeneration: generation,
+      livenessPath: `${persistenceDatabasePath}.liveness.json`,
       verifyOwnerEvidence: verifyPersistenceOwner,
     });
     return persistence;
@@ -784,6 +809,7 @@ export function createNativeChatService(options) {
         };
         state.sessions.set(args.sessionId, session);
       }
+      const resumeExisting = session.nativeBound === true && typeof session.nativeSessionUuid === "string";
       requestedNativeSessionId = session.nativeSessionUuid ?? crypto.randomUUID();
       if (session.nativeSessionUuid === null) {
         durablePersist("claude request session", () => {
@@ -794,6 +820,7 @@ export function createNativeChatService(options) {
           });
         });
         session.nativeSessionUuid = requestedNativeSessionId;
+        session.nativeBound = false;
         session.role = args.role;
         session.model = args.model;
       }
@@ -817,12 +844,14 @@ export function createNativeChatService(options) {
         observed: false,
         written: false,
       };
+      args = { ...args, resumeNativeSession: resumeExisting };
     }
     try {
       const ack = await state.prepared.actor.send({
         ...args,
         ...(requestedNativeSessionId ? { requestedNativeSessionId } : {}),
         ...(requestedNativeUserMessageId ? { requestedNativeUserMessageId } : {}),
+        ...(args.resumeNativeSession ? { resume: true } : {}),
       });
       if (durable && operationId && state.claudeDurable?.operationId === operationId) {
         // Idempotent backup if no stream events arrived before send resolved.
@@ -830,7 +859,10 @@ export function createNativeChatService(options) {
         if (typeof ack?.requestedNativeSessionId === "string") {
           state.claudeDurable.nativeSessionId = ack.requestedNativeSessionId;
           const session = state.sessions.get(args.sessionId);
-          if (session) session.nativeSessionUuid = ack.requestedNativeSessionId;
+          if (session) {
+            session.nativeSessionUuid = ack.requestedNativeSessionId;
+            session.nativeBound = true;
+          }
         }
       }
       return ack;
@@ -908,6 +940,7 @@ export function createNativeChatService(options) {
         const threadId = extractThreadId(threadResult);
         if (threadId === null) throw new Error("native thread/start did not return result.thread.id");
         session.nativeThreadId = threadId; session.role = args.role; session.model = args.model;
+        session.threadResumed = true;
         a.nativeThreadId = threadId;
         if (durable && a.operationId) {
           durablePersist("bind native thread", () => {
@@ -918,6 +951,27 @@ export function createNativeChatService(options) {
             });
           });
         }
+      } else if (session.threadResumed !== true) {
+        // Hydrated thread id must be reattached via thread/resume before turn/start.
+        try {
+          await client.request("thread/resume", {
+            threadId: session.nativeThreadId,
+            model: args.model,
+            modelProvider: "openai",
+            cwd: prepared.path,
+            sandbox: args.role === "review" ? "read-only" : "workspace-write",
+            approvalPolicy: "untrusted",
+            config: { mcp_servers: {} },
+          });
+        } catch (err) {
+          throw new Error(
+            `Could not resume the native Codex thread (${messageOf(err)}). Start a new chat to continue without that native context.`,
+          );
+        }
+        session.threadResumed = true;
+        session.role = args.role;
+        session.model = args.model;
+        a.nativeThreadId = session.nativeThreadId;
       }
       if (state.active !== a) throw new Error("native chat service is closed");
       turnRequested = true;
@@ -990,10 +1044,10 @@ export function createNativeChatService(options) {
     if (state.prepared.controller === "claude") state.prepared.actor.touch();
     else if (state.active !== null) renewLease(state.active);
     const live = mailbox.drain();
-    // Optional durable catch-up for one conversation. Live mailbox still carries
-    // approvals/clarifications and the hot path; durable events fill gaps.
-    // UI must skip durable message_delta while that turn is still busy (live owns
-    // the stream) so dual-write cannot double-append text.
+    // Optional durable catch-up for one conversation. Live mailbox is first and
+    // authoritative for in-flight turns; durable fills gaps only for turns that
+    // have no live events in this batch (avoids durable completion clearing the
+    // active turn before later live text is applied).
     if (
       persistence &&
       state.durableProject &&
@@ -1007,9 +1061,17 @@ export function createNativeChatService(options) {
         generation,
         limit: 32,
       });
+      const liveTurnIds = new Set(
+        live
+          .filter((event) => event && event.sessionId === args.conversationId && typeof event.turnId === "string")
+          .map((event) => event.turnId),
+      );
+      const durableOnly = catchup.events.filter(
+        (event) => typeof event.turnId !== "string" || !liveTurnIds.has(event.turnId),
+      );
       return {
         generation,
-        events: [...catchup.events, ...live],
+        events: [...live, ...durableOnly],
         cursor: catchup.cursor,
         tip: catchup.tip,
         hasMore: catchup.hasMore,
@@ -1201,13 +1263,9 @@ export function createNativeChatService(options) {
     try { await client.close(); } catch (err) { const error = err instanceof Error ? err : new Error(String(err)); notifyOwner(error); throw error; }
   }
 
-  function resetProject() {
-    if (state.closing) return state.closing;
+  function settleDurableForShutdown() {
     const context = state.context;
     const claudeAlreadyCancelling = context?.cancelled === true;
-    if (context) context.cancelled = true;
-    // Close must not leave an observed turn open in SQLite: settle as interrupted
-    // when stop was already requested, otherwise unknown (outcome could not be confirmed).
     if (state.active !== null) {
       const a = state.active;
       const outcome = a.cancelPending || a.interruptSent ? "interrupted" : "unknown";
@@ -1233,6 +1291,21 @@ export function createNativeChatService(options) {
       });
       state.claudeDurable = null;
     }
+    if (persistence && typeof persistence.releaseAllProducers === "function") {
+      try {
+        persistence.releaseAllProducers({ evidence: ownerEvidence() });
+      } catch {
+        // Best-effort fence release on shutdown.
+      }
+    }
+  }
+
+  function resetProject() {
+    if (state.closing) return state.closing;
+    const context = state.context;
+    if (context) context.cancelled = true;
+    // Settle while ownership still verifies (caller may set shuttingDown).
+    settleDurableForShutdown();
     clearClarifications(false);
     state.approvals.clear();
     state.sessions.clear();
@@ -1306,14 +1379,21 @@ export function createNativeChatService(options) {
         model: conversation.model,
         nativeThreadId: conversation.nativeThreadId,
         nativeSessionUuid: conversation.nativeSessionUuid,
+        // Hydrated native identities must be reattached (Codex resume / Claude --resume).
+        threadResumed: false,
+        nativeBound: conversation.nativeSessionUuid != null,
         admitted: new Set(),
       };
       state.sessions.set(conversation.conversationId, session);
     } else if (session !== undefined) {
       if (conversation.nativeThreadId) session.nativeThreadId = conversation.nativeThreadId;
-      if (conversation.nativeSessionUuid) session.nativeSessionUuid = conversation.nativeSessionUuid;
+      if (conversation.nativeSessionUuid) {
+        session.nativeSessionUuid = conversation.nativeSessionUuid;
+        session.nativeBound = true;
+      }
       if (conversation.role) session.role = conversation.role;
       if (conversation.model) session.model = conversation.model;
+      session.threadResumed = false;
     }
     return { generation, conversation };
   }
@@ -1338,11 +1418,18 @@ export function createNativeChatService(options) {
 
   async function close() {
     if (state.closed) { if (state.closing) await state.closing; return; }
-    state.closed = true;
-    await resetProject();
-    if (persistence && typeof persistence.close === "function") {
-      try { persistence.close(); } catch { /* store close is best-effort on shutdown */ }
-      persistence = null;
+    // Keep ownership verifiable through durable settle/release, then tear down
+    // native clients in finally even if settlement throws.
+    state.shuttingDown = true;
+    try {
+      await resetProject();
+    } finally {
+      state.closed = true;
+      state.shuttingDown = false;
+      if (persistence && typeof persistence.close === "function") {
+        try { persistence.close(); } catch { /* store close is best-effort on shutdown */ }
+        persistence = null;
+      }
     }
   }
 

@@ -44,13 +44,17 @@ describe("native conversation state", () => {
     expect(s.messages[1]).toMatchObject({ statusText: "stopping", isStreaming: true, tools: [] });
   });
 
-  it("ignores durable message deltas while the live turn is busy", () => {
+  it("ignores all durable events for the active turn while busy so live text is not dropped", () => {
     let s = applyNativeUiEvent(started(), event("message_delta", { text: "live" }), generation);
     s = applyNativeUiEvent(s, event("message_delta", { source: "durable", text: "dup" }), generation);
     expect(s.messages[1].text).toBe("live");
-    s = applyNativeUiEvent(s, event("turn_complete", { source: "durable", nativeOutcome: "completed" }), generation);
+    // Durable completion must not clear the turn while live text may still arrive.
+    expect(applyNativeUiEvent(s, event("turn_complete", { source: "durable", nativeOutcome: "completed" }), generation)).toBe(s);
+    expect(s.busy).toBe(true);
+    s = applyNativeUiEvent(s, event("message_delta", { text: " more" }), generation);
+    expect(s.messages[1].text).toBe("live more");
+    s = applyNativeUiEvent(s, event("turn_complete", { nativeOutcome: "completed" }), generation);
     expect(s.busy).toBe(false);
-    expect(s.messages[1].outcome).toBe("completed");
     const finished = s;
     expect(applyNativeUiEvent(finished, event("turn_complete", { source: "durable", nativeOutcome: "failed" }), generation)).toBe(finished);
   });

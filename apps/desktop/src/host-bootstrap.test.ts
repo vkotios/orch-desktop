@@ -116,11 +116,13 @@ describe("host bootstrap", () => {
     expect(res.map((f) => f.requestId)).toEqual(frames.map((_, i) => `r${i + 1}`));
     expect(h.errors()).not.toBe(""); // the malformed tail closes the host afterwards
   });
-  it("rejects unknown and mutating commands without dispatching", async () => {
+  it("rejects unknown and non-allowlisted commands without dispatching", async () => {
     let calls = 0;
     const dispatch: HostDispatch = async () => { calls += 1; return {}; };
     const h = makeHarness(dispatch);
-    for (const [id, cmd] of [["r1", "bogus_cmd"], ["r2", "orch_claim"], ["r3", "orch_cancel"]] as const) {
+    // orch_claim/orch_cancel are intentionally allowlisted for CHO-05; use commands
+    // that remain outside the host admission set.
+    for (const [id, cmd] of [["r1", "bogus_cmd"], ["r2", "set_workspace_trusted"], ["r3", "direct_chat_import"]] as const) {
       h.input.write(encodeFrame(req(id, GEN, cmd)));
     }
     h.input.write(encodeFrame(req("r4", GEN, "ping")));

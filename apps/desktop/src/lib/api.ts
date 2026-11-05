@@ -565,7 +565,12 @@ export function nativeChatSaveDraft(args: {
   modelRequested?: string | null;
   effort?: NativeEffort | null;
   role?: NativeRole;
-}): Promise<{ generation: string; saved: boolean; reason?: string; receipt?: { version: number } }> {
+}): Promise<{
+  generation: string;
+  saved: boolean;
+  reason?: string;
+  receipt?: { version: number; status?: string };
+}> {
   return invokeNative("native_chat_save_draft", { ...args });
 }
 

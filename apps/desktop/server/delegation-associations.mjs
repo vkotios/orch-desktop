@@ -8,7 +8,9 @@ import crypto from "node:crypto";
 
 const STAGES = new Set([
   "claimed",
+  "preparing_worktree",
   "worktree",
+  "launching",
   "running",
   "review",
   "recorded",
@@ -19,9 +21,19 @@ const STAGES = new Set([
 const DISPOSITIONS = new Set([
   "none",
   "accepted",
-  "integrated",
+  "finished",
   "discarded",
+  // Legacy alias retained for records written before finish/integration split.
+  "integrated",
 ]);
+
+const DISPOSITION_TRANSITIONS = {
+  none: new Set(["accepted", "finished", "discarded", "integrated"]),
+  accepted: new Set(["finished", "discarded", "integrated"]),
+  finished: new Set(),
+  discarded: new Set(),
+  integrated: new Set(),
+};
 
 function defaultPath() {
   if (typeof process.env.CHO_DELEGATION_DB === "string" && process.env.CHO_DELEGATION_DB.trim()) {
@@ -136,12 +148,18 @@ export function createDelegationAssociations({ filePath = defaultPath(), now = D
 
   function setDisposition(id, disposition, note = null) {
     if (!DISPOSITIONS.has(disposition) || disposition === "none") {
-      throw new Error("disposition must be accepted, integrated, or discarded");
+      throw new Error("disposition must be accepted, finished, or discarded");
     }
     const current = get(id);
     if (!current) throw new Error("delegation not found");
-    if (current.disposition !== "none" && current.disposition !== disposition) {
-      throw new Error(`delegation already ${current.disposition}`);
+    if (current.disposition === disposition) {
+      return current;
+    }
+    const allowed = DISPOSITION_TRANSITIONS[current.disposition] ?? new Set();
+    if (!allowed.has(disposition)) {
+      throw new Error(
+        `cannot move delegation from ${current.disposition} to ${disposition}`,
+      );
     }
     return upsert({
       ...current,
@@ -150,7 +168,7 @@ export function createDelegationAssociations({ filePath = defaultPath(), now = D
       stage:
         disposition === "accepted"
           ? "recorded"
-          : disposition === "integrated"
+          : disposition === "finished" || disposition === "integrated"
             ? "finished"
             : "discarded",
     });

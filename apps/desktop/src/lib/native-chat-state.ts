@@ -260,15 +260,14 @@ export function applyNativeUiEvent(
       !event.turnId || session.activeTurnId !== event.turnId) {
     return session;
   }
-  // Durable catch-up mirrors the dual-written stream. While the live turn is
-  // still busy, mailbox owns text deltas; applying durable copies would
-  // double-append. Durable terminal outcomes still apply if the turn is busy
-  // (missed live completion). Finished turns ignore durable terminals.
-  if (event.source === "durable") {
-    if ((event.kind === "message_delta" || event.kind === "tool_call") && session.busy) return session;
-    if ((event.kind === "turn_complete" || event.kind === "error" || event.nativeOutcome) && !session.busy) {
-      return session;
-    }
+  // Durable catch-up is recovery-only for the active turn. While busy, the live
+  // mailbox owns the whole turn (text, tools, and completion). Applying durable
+  // completion first would clear activeTurnId and drop later live text.
+  if (event.source === "durable" && session.busy && session.activeTurnId === event.turnId) {
+    return session;
+  }
+  if (event.source === "durable" && (event.kind === "turn_complete" || event.kind === "error" || event.nativeOutcome) && !session.busy) {
+    return session;
   }
   const turnId = event.turnId;
   const message = session.messages.find((m) => m.id === turnId && m.role === "assistant");

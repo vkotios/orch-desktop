@@ -255,6 +255,7 @@ export function createClaudeChatActor(options) {
     session.opening = Promise.resolve().then(() => {
       if (!valid()) throw new Error("Claude actor is closed");
       return openClient({ workspace, model: session.model, role: session.role, effort: session.effort, sessionId: session.nativeId,
+      resume: session.resume === true,
       onEvent: (raw) => { if (valid()) guarded(() => receiveEvent(session, raw)); },
       onRequest: (message) => { if (valid()) guarded(() => receiveRequest(session, message)); },
       onCancel: (id) => { if (valid()) guarded(() => receiveCancel(session, id)); },
@@ -287,11 +288,14 @@ export function createClaudeChatActor(options) {
       session = {
         nativeId: requestedSessionId ?? crypto.randomUUID(),
         model: args.model, role: args.role, effort: args.effort,
+        resume: args.resume === true,
         admitted: new Set(), client: null, opening: null, token: null, lateCleanupError: null,
       };
       sessions.set(args.sessionId, session);
     } else if (requestedSessionId !== undefined && session.nativeId !== requestedSessionId) {
       throw new Error("Claude requestedNativeSessionId does not match the existing session");
+    } else if (args.resume === true) {
+      session.resume = true;
     }
     if (session.admitted.has(args.turnId)) throw new Error("Claude turn already admitted");
     if (session.admitted.size >= 256) throw new Error("Claude turn history exhausted");

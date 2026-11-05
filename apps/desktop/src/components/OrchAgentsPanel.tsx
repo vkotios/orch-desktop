@@ -3,7 +3,7 @@ import { callHost, type OrchCommandResult, type OrchDashboardData } from "../lib
 import {
   acceptDelegation,
   discardDelegation,
-  integrateDelegation,
+  finishDelegation,
   listDelegations,
   startAgentTask,
   type DelegationAssociation,
@@ -15,6 +15,10 @@ type Props = {
   conversationId?: string | null;
   disabled?: boolean;
 };
+
+function isOpenDisposition(disposition: DelegationAssociation["disposition"]) {
+  return disposition === "none" || disposition === "accepted";
+}
 
 export function OrchAgentsPanel({ repoPath, conversationId = null, disabled = false }: Props) {
   const [open, setOpen] = useState(false);
@@ -29,6 +33,7 @@ export function OrchAgentsPanel({ repoPath, conversationId = null, disabled = fa
   const [error, setError] = useState("");
   const [dashboard, setDashboard] = useState<OrchDashboardData | null>(null);
   const [associations, setAssociations] = useState<DelegationAssociation[]>([]);
+  const [resumeId, setResumeId] = useState<string | null>(null);
 
   async function refresh() {
     try {
@@ -73,7 +78,7 @@ export function OrchAgentsPanel({ repoPath, conversationId = null, disabled = fa
     }
     setBusy(true);
     setError("");
-    setStatus("Starting delegated run…");
+    setStatus(resumeId ? "Resuming delegated run…" : "Starting delegated run…");
     try {
       const result = await startAgentTask(callHost, {
         repo: repoPath,
@@ -84,8 +89,10 @@ export function OrchAgentsPanel({ repoPath, conversationId = null, disabled = fa
         handoffText,
         effort,
         conversationId,
+        associationId: resumeId,
       });
       setStatus(result.text || "Agent started in an isolated worktree.");
+      setResumeId(result.association?.id ?? null);
       await refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -110,12 +117,12 @@ export function OrchAgentsPanel({ repoPath, conversationId = null, disabled = fa
     }
   }
 
-  async function onIntegrate(item: DelegationAssociation) {
+  async function onFinish(item: DelegationAssociation) {
     setBusy(true);
     setError("");
     try {
-      await integrateDelegation(callHost, item);
-      setStatus(`Integrated ${item.wp} via orch finish.`);
+      await finishDelegation(callHost, item);
+      setStatus(`Finished ${item.wp} in orch (not a Git merge).`);
       await refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -130,6 +137,7 @@ export function OrchAgentsPanel({ repoPath, conversationId = null, disabled = fa
     try {
       await discardDelegation(callHost, item);
       setStatus(`Discarded ${item.wp}/${item.slice}.`);
+      if (resumeId === item.id) setResumeId(null);
       await refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -155,7 +163,7 @@ export function OrchAgentsPanel({ repoPath, conversationId = null, disabled = fa
   }
 
   const runs = dashboard?.runs ?? [];
-  const openAssociations = associations.filter((item) => item.disposition === "none");
+  const openAssociations = associations.filter((item) => isOpenDisposition(item.disposition));
 
   return (
     <section className="native-orch-panel" aria-label="Delegated agents">
@@ -166,7 +174,7 @@ export function OrchAgentsPanel({ repoPath, conversationId = null, disabled = fa
         </button>
       </header>
       <p className="native-muted">
-        Claim, worktree, and run are recoverable. Accept records a decision only; integrate and discard are separate.
+        Claim, worktree, and run are recoverable. Accept records a decision only. Finish closes the orch claim; it does not merge Git. Integrate remains unavailable until an explicit Git path exists.
       </p>
       {(error || status) && (
         <div role={error ? "alert" : "status"} className={error ? "native-notice error" : "native-notice"}>
@@ -218,7 +226,7 @@ export function OrchAgentsPanel({ repoPath, conversationId = null, disabled = fa
           Refresh
         </button>
         <button type="button" className="native-primary" onClick={() => void spawn()} disabled={busy || disabled}>
-          Start agent
+          {resumeId ? "Resume agent" : "Start agent"}
         </button>
       </div>
       <div className="native-orch-runs" aria-live="polite">
@@ -229,7 +237,7 @@ export function OrchAgentsPanel({ repoPath, conversationId = null, disabled = fa
           <ul>
             {openAssociations.slice(0, 8).map((item) => (
               <li key={item.id}>
-                <strong>{item.wp}/{item.slice}</strong> · {item.stage}
+                <strong>{item.wp}/{item.slice}</strong> · {item.stage} · {item.disposition}
                 {item.runId ? ` · ${item.runId}` : ""}
                 {item.worktreePath ? (
                   <small className="native-muted" title={item.worktreePath}>
@@ -237,15 +245,39 @@ export function OrchAgentsPanel({ repoPath, conversationId = null, disabled = fa
                   </small>
                 ) : null}
                 <div className="native-orch-actions">
-                  <button type="button" className="native-button" disabled={busy} onClick={() => void onAccept(item)}>
-                    Accept
-                  </button>
                   <button
                     type="button"
                     className="native-button"
                     disabled={busy}
-                    title="Finish the work package in orch. Separate from Accept."
-                    onClick={() => void onIntegrate(item)}
+                    onClick={() => {
+                      setResumeId(item.id);
+                      setWp(item.wp);
+                      setSlice(item.slice);
+                      if (item.cli) setCli(item.cli);
+                      if (item.model) setModel(item.model);
+                    }}
+                  >
+                    Use for resume
+                  </button>
+                  {item.disposition === "none" ? (
+                    <button type="button" className="native-button" disabled={busy} onClick={() => void onAccept(item)}>
+                      Accept
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    className="native-button"
+                    disabled={busy}
+                    title="Closes the orch work package. Does not merge or cherry-pick."
+                    onClick={() => void onFinish(item)}
+                  >
+                    Finish
+                  </button>
+                  <button
+                    type="button"
+                    className="native-button"
+                    disabled
+                    title="Git integration is not available yet. Finish is coordinator closure only."
                   >
                     Integrate
                   </button>
