@@ -136,6 +136,16 @@ async fn native_chat_hydrate_conversation(app: AppHandle, args: Value) -> Result
 }
 
 #[tauri::command]
+async fn native_chat_save_draft(app: AppHandle, args: Value) -> Result<Value, String> {
+    route_with_args(&app, "native_chat_save_draft", args).await
+}
+
+#[tauri::command]
+async fn native_chat_get_draft(app: AppHandle, args: Value) -> Result<Value, String> {
+    route_with_args(&app, "native_chat_get_draft", args).await
+}
+
+#[tauri::command]
 async fn native_pick_project_folder(window: WebviewWindow) -> Result<Option<String>, String> {
     let (tx, rx) = tokio::sync::oneshot::channel();
     window
@@ -218,6 +228,8 @@ pub fn run() {
             native_chat_close,
             native_chat_list_conversations,
             native_chat_hydrate_conversation,
+            native_chat_save_draft,
+            native_chat_get_draft,
             native_pick_project_folder
         ])
         .build(tauri::generate_context!())

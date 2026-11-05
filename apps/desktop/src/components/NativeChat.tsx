@@ -4,12 +4,13 @@ import { FormattedMarkdown } from "./FormattedMarkdown";
 import { NativeClarificationCard } from "./NativeClarificationCard";
 import { OrchAgentsPanel } from "./OrchAgentsPanel";
 import {
-  nativeChatAnswer, nativeChatCancel, nativeChatClose, nativeChatHydrateConversation,
-  nativeChatListConversations, nativeChatPoll, nativeChatPrepareProject,
-  nativeChatRespond, nativeChatSend, nativeChatValidateProject, nativeChatPickProjectFolder,
+  nativeChatAnswer, nativeChatCancel, nativeChatClose, nativeChatGetDraft,
+  nativeChatHydrateConversation, nativeChatListConversations, nativeChatPoll,
+  nativeChatPrepareProject, nativeChatRespond, nativeChatSaveDraft, nativeChatSend,
+  nativeChatValidateProject, nativeChatPickProjectFolder,
   type NativeClarificationRequest, type NativeController, type NativeDecision, type NativeEffort,
-  type NativeHydratedConversation, type NativeModelInfo, type NativePrepareResult,
-  type NativeRole, type NativeValidateResult,
+  type NativeEventCursor, type NativeHydratedConversation, type NativeModelInfo,
+  type NativePrepareResult, type NativeRole, type NativeValidateResult,
 } from "../lib/api";
 import {
   applyNativeAck, applyNativeClarificationAck, applyNativePollBatch, beginNativeTurn, createNativeUiSession,
@@ -64,6 +65,8 @@ function sessionFromHydrated(p: Project, hydrated: NativeHydratedConversation): 
   };
 }
 
+type DraftMeta = { version: number; saveTimer?: ReturnType<typeof setTimeout> };
+
 export function NativeChat() {
   const [project, setProject] = useState<Project | null>(null);
   const [controller, setController] = useState<NativeController>("codex");
@@ -85,6 +88,10 @@ export function NativeChat() {
   const actionRef = useRef(false);
   const mounted = useRef(true);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const cursorRef = useRef<Map<string, NativeEventCursor | null>>(new Map());
+  const draftMetaRef = useRef<Map<string, DraftMeta>>(new Map());
+  const selectedRef = useRef(selected);
+  selectedRef.current = selected;
   const current = sessions.find((s) => s.id === selected);
   const projectController = project?.controller ?? controller;
   const controllerName = labelController(projectController);
@@ -121,20 +128,73 @@ export function NativeChat() {
     const poll = async () => {
       if (owner.stopped || ownerRef.current !== owner) return;
       try {
-        const batch = await nativeChatPoll(p.generation, p.projectToken);
+        const conversationId = selectedRef.current;
+        const cursor = conversationId ? (cursorRef.current.get(conversationId) ?? null) : null;
+        const batch = await nativeChatPoll(p.generation, p.projectToken, conversationId
+          ? { conversationId, cursor }
+          : undefined);
         if (owner.stopped || ownerRef.current !== owner) return;
         if (batch.generation !== p.generation) throw new Error("Host generation changed.");
+        if (batch.conversationId && batch.cursor) {
+          cursorRef.current.set(batch.conversationId, batch.cursor);
+        }
         changeSessions((all) => applyNativePollBatch(all, p.generation, batch.events).sessions);
         if (sessionsRef.current.some((s) => s.unavailable)) {
           hostLost(owner, "The native conversation outcome is unknown.");
           return;
         }
-        owner.timer = setTimeout(poll, NATIVE_POLL_INTERVAL_MS);
+        const delay = batch.hasMore ? 0 : NATIVE_POLL_INTERVAL_MS;
+        owner.timer = setTimeout(poll, delay);
       } catch (e) {
         hostLost(owner, `The native host connection was lost: ${errorText(e)}`);
       }
     };
     void poll();
+  }
+
+  async function loadDraftFor(conversationId: string, p: Project) {
+    try {
+      const result = await nativeChatGetDraft(p.generation, p.projectToken, conversationId);
+      if (!mounted.current || selectedRef.current !== conversationId) return;
+      if (result.draft && typeof result.draft.text === "string") {
+        setDraft(result.draft.text);
+        draftMetaRef.current.set(conversationId, { version: result.draft.version });
+      } else {
+        setDraft("");
+        draftMetaRef.current.set(conversationId, { version: 0 });
+      }
+    } catch {
+      if (mounted.current && selectedRef.current === conversationId) setDraft("");
+    }
+  }
+
+  function queueDraftSave(conversationId: string, text: string) {
+    const owner = ownerRef.current;
+    if (!owner || lost) return;
+    const prior = draftMetaRef.current.get(conversationId) ?? { version: 0 };
+    if (prior.saveTimer) clearTimeout(prior.saveTimer);
+    const saveTimer = setTimeout(() => {
+      const meta = draftMetaRef.current.get(conversationId) ?? { version: 0 };
+      const session = sessionsRef.current.find((s) => s.id === conversationId);
+      void nativeChatSaveDraft({
+        generation: owner.project.generation,
+        projectToken: owner.project.projectToken,
+        conversationId,
+        saveId: crypto.randomUUID(),
+        expectedVersion: meta.version,
+        text,
+        modelRequested: session?.model ?? null,
+        effort: session?.effort ?? null,
+        role: session?.role ?? "implement",
+      }).then((result) => {
+        if (result.saved && result.receipt && typeof result.receipt.version === "number") {
+          draftMetaRef.current.set(conversationId, { version: result.receipt.version });
+        }
+      }).catch(() => {
+        // Draft persistence is best-effort; composer remains usable.
+      });
+    }, 400);
+    draftMetaRef.current.set(conversationId, { ...prior, saveTimer });
   }
 
   useEffect(() => {
@@ -199,12 +259,18 @@ export function NativeChat() {
             .sort((a, b) => b.updatedAtMs - a.updatedAtMs)[0];
           if (latest) {
             const hydrated = await nativeChatHydrateConversation(p.generation, p.projectToken, latest.id);
-            if (hydrated.conversation) opened = sessionFromHydrated(p, hydrated.conversation);
+            if (hydrated.conversation) {
+              opened = sessionFromHydrated(p, hydrated.conversation);
+              if (hydrated.conversation.eventCursor) {
+                cursorRef.current.set(opened.id, hydrated.conversation.eventCursor);
+              }
+            }
           }
         } catch {
           // Fresh chat if durable history is unavailable; dual-write still proceeds on send.
         }
         changeSessions(() => [opened]); setSelected(opened.id);
+        void loadDraftFor(opened.id, p);
       }
       startPolling(p);
     } catch (err) { if (mounted.current) { setChallenge(null); setError(errorText(err)); } }
@@ -214,7 +280,18 @@ export function NativeChat() {
   function newChat() {
     if (!project || lost || sessionsRef.current.length >= NATIVE_MAX_SESSIONS) return;
     const session = createProjectChat(project);
-    changeSessions((all) => [...all, session]); setSelected(session.id); setDraft("");
+    changeSessions((all) => [...all, session]);
+    setSelected(session.id);
+    setDraft("");
+    cursorRef.current.set(session.id, null);
+    draftMetaRef.current.set(session.id, { version: 0 });
+  }
+
+  function selectChat(id: string) {
+    if (id === selected) return;
+    setSelected(id);
+    if (project) void loadDraftFor(id, project);
+    else setDraft("");
   }
 
   async function closeProject() {
@@ -244,6 +321,22 @@ export function NativeChat() {
     const turnId = crypto.randomUUID();
     changeSessions((all) => all.map((s) => s.id === session.id ? beginNativeTurn(s, turnId, prompt) : s));
     setDraft(""); setError("");
+    draftMetaRef.current.set(session.id, { version: draftMetaRef.current.get(session.id)?.version ?? 0 });
+    void nativeChatSaveDraft({
+      generation: owner.project.generation,
+      projectToken: owner.project.projectToken,
+      conversationId: session.id,
+      saveId: crypto.randomUUID(),
+      expectedVersion: draftMetaRef.current.get(session.id)?.version ?? 0,
+      text: "",
+      modelRequested: session.model,
+      effort: session.effort ?? null,
+      role: session.role,
+    }).then((result) => {
+      if (result.saved && result.receipt && typeof result.receipt.version === "number") {
+        draftMetaRef.current.set(session.id, { version: result.receipt.version });
+      }
+    }).catch(() => {});
     try {
       const response = await nativeChatSend({ generation: owner.project.generation, projectToken: owner.project.projectToken,
         sessionId: session.id, turnId, model: session.model, prompt, role: session.role, ...(session.effort ? { effort: session.effort } : {}) });
@@ -351,7 +444,7 @@ export function NativeChat() {
       {project && <><div className="native-project"><Icon name="folder" size={16} /><div><strong>{project.name}</strong><small title={project.path}>{project.path}</small></div></div>
         <button className="native-button" onClick={newChat} disabled={lost || !project.models.length || sessions.length >= NATIVE_MAX_SESSIONS}><Icon name="plus" size={15} /> New chat</button>
         <OrchAgentsPanel repoPath={project.path} disabled={lost || busy || Boolean(loading)} />
-        <nav aria-label="Chats" className="native-chat-list">{sessions.map((s) => <button key={s.id} className={s.id === selected ? "selected" : ""} onClick={() => { setSelected(s.id); setDraft(""); }}><Icon name="chat" size={15} /><span>{s.title}</span>{s.busy && <span aria-label="Working">·</span>}</button>)}</nav>
+        <nav aria-label="Chats" className="native-chat-list">{sessions.map((s) => <button key={s.id} className={s.id === selected ? "selected" : ""} onClick={() => selectChat(s.id)}><Icon name="chat" size={15} /><span>{s.title}</span>{s.busy && <span aria-label="Working">·</span>}</button>)}</nav>
         <button className="native-close-project" onClick={() => void closeProject()} disabled={busy || Boolean(loading) || lost}>Close project</button></>}
     </aside>
     <main className="native-main">
@@ -364,7 +457,7 @@ export function NativeChat() {
           {projectController === "claude" && current.role === "review" && <p className="native-hint">Review mode limits Claude to read tools.</p>}
           <div className="native-messages" aria-live="polite">{current.messages.length === 0 && <div className="native-welcome"><h1>What would you like to work on?</h1><p>Ask {controllerName} about this project or describe a change.</p></div>}{current.messages.map((m) => <article className={`native-message ${m.role}`} key={m.id}><div className="native-message-label">{m.role === "user" ? "You" : controllerName}</div>{m.text ? <FormattedMarkdown text={m.text} /> : m.isStreaming ? <span className="native-muted">Starting…</span> : null}{m.tools.map((t) => <div className="native-tool" key={t.id}>{t.title} · {t.status}</div>)}{m.statusText && <p className="native-muted">{m.statusText}</p>}{m.outcome && <p className={m.isError ? "native-outcome error" : "native-outcome"}>{m.outcome}{m.outcomeNote ? `: ${m.outcomeNote}` : ""}</p>}{current.clarifications.filter((r) => r.turnId === m.id).map((r) => <NativeClarificationCard key={r.clarificationId} request={r} disabled={lost || current.cancelling || current.unavailable} onAnswer={(answers) => void answerClarification(r, answers)} />)}</article>)}<div ref={bottomRef} /></div>
           <div className="native-approvals">{current.approvals.map((a) => <section className="native-approval" key={a.approvalId} aria-label="Approval request"><strong>{a.approvalType === "command" ? "Command approval" : a.approvalType === "file" ? "File change approval" : "Tool approval"}</strong><pre>{a.text}</pre><div>{a.decisions.length ? a.decisions.map((d) => <button key={d} className="native-button" disabled={pendingDecisions.includes(a.approvalId) || current.cancelling || lost} onClick={() => void decide(a.approvalId, d)}>{d === "accept" ? "Accept" : d === "decline" ? "Decline" : "Cancel"}</button>) : <span>No supported decisions are available.</span>}</div></section>)}</div>
-          <div className="native-composer"><label className="sr-only" htmlFor="native-prompt">Message {controllerName}</label><textarea id="native-prompt" value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={composerKey} placeholder={`Message ${controllerName}…`} disabled={lost || current.unavailable} rows={3} /><div className="native-composer-actions"><span>Enter to send · Shift+Enter for a new line</span>{current.busy ? <button className="native-button" onClick={() => void stop()} disabled={current.cancelling || lost}><Icon name="stop" size={14} />{current.cancelling ? "Stopping…" : "Stop"}</button> : <button className="native-primary" onClick={() => void send()} disabled={!draft.trim() || draft.length > 65536 || busy || lost || !current.model}><Icon name="arrow" size={15} /> Send</button>}</div></div></>}
+          <div className="native-composer"><label className="sr-only" htmlFor="native-prompt">Message {controllerName}</label><textarea id="native-prompt" value={draft} onChange={(e) => { const text = e.target.value; setDraft(text); if (current) queueDraftSave(current.id, text); }} onKeyDown={composerKey} placeholder={`Message ${controllerName}…`} disabled={lost || current.unavailable} rows={3} /><div className="native-composer-actions"><span>Enter to send · Shift+Enter for a new line</span>{current.busy ? <button className="native-button" onClick={() => void stop()} disabled={current.cancelling || lost}><Icon name="stop" size={14} />{current.cancelling ? "Stopping…" : "Stop"}</button> : <button className="native-primary" onClick={() => void send()} disabled={!draft.trim() || draft.length > 65536 || busy || lost || !current.model}><Icon name="arrow" size={15} /> Send</button>}</div></div></>}
       </div>
     </main>
     {challenge && <Dialog title="Trust this project?" subtitle={`${labelController(challenge.controller ?? "codex")} may read or change files according to the access you choose.`} onClose={() => { if (!loading) setChallenge(null); }}><p>Confirm this project directory:</p><p className="native-confirm-path">{challenge.path}</p><div className="native-dialog-actions"><button className="native-button" disabled={Boolean(loading)} onClick={() => setChallenge(null)}>Cancel</button><button className="native-primary" disabled={Boolean(loading)} onClick={() => void prepare()}>Trust and continue</button></div></Dialog>}

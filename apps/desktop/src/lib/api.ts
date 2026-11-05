@@ -328,6 +328,8 @@ export type NativeSendAck = NativeCodexSendAck | NativeClaudeSendAck;
  */
 export interface NativePollEvent {
   generation: string;
+  /** Durable catch-up events are tagged so the UI can avoid double-appending live streams. */
+  source?: "durable" | "live";
   kind:
     | "message_delta"
     | "tool_call"
@@ -365,9 +367,26 @@ export interface NativePollEvent {
   message?: string;
 }
 
+export interface NativeEventCursor {
+  instanceId: string;
+  conversationId: string;
+  seq: number;
+}
+
 export interface NativePollResult {
   generation: string;
   events: NativePollEvent[];
+  cursor?: NativeEventCursor | null;
+  tip?: number;
+  hasMore?: boolean;
+  conversationId?: string;
+}
+
+export interface NativeDraftRecord {
+  conversationId: string;
+  text: string;
+  version: number;
+  updatedAtMs: number;
 }
 
 /** Fixed native transport: `invoke(command, { args: payload })` only. */
@@ -425,10 +444,13 @@ export function nativeChatSend(args: NativeSendArgs): Promise<NativeSendAck> {
 export function nativeChatPoll(
   generation: string,
   projectToken: string,
+  opts?: { conversationId?: string; cursor?: NativeEventCursor | null },
 ): Promise<NativePollResult> {
   return invokeNative<NativePollResult>("native_chat_poll", {
     generation,
     projectToken,
+    ...(opts?.conversationId ? { conversationId: opts.conversationId } : {}),
+    ...(opts && "cursor" in opts ? { cursor: opts.cursor ?? null } : {}),
   });
 }
 
@@ -509,6 +531,7 @@ export interface NativeHydratedConversation {
   nativeSessionUuid: string | null;
   messages: NativeHydratedMessage[];
   eventTip: number;
+  eventCursor?: NativeEventCursor | null;
   hasMoreEvents: boolean;
 }
 
@@ -525,6 +548,32 @@ export function nativeChatHydrateConversation(
   conversationId: string,
 ): Promise<{ generation: string; conversation: NativeHydratedConversation | null }> {
   return invokeNative("native_chat_hydrate_conversation", {
+    generation,
+    projectToken,
+    conversationId,
+  });
+}
+
+export function nativeChatSaveDraft(args: {
+  generation: string;
+  projectToken: string;
+  conversationId: string;
+  saveId: string;
+  expectedVersion: number;
+  text: string;
+  modelRequested?: string | null;
+  effort?: NativeEffort | null;
+  role?: NativeRole;
+}): Promise<{ generation: string; saved: boolean; reason?: string; receipt?: { version: number } }> {
+  return invokeNative("native_chat_save_draft", { ...args });
+}
+
+export function nativeChatGetDraft(
+  generation: string,
+  projectToken: string,
+  conversationId: string,
+): Promise<{ generation: string; draft: NativeDraftRecord | null }> {
+  return invokeNative("native_chat_get_draft", {
     generation,
     projectToken,
     conversationId,

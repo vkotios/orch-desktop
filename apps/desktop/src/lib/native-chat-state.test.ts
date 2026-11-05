@@ -44,6 +44,17 @@ describe("native conversation state", () => {
     expect(s.messages[1]).toMatchObject({ statusText: "stopping", isStreaming: true, tools: [] });
   });
 
+  it("ignores durable message deltas while the live turn is busy", () => {
+    let s = applyNativeUiEvent(started(), event("message_delta", { text: "live" }), generation);
+    s = applyNativeUiEvent(s, event("message_delta", { source: "durable", text: "dup" }), generation);
+    expect(s.messages[1].text).toBe("live");
+    s = applyNativeUiEvent(s, event("turn_complete", { source: "durable", nativeOutcome: "completed" }), generation);
+    expect(s.busy).toBe(false);
+    expect(s.messages[1].outcome).toBe("completed");
+    const finished = s;
+    expect(applyNativeUiEvent(finished, event("turn_complete", { source: "durable", nativeOutcome: "failed" }), generation)).toBe(finished);
+  });
+
   it("binds an early delta and rejects a conflicting acknowledgement", () => {
     let s = applyNativeUiEvent(started(), event("message_delta", { text: "early", nativeThreadId: "thread", nativeTurnId: "turn" }), generation);
     expect(s.threadStarted).toBe(true);

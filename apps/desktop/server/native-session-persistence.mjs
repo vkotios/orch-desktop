@@ -226,6 +226,7 @@ export function createNativeSessionPersistence(options) {
     let cursor = null;
     let tip = 0;
     let hasMoreEvents = false;
+    let eventCursor = null;
     for (let pageGuard = 0; pageGuard < 64; pageGuard += 1) {
       const page = events.pollEvents({
         projectId,
@@ -234,6 +235,7 @@ export function createNativeSessionPersistence(options) {
         limit: 32,
       });
       tip = page.tip ?? tip;
+      eventCursor = page.cursor ?? eventCursor;
       for (const event of page.events) {
         if (event.kind === "message_delta") {
           const turnId = event.payload?.turnId;
@@ -307,6 +309,7 @@ export function createNativeSessionPersistence(options) {
       nativeSessionUuid: native?.nativeSessionUuid ?? null,
       messages,
       eventTip: tip,
+      eventCursor,
       hasMoreEvents,
     };
   }
@@ -513,9 +516,107 @@ export function createNativeSessionPersistence(options) {
     return result;
   }
 
-  function pollHistory({ projectId, conversationId, cursor = null, limit = 64 }) {
+  function pollHistory({ projectId, conversationId, cursor = null, limit = 32 }) {
     assertOpen();
-    return events.pollEvents({ projectId, conversationId, cursor, limit });
+    return events.pollEvents({
+      projectId,
+      conversationId,
+      cursor,
+      limit: Math.min(32, Math.max(1, limit ?? 32)),
+    });
+  }
+
+  /**
+   * Expand durable events into native-chat poll shape (text inlined from bodies).
+   * Live mailbox events remain authoritative for approvals/clarifications.
+   */
+  function pollUiCatchup({
+    projectId,
+    conversationId,
+    cursor = null,
+    generation,
+    limit = 32,
+  }) {
+    assertOpen();
+    requireUuid(projectId, "projectId");
+    requireUuid(conversationId, "conversationId");
+    const conversation = records.getConversation({ projectId, conversationId });
+    if (!conversation) {
+      return { events: [], cursor: null, tip: 0, hasMore: false };
+    }
+    const page = events.pollEvents({
+      projectId,
+      conversationId,
+      cursor,
+      limit: Math.min(32, Math.max(1, limit ?? 32)),
+    });
+    const harness = conversation.controller;
+    const uiEvents = [];
+    for (const event of page.events) {
+      if (event.kind === "message_delta") {
+        const turnId = event.payload?.turnId;
+        const bodyId = event.payload?.bodyRef?.id ?? event.payload?.partId;
+        const nativeMessageId = event.payload?.nativeMessageId;
+        if (typeof turnId !== "string" || typeof bodyId !== "string") continue;
+        uiEvents.push({
+          kind: "message_delta",
+          source: "durable",
+          generation,
+          harness,
+          controller: harness,
+          sessionId: conversationId,
+          turnId,
+          text: readBodyText(projectId, conversationId, bodyId),
+          ...(typeof nativeMessageId === "string" ? { nativeItemId: nativeMessageId, nativeMessageId } : {}),
+        });
+      } else if (event.kind === "turn_outcome") {
+        const turnId = event.payload?.turnId;
+        const outcome = event.payload?.outcome;
+        if (typeof turnId !== "string" || typeof outcome !== "string") continue;
+        uiEvents.push({
+          kind: outcome === "failed" || outcome === "unknown" ? "error" : "turn_complete",
+          source: "durable",
+          generation,
+          harness,
+          controller: harness,
+          sessionId: conversationId,
+          turnId,
+          nativeOutcome: outcome,
+          ...(outcome === "failed" || outcome === "unknown"
+            ? { text: `Turn ended: ${outcome}` }
+            : {}),
+        });
+      }
+    }
+    return {
+      events: uiEvents,
+      cursor: page.cursor ?? null,
+      tip: page.tip ?? 0,
+      hasMore: page.hasMore === true,
+    };
+  }
+
+  function getDraft({ projectId, conversationId }) {
+    assertOpen();
+    return records.getDraft({ projectId, conversationId });
+  }
+
+  function saveDraft({ projectId, conversationId, saveId, expectedVersion, text }) {
+    assertOpen();
+    requireUuid(projectId, "projectId");
+    requireUuid(conversationId, "conversationId");
+    requireUuid(saveId, "saveId");
+    if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 0) {
+      throw new Error("saveDraft requires a nonnegative expectedVersion");
+    }
+    if (typeof text !== "string") throw new Error("saveDraft requires text");
+    return records.saveDraft({
+      projectId,
+      conversationId,
+      saveId,
+      expectedVersion,
+      text,
+    });
   }
 
   function getSnapshot({ projectId, conversationId }) {
@@ -544,6 +645,9 @@ export function createNativeSessionPersistence(options) {
     appendDelta,
     settleTurn,
     pollHistory,
+    pollUiCatchup,
+    getDraft,
+    saveDraft,
     getSnapshot,
     listConversations,
     hydrateConversation,

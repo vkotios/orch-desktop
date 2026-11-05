@@ -33,6 +33,8 @@ const NATIVE_COMMANDS = new Set([
   'native_chat_close',
   'native_chat_list_conversations',
   'native_chat_hydrate_conversation',
+  'native_chat_save_draft',
+  'native_chat_get_draft',
 ]);
 const ORCH_COMMANDS = [
   'orch_dashboard',

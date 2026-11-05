@@ -936,7 +936,87 @@ export function createNativeChatService(options) {
     requireToken(args);
     if (state.prepared.controller === "claude") state.prepared.actor.touch();
     else if (state.active !== null) renewLease(state.active);
-    return { generation, events: mailbox.drain() };
+    const live = mailbox.drain();
+    // Optional durable catch-up for one conversation. Live mailbox still carries
+    // approvals/clarifications and the hot path; durable events fill gaps.
+    // UI must skip durable message_delta while that turn is still busy (live owns
+    // the stream) so dual-write cannot double-append text.
+    if (
+      persistence &&
+      state.durableProject &&
+      isValidId(args?.conversationId) &&
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(args.conversationId)
+    ) {
+      const catchup = persistence.pollUiCatchup({
+        projectId: state.durableProject.id,
+        conversationId: args.conversationId,
+        cursor: args.cursor ?? null,
+        generation,
+        limit: 32,
+      });
+      return {
+        generation,
+        events: [...catchup.events, ...live],
+        cursor: catchup.cursor,
+        tip: catchup.tip,
+        hasMore: catchup.hasMore,
+        conversationId: args.conversationId,
+      };
+    }
+    return { generation, events: live, cursor: null, tip: 0, hasMore: false };
+  }
+
+  async function cmdSaveDraft(args) {
+    requireLive();
+    requireGeneration(args);
+    requireToken(args);
+    if (!isValidId(args.conversationId)) throw new Error("native_chat_save_draft requires conversationId");
+    if (typeof args.text !== "string") throw new Error("native_chat_save_draft requires text");
+    if (typeof args.saveId !== "string" || !/^[0-9a-f-]{36}$/.test(args.saveId)) {
+      throw new Error("native_chat_save_draft requires a UUID saveId");
+    }
+    if (!Number.isSafeInteger(args.expectedVersion) || args.expectedVersion < 0) {
+      throw new Error("native_chat_save_draft requires expectedVersion");
+    }
+    const durable = await ensurePersistence();
+    if (!durable || !state.durableProject) {
+      return { generation, saved: false, reason: "no_store" };
+    }
+    durable.ensureConversation({
+      projectId: state.durableProject.id,
+      conversationId: args.conversationId,
+      controller: state.prepared.controller,
+      modelRequested: args.modelRequested ?? null,
+      effort: args.effort ?? null,
+      role: args.role ?? "implement",
+      evidence: ownerEvidence(),
+    });
+    const receipt = durable.saveDraft({
+      projectId: state.durableProject.id,
+      conversationId: args.conversationId,
+      saveId: args.saveId,
+      expectedVersion: args.expectedVersion,
+      text: args.text,
+    });
+    return { generation, saved: true, receipt };
+  }
+
+  async function cmdGetDraft(args) {
+    requireLive();
+    requireGeneration(args);
+    requireToken(args);
+    if (!isValidId(args.conversationId)) throw new Error("native_chat_get_draft requires conversationId");
+    const durable = await ensurePersistence();
+    if (!durable || !state.durableProject) return { generation, draft: null };
+    try {
+      const draft = durable.getDraft({
+        projectId: state.durableProject.id,
+        conversationId: args.conversationId,
+      });
+      return { generation, draft };
+    } catch {
+      return { generation, draft: null };
+    }
   }
 
   async function cmdRespond(args) {
@@ -1071,8 +1151,35 @@ export function createNativeChatService(options) {
   function resetProject() {
     if (state.closing) return state.closing;
     const context = state.context;
+    const claudeAlreadyCancelling = context?.cancelled === true;
     if (context) context.cancelled = true;
-    if (state.active !== null) { const a = state.active; state.active = null; clearTimer(a); clearLease(a); }
+    // Close must not leave an observed turn open in SQLite: settle as interrupted
+    // when stop was already requested, otherwise unknown (outcome could not be confirmed).
+    if (state.active !== null) {
+      const a = state.active;
+      const outcome = a.cancelPending || a.interruptSent ? "interrupted" : "unknown";
+      durableSettle(a, outcome);
+      state.active = null;
+      clearTimer(a);
+      clearLease(a);
+    }
+    if (state.claudeDurable && state.claudeDurable.operationId && state.claudeDurable.observed) {
+      const handle = state.claudeDurable;
+      const outcome = claudeAlreadyCancelling ? "interrupted" : "unknown";
+      durablePersist("claude close settle", () => {
+        persistence.settleTurn({
+          conversationId: handle.sessionId,
+          turnId: handle.turnId,
+          operationId: handle.operationId,
+          outcome,
+          nativeIdentity: handle.nativeSessionId,
+          nativeTurnId: null,
+          claudeInputUuid: handle.claudeInputUuid,
+          evidence: ownerEvidence(),
+        });
+      });
+      state.claudeDurable = null;
+    }
     clearClarifications(false);
     state.approvals.clear();
     state.sessions.clear();
@@ -1170,6 +1277,8 @@ export function createNativeChatService(options) {
       case "native_chat_close": return cmdClose(args);
       case "native_chat_list_conversations": return cmdListConversations(args);
       case "native_chat_hydrate_conversation": return cmdHydrateConversation(args);
+      case "native_chat_save_draft": return cmdSaveDraft(args);
+      case "native_chat_get_draft": return cmdGetDraft(args);
       default: throw new Error(`unknown command ${String(command)}`);
     }
   }
