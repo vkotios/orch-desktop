@@ -199,14 +199,14 @@ actual process/pending-map qualification remain unwired.
 - S3a — Complete locally: durable event/cursor/snapshot storage (`b104e83`), no mailbox replacement yet.
 - S3b — Complete locally: atomic terminal-outcome/event coupling (`6d06a67`), no host/UI consumer yet.
 - S3c — Complete locally: typed body-backed message deltas (`ccb8a30`); native/UI consumers remain pending.
-- S3d — Prepared (not a gate on first text resume): typed tool lifecycle facts
+- S3d — Complete locally (storage-only): typed tool lifecycle facts
   ([SESSION_TOOL_FACTS](../contracts/SESSION_TOOL_FACTS.md),
-  [handoff](CHO-03-s3d-tool-lifecycle-handoff.md)). Not implemented yet.
+  [handoff](CHO-03-s3d-tool-lifecycle-handoff.md)). Mailbox/host/UI still memory.
 - Host dual-write (Codex + Claude) — `native-session-persistence.mjs` journals
   turns/deltas/outcomes; list/hydrate RPCs + NativeChat resume; fence reclaim
   on reopen. Mailbox still live for poll. Missing: durable poll cursor,
-  Stop/close coupling, S3d tools.
-- S3 remaining — After hydrate: permission/transcript + S3d tool fidelity,
+  Stop/close coupling, S3d actor wiring.
+- S3 remaining — After hydrate: permission/transcript + S3d tool consumer wiring,
   replay-by-cursor poll replacing destructive drain, ownership checks, paged
   resync, interrupt-and-close with persisted Stop intent, visible
   disk-full/corruption handling. Reuse audit: [REUSE_AUDIT](../REUSE_AUDIT.md).
@@ -416,11 +416,11 @@ high/Vibe review leave no unresolved High or Medium issue.
 The native mailbox, host polling and UI still use memory. Full transcript
 projection and application restart durability are not yet qualified.
 
-See [SESSION_MESSAGE_DELTAS](../contracts/SESSION_MESSAGE_DELTAS.md). Next: S3d
-[tool lifecycle facts](../contracts/SESSION_TOOL_FACTS.md)
-([handoff](CHO-03-s3d-tool-lifecycle-handoff.md)), then permission/transcript
-projections, actual owner/access proof, host replay polling, visible storage
-errors and Stop/close coupling.
+See [SESSION_MESSAGE_DELTAS](../contracts/SESSION_MESSAGE_DELTAS.md). S3d
+[tool lifecycle facts](../contracts/SESSION_TOOL_FACTS.md) are locally verified
+storage-only below; next consumer work is permission/transcript projections,
+actual owner/access proof, host replay polling, visible storage errors and
+Stop/close coupling.
 Future writers preserve both metadata namespaces and reserve snapshot capacity.
 The future actor consumer must allocate stable part IDs once and verify native
 message-level correlation before append; this API does not observe provider
@@ -436,3 +436,41 @@ chat and dispatching-without-observation. Broader typed-marker variants remain
 useful; direct process probes already cover null-marker retry and prior native
 fact corruption. Optional cleanup: unused local stamp/constants/helper return
 and repeated text/body validation, measured before high-volume host streaming.
+
+## Typed tool lifecycle facts — S3d
+
+S3d is locally verified storage-only: `createSessionToolFacts` appends typed
+`tool_fact` events with optional body-backed summaries (`factId` body id when
+`summaryText` is provided, including empty string) and a bounded
+`lastToolTurn` watermark parallel to `lastMessageTurn`. Phase/status coupling
+enforces `started`↔`inProgress` and `completed`↔`completed|failed|declined`.
+`lastMessageTurn`, `lastTurnOutcome`, other own state keys and existing
+`bodyRefs` are preserved; tool summary bodies do not accumulate into snapshot
+`bodyRefs`. Fresh append requires a nonterminal observed turn, paired handoff
+and live owner proof; exact retries are idempotent; missing bodies on
+body-backed retries reject as `ERR_STORAGE` without repair.
+
+Focused suite: 28 Vitest cases covering Codex-like command started/completed,
+Claude-like facts with `nativeMessageId`, declined/failed, optional/empty
+summary, Unicode, exact retry after terminal, competing sequence winner with
+losing-body rollback, ABORT/IGNORE body/event/snapshot faults, proof denial,
+outer observation rollback, dangling-body rejection, watermark preservation and
+phase/status mismatch rejection. Synthetic owner proofs only.
+
+Actor wiring (2026-11-05): Codex `deliverMapped` and Claude stream dual-write
+call `appendToolFact`; hydrate rebuilds tool steps; durable poll emits
+`tool_call` catch-up events (skipped while the live turn is busy). Approvals
+and clarifications remain mailbox-only.
+
+See [SESSION_TOOL_FACTS](../contracts/SESSION_TOOL_FACTS.md). Next: permission/
+transcript projections, visible storage errors, and release qualification of
+tool chrome across restart. Future writers preserve message/tool/outcome
+namespaces and reserve snapshot capacity. Stable `factId` is allocated once per
+accepted dual-write event; this API does not observe raw provider frames, grant
+execution rights or auto-approve permissions.
+
+Inherited consumer holds (same family as S3c): classify an observed-state
+journal missing its observed entry as `ERR_STORAGE` rather than
+`ERR_TURN_STATE` when strengthening corrupt-row paths; promote relevant
+negative tests. Do not equate acknowledgements with process stop or introduce
+execution replay.

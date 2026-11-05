@@ -286,3 +286,16 @@ The native mailbox, host polling and UI still use memory. Full transcript
 projection and application restart durability are not yet qualified.
 
 See [SESSION_MESSAGE_DELTAS](contracts/SESSION_MESSAGE_DELTAS.md).
+
+## Typed tool lifecycle facts
+
+S3d is locally verified storage-only: typed `tool_fact` events with optional
+body-backed summaries and a bounded `lastToolTurn` watermark. Phase/status
+coupling, idempotent retries, and preservation of `lastMessageTurn` /
+`lastTurnOutcome` / existing `bodyRefs` match
+[SESSION_TOOL_FACTS](contracts/SESSION_TOOL_FACTS.md). Focused suite: 28 Vitest
+cases (Codex/Claude facts, declined/failed, optional/empty/Unicode summaries,
+terminal historical retries, competing sequence rollback, ABORT/IGNORE faults,
+proof denial, outer observation rollback, dangling-body rejection, watermark
+preservation, phase/status mismatch). Synthetic owner proofs only. The native
+mailbox, host polling and UI still use memory; actor wiring remains pending.

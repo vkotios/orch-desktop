@@ -11,6 +11,7 @@ import { createSessionRecords } from "./session-records.mjs";
 import { createSessionBindings } from "./session-bindings.mjs";
 import { createSessionTurns } from "./session-turns.mjs";
 import { createSessionMessageDeltas } from "./session-message-deltas.mjs";
+import { createSessionToolFacts } from "./session-tool-facts.mjs";
 import { createSessionTurnOutcomes } from "./session-turn-outcomes.mjs";
 import { createSessionEvents } from "./session-events.mjs";
 import { createSessionBodies } from "./session-bodies.mjs";
@@ -53,6 +54,7 @@ export function createNativeSessionPersistence(options) {
   const bindings = createSessionBindings({ store, verifyOwnerEvidence, now });
   const turns = createSessionTurns({ store, verifyOwnerEvidence, now });
   const deltas = createSessionMessageDeltas({ store, verifyOwnerEvidence, now });
+  const toolFacts = createSessionToolFacts({ store, verifyOwnerEvidence, now });
   const outcomes = createSessionTurnOutcomes({ store, verifyOwnerEvidence, now });
   const events = createSessionEvents({ store, verifyOwnerEvidence, now });
   const bodies = createSessionBodies({ store, verifyOwnerEvidence, now });
@@ -221,6 +223,8 @@ export function createNativeSessionPersistence(options) {
     const turnSummaries = turns.listTurns({ projectId, conversationId, limit: 100, offset: 0 });
     /** @type {Map<string, string[]>} */
     const deltaTexts = new Map();
+    /** @type {Map<string, Array<{ id: string, title: string, status: string }>>} */
+    const toolsByTurn = new Map();
     /** @type {Map<string, string>} */
     const outcomesByTurn = new Map();
     let cursor = null;
@@ -245,6 +249,25 @@ export function createNativeSessionPersistence(options) {
           const list = deltaTexts.get(turnId) ?? [];
           list.push(text);
           deltaTexts.set(turnId, list);
+        } else if (event.kind === "tool_fact") {
+          const turnId = event.payload?.turnId;
+          const toolCallId = event.payload?.toolCallId;
+          const toolTitle = event.payload?.toolTitle;
+          const toolStatus = event.payload?.toolStatus;
+          if (
+            typeof turnId !== "string" ||
+            typeof toolCallId !== "string" ||
+            typeof toolTitle !== "string" ||
+            typeof toolStatus !== "string"
+          ) {
+            continue;
+          }
+          const list = toolsByTurn.get(turnId) ?? [];
+          const existing = list.findIndex((t) => t.id === toolCallId);
+          const step = { id: toolCallId, title: toolTitle, status: toolStatus };
+          if (existing === -1) list.push(step);
+          else list[existing] = step;
+          toolsByTurn.set(turnId, list);
         } else if (event.kind === "turn_outcome") {
           const turnId = event.payload?.turnId;
           const outcome = event.payload?.outcome;
@@ -288,7 +311,7 @@ export function createNativeSessionPersistence(options) {
         id: turn.id,
         role: "assistant",
         text: assistantText,
-        tools: [],
+        tools: toolsByTurn.get(turn.id) ?? [],
         outcome,
         isError: outcome === "failed" || outcome === "unknown",
         isStreaming: !terminal && turn.intentState !== "completed",
@@ -477,6 +500,41 @@ export function createNativeSessionPersistence(options) {
     return result;
   }
 
+  function appendToolFact({
+    conversationId,
+    turnId,
+    operationId,
+    factId,
+    toolCallId,
+    phase,
+    toolTitle,
+    toolStatus,
+    summaryText,
+    nativeMessageId = null,
+    evidence = null,
+  }) {
+    assertOpen();
+    const meta = conversations.get(conversationId);
+    if (!meta) throw new Error(`unknown conversation ${conversationId}`);
+    requireUuid(factId, "factId");
+    const args = {
+      ...scopeOf(meta, evidence),
+      turnId,
+      operationId,
+      factId,
+      toolCallId,
+      phase,
+      toolTitle,
+      toolStatus,
+      expectedSeq: meta.expectedSeq,
+    };
+    if (summaryText !== undefined) args.summaryText = summaryText;
+    if (nativeMessageId != null) args.nativeMessageId = nativeMessageId;
+    const result = toolFacts.appendToolFact(args);
+    meta.expectedSeq = result.cursor.seq;
+    return result;
+  }
+
   function settleTurn({
     conversationId,
     turnId,
@@ -586,6 +644,31 @@ export function createNativeSessionPersistence(options) {
             ? { text: `Turn ended: ${outcome}` }
             : {}),
         });
+      } else if (event.kind === "tool_fact") {
+        const turnId = event.payload?.turnId;
+        const toolCallId = event.payload?.toolCallId;
+        const toolTitle = event.payload?.toolTitle;
+        const toolStatus = event.payload?.toolStatus;
+        if (
+          typeof turnId !== "string" ||
+          typeof toolCallId !== "string" ||
+          typeof toolTitle !== "string" ||
+          typeof toolStatus !== "string"
+        ) {
+          continue;
+        }
+        uiEvents.push({
+          kind: "tool_call",
+          source: "durable",
+          generation,
+          harness,
+          controller: harness,
+          sessionId: conversationId,
+          turnId,
+          toolCallId,
+          toolTitle,
+          toolStatus,
+        });
       }
     }
     return {
@@ -643,6 +726,7 @@ export function createNativeSessionPersistence(options) {
     afterTurnWritten,
     afterObserved,
     appendDelta,
+    appendToolFact,
     settleTurn,
     pollHistory,
     pollUiCatchup,

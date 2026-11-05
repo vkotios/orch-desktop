@@ -307,6 +307,39 @@ export function createNativeChatService(options) {
       });
     });
   }
+  function normalizeToolStatus(raw) {
+    if (raw === "inProgress" || raw === "in_progress" || raw === "running") return "inProgress";
+    if (raw === "completed") return "completed";
+    if (raw === "failed") return "failed";
+    if (raw === "declined") return "declined";
+    return null;
+  }
+  function persistMappedToolFact(conversationId, turnId, operationId, item) {
+    if (!persistence) return;
+    const toolCallId = item.toolCallId;
+    if (typeof toolCallId !== "string" || toolCallId.length === 0) return;
+    const status = normalizeToolStatus(item.toolStatus) ??
+      (item.kind === "tool_result" ? "completed" : "inProgress");
+    const phase = status === "inProgress" ? "started" : "completed";
+    const toolTitle = typeof item.toolTitle === "string" && item.toolTitle.length > 0
+      ? item.toolTitle
+      : "tool";
+    const args = {
+      conversationId,
+      turnId,
+      operationId,
+      factId: crypto.randomUUID(),
+      toolCallId,
+      phase,
+      toolTitle,
+      toolStatus: status,
+      evidence: ownerEvidence(),
+    };
+    if (typeof item.text === "string") args.summaryText = item.text;
+    if (typeof item.nativeMessageId === "string") args.nativeMessageId = item.nativeMessageId;
+    else if (typeof item.nativeItemId === "string") args.nativeMessageId = item.nativeItemId;
+    persistence.appendToolFact(args);
+  }
   function deliverMapped(a, mapped) {
     let terminal = false;
     let terminalOutcome = null;
@@ -328,6 +361,17 @@ export function createNativeChatService(options) {
             text: typeof item.text === "string" ? item.text : "",
             evidence: ownerEvidence(),
           });
+        });
+      }
+      if (
+        (item.kind === "tool_call" || item.kind === "tool_result") &&
+        persistence &&
+        a.operationId &&
+        a.observed &&
+        typeof item.toolCallId === "string"
+      ) {
+        durablePersist("tool fact", () => {
+          persistMappedToolFact(a.sessionId, a.turnId, a.operationId, item);
         });
       }
       enqueue({ ...item, generation, turnId: a.turnId });
@@ -668,6 +712,15 @@ export function createNativeChatService(options) {
           text: typeof event.text === "string" ? event.text : "",
           evidence: ownerEvidence(),
         });
+      });
+    }
+    if (
+      (event.kind === "tool_call" || event.kind === "tool_result") &&
+      handle.observed &&
+      typeof event.toolCallId === "string"
+    ) {
+      durablePersist("claude tool fact", () => {
+        persistMappedToolFact(handle.sessionId, handle.turnId, handle.operationId, event);
       });
     }
     if (typeof event.nativeOutcome === "string" && TERMINAL.has(event.nativeOutcome) && handle.observed) {

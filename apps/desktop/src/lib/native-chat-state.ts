@@ -265,7 +265,7 @@ export function applyNativeUiEvent(
   // double-append. Durable terminal outcomes still apply if the turn is busy
   // (missed live completion). Finished turns ignore durable terminals.
   if (event.source === "durable") {
-    if (event.kind === "message_delta" && session.busy) return session;
+    if ((event.kind === "message_delta" || event.kind === "tool_call") && session.busy) return session;
     if ((event.kind === "turn_complete" || event.kind === "error" || event.nativeOutcome) && !session.busy) {
       return session;
     }
