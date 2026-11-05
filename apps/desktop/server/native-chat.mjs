@@ -114,7 +114,10 @@ export function createNativeChatService(options) {
     const liveId = prepared.connectionId ?? prepared.client?.connectionId ?? null;
     if (liveId === null) return false;
     const evidence = facts !== null && typeof facts === "object" ? facts.evidence : null;
-    return evidence !== null && typeof evidence === "object" && evidence.connectionId === liveId;
+    if (evidence === null || typeof evidence !== "object") return false;
+    // Reclaim a fence left held by a previous host generation.
+    if (facts.action === "dead" && evidence.reason === "host-reclaim") return true;
+    return evidence.connectionId === liveId;
   }
 
   // Optional CHO-03 dual-write. Unit tests omit databasePath; the host passes
@@ -894,6 +897,62 @@ export function createNativeChatService(options) {
     return { generation, closed: true };
   }
 
+  async function cmdListConversations(args) {
+    requireLive();
+    requireGeneration(args);
+    requireToken(args);
+    const durable = await ensurePersistence();
+    if (!durable || !state.durableProject) return { generation, conversations: [] };
+    const conversations = durable.listConversations({ projectId: state.durableProject.id });
+    return {
+      generation,
+      projectId: state.durableProject.id,
+      conversations: conversations.map((c) => ({
+        id: c.id,
+        controller: c.controller,
+        title: c.title,
+        modelRequested: c.modelRequested,
+        role: c.role,
+        effort: c.effort,
+        updatedAtMs: c.updatedAtMs,
+      })),
+    };
+  }
+
+  async function cmdHydrateConversation(args) {
+    requireLive();
+    requireGeneration(args);
+    requireToken(args);
+    if (!isValidId(args.conversationId)) throw new Error("native_chat_hydrate_conversation requires conversationId");
+    const durable = await ensurePersistence();
+    if (!durable || !state.durableProject) return { generation, conversation: null };
+    const conversation = durable.hydrateConversation({
+      projectId: state.durableProject.id,
+      conversationId: args.conversationId,
+    });
+    if (conversation === null) return { generation, conversation: null };
+    // Register the session so later sends reuse the durable conversation id
+    // and keep the native thread id for Codex continuation.
+    if (conversation.controller === "codex") {
+      let session = state.sessions.get(conversation.conversationId);
+      if (session === undefined && state.sessions.size < MAX_SESSIONS) {
+        session = {
+          sessionId: conversation.conversationId,
+          role: conversation.role ?? "implement",
+          model: conversation.model,
+          nativeThreadId: conversation.nativeThreadId,
+          admitted: new Set(),
+        };
+        state.sessions.set(conversation.conversationId, session);
+      } else if (session !== undefined && conversation.nativeThreadId) {
+        session.nativeThreadId = conversation.nativeThreadId;
+        if (conversation.role) session.role = conversation.role;
+        if (conversation.model) session.model = conversation.model;
+      }
+    }
+    return { generation, conversation };
+  }
+
   async function handle(command, args) {
     switch (command) {
       case "native_chat_validate_project": return cmdValidateProject(args);
@@ -904,6 +963,8 @@ export function createNativeChatService(options) {
       case "native_chat_answer": return cmdQueueAnswer(args);
       case "direct_chat_cancel": return cmdCancel(args);
       case "native_chat_close": return cmdClose(args);
+      case "native_chat_list_conversations": return cmdListConversations(args);
+      case "native_chat_hydrate_conversation": return cmdHydrateConversation(args);
       default: throw new Error(`unknown command ${String(command)}`);
     }
   }

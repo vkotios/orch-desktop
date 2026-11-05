@@ -1270,6 +1270,23 @@ describe("Codex durable dual-write", () => {
     expect(polled.events.some((e) => e.kind === "turn_complete")).toBe(true);
     expect(fatals).toHaveLength(0);
 
+    const listed = await svc.handle("native_chat_list_conversations", {
+      generation,
+      projectToken: validated.projectToken,
+    });
+    expect(listed.conversations.some((c) => c.id === sessionId)).toBe(true);
+    const hydrated = await svc.handle("native_chat_hydrate_conversation", {
+      generation,
+      projectToken: validated.projectToken,
+      conversationId: sessionId,
+    });
+    expect(hydrated.conversation?.messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ role: "user", text: "persist me" }),
+        expect.objectContaining({ role: "assistant", text: "hello durable", outcome: "completed" }),
+      ]),
+    );
+
     await svc.close();
 
     const store = openSessionStore({ databasePath: dbPath });

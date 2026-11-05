@@ -31,6 +31,8 @@ const NATIVE_COMMANDS = new Set([
   'native_chat_answer',
   'direct_chat_cancel',
   'native_chat_close',
+  'native_chat_list_conversations',
+  'native_chat_hydrate_conversation',
 ]);
 const ALLOWED_COMMANDS = new Set(['ping', 'shutdown', 'discover_harnesses', 'orch_dashboard', ...NATIVE_COMMANDS]);
 // Bound for closing the lazily created native-chat service on shutdown, EOF,

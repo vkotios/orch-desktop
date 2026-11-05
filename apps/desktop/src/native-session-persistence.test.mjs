@@ -136,4 +136,52 @@ describe("native-session-persistence Codex dual-write", () => {
     expect(second.id).toBe(first.id);
     expect(second.name).toBe(first.name);
   });
+
+  it("hydrates user and assistant messages from durable deltas", () => {
+    const { persistence, evidence } = makePersistence();
+    const project = persistence.ensureProject({
+      pathCanonical: "C:/synthetic/hydrate",
+      name: "hydrate",
+    });
+    const conversationId = randomUUID();
+    const turnId = randomUUID();
+    const operationId = randomUUID();
+    persistence.ensureConversation({
+      projectId: project.id,
+      conversationId,
+      controller: "codex",
+      modelRequested: "gpt-test",
+      effort: "low",
+      role: "implement",
+      evidence,
+    });
+    persistence.beginTurn({
+      conversationId, turnId, operationId, prompt: "ping", effort: "low", evidence,
+    });
+    persistence.afterThreadStart({ conversationId, nativeThreadId: "thread-h", evidence });
+    persistence.afterTurnWritten({ conversationId, turnId, operationId, evidence });
+    persistence.afterObserved({
+      conversationId, turnId, operationId,
+      nativeIdentity: "thread-h", nativeTurnId: "native-h", evidence,
+    });
+    persistence.appendDelta({
+      conversationId, turnId, operationId, partId: randomUUID(),
+      nativeMessageId: "i1", text: "pong", evidence,
+    });
+    persistence.settleTurn({
+      conversationId, turnId, operationId, outcome: "completed",
+      nativeIdentity: "thread-h", nativeTurnId: "native-h", evidence,
+    });
+
+    const hydrated = persistence.hydrateConversation({
+      projectId: project.id,
+      conversationId,
+    });
+    expect(hydrated).not.toBeNull();
+    expect(hydrated?.nativeThreadId).toBe("thread-h");
+    expect(hydrated?.messages).toEqual([
+      expect.objectContaining({ role: "user", text: "ping" }),
+      expect.objectContaining({ role: "assistant", text: "pong", outcome: "completed" }),
+    ]);
+  });
 });

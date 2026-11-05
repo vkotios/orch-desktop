@@ -466,3 +466,58 @@ export function nativeChatClose(
     projectToken,
   });
 }
+
+export interface NativeConversationSummary {
+  id: string;
+  controller: NativeController;
+  title: string;
+  modelRequested: string | null;
+  role: NativeRole | null;
+  effort: NativeEffort | null;
+  updatedAtMs: number;
+}
+
+export interface NativeHydratedMessage {
+  id: string;
+  role: "user" | "assistant";
+  text: string;
+  tools: Array<{ id: string; title: string; status: string }>;
+  outcome?: NativeOutcomeKind;
+  isError?: boolean;
+  isStreaming: boolean;
+  nativeTurnId?: string;
+}
+
+export interface NativeHydratedConversation {
+  conversationId: string;
+  projectId: string;
+  controller: NativeController;
+  model: string | null;
+  role: NativeRole | null;
+  effort: NativeEffort | null;
+  title: string;
+  nativeThreadId: string | null;
+  nativeSessionUuid: string | null;
+  messages: NativeHydratedMessage[];
+  eventTip: number;
+  hasMoreEvents: boolean;
+}
+
+export function nativeChatListConversations(
+  generation: string,
+  projectToken: string,
+): Promise<{ generation: string; projectId?: string; conversations: NativeConversationSummary[] }> {
+  return invokeNative("native_chat_list_conversations", { generation, projectToken });
+}
+
+export function nativeChatHydrateConversation(
+  generation: string,
+  projectToken: string,
+  conversationId: string,
+): Promise<{ generation: string; conversation: NativeHydratedConversation | null }> {
+  return invokeNative("native_chat_hydrate_conversation", {
+    generation,
+    projectToken,
+    conversationId,
+  });
+}

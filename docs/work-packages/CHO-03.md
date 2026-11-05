@@ -203,9 +203,9 @@ actual process/pending-map qualification remain unwired.
   ([SESSION_TOOL_FACTS](../contracts/SESSION_TOOL_FACTS.md),
   [handoff](CHO-03-s3d-tool-lifecycle-handoff.md)). Not implemented yet.
 - Host dual-write (Codex) — Locally started: `native-session-persistence.mjs`
-  journals turns/deltas/outcomes from `native-chat.mjs`; mailbox still live.
-  Missing: history hydrate RPC/UI, durable poll cursor, Claude path, fence
-  reclaim after host restart, Stop/close coupling.
+  journals turns/deltas/outcomes; list/hydrate RPCs + NativeChat resume of
+  latest conversation; fence reclaim on reopen. Mailbox still live for poll.
+  Missing: durable poll cursor, Claude path, Stop/close coupling, S3d tools.
 - S3 remaining — After hydrate: permission/transcript + S3d tool fidelity,
   replay-by-cursor poll replacing destructive drain, ownership checks, paged
   resync, interrupt-and-close with persisted Stop intent, visible

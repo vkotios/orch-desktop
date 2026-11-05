@@ -3,9 +3,11 @@ import { Dialog, Icon } from "./Chrome";
 import { FormattedMarkdown } from "./FormattedMarkdown";
 import { NativeClarificationCard } from "./NativeClarificationCard";
 import {
-  nativeChatAnswer, nativeChatCancel, nativeChatClose, nativeChatPoll, nativeChatPrepareProject,
+  nativeChatAnswer, nativeChatCancel, nativeChatClose, nativeChatHydrateConversation,
+  nativeChatListConversations, nativeChatPoll, nativeChatPrepareProject,
   nativeChatRespond, nativeChatSend, nativeChatValidateProject, nativeChatPickProjectFolder,
-  type NativeClarificationRequest, type NativeController, type NativeDecision, type NativeEffort, type NativeModelInfo, type NativePrepareResult,
+  type NativeClarificationRequest, type NativeController, type NativeDecision, type NativeEffort,
+  type NativeHydratedConversation, type NativeModelInfo, type NativePrepareResult,
   type NativeRole, type NativeValidateResult,
 } from "../lib/api";
 import {
@@ -29,6 +31,36 @@ function createProjectChat(p: Project): NativeUiSession {
   const available = modelEfforts(controller, p.models.find((m) => m.id === model));
   const effort = available.includes("medium") ? "medium" : available[0];
   return { ...createNativeUiSession(crypto.randomUUID(), model, "implement", effort, controller), effort };
+}
+
+function sessionFromHydrated(p: Project, hydrated: NativeHydratedConversation): NativeUiSession {
+  const controller = hydrated.controller ?? p.controller ?? "codex";
+  const model = hydrated.model && p.models.some((m) => m.id === hydrated.model)
+    ? hydrated.model
+    : defaultNativeModel(p.models);
+  const role = hydrated.role === "review" ? "review" : "implement";
+  const available = modelEfforts(controller, p.models.find((m) => m.id === model));
+  const effort = (hydrated.effort && available.includes(hydrated.effort as NativeEffort)
+    ? hydrated.effort
+    : available.includes("medium") ? "medium" : available[0]) as NativeEffort | undefined;
+  const base = createNativeUiSession(hydrated.conversationId, model, role, effort, controller);
+  return {
+    ...base,
+    title: hydrated.title || base.title,
+    messages: hydrated.messages.map((m) => ({
+      id: m.id,
+      role: m.role,
+      text: m.text,
+      tools: m.tools ?? [],
+      outcome: m.outcome,
+      isError: m.isError,
+      isStreaming: false,
+      nativeTurnId: m.nativeTurnId,
+    })),
+    nativeThreadId: hydrated.nativeThreadId,
+    nativeSessionId: hydrated.nativeSessionUuid,
+    threadStarted: hydrated.nativeThreadId !== null || hydrated.nativeSessionUuid !== null,
+  };
 }
 
 export function NativeChat() {
@@ -158,8 +190,20 @@ export function NativeChat() {
       setChallenge(null); setProject(p); setLost(false);
       if (!p.models.length) setError(`${labelController(selectedController)} returned no available models. Close the project and try again.`);
       else {
-        const first = createProjectChat(p);
-        changeSessions(() => [first]); setSelected(first.id);
+        let opened = createProjectChat(p);
+        try {
+          const listed = await nativeChatListConversations(p.generation, p.projectToken);
+          const latest = [...listed.conversations]
+            .filter((c) => (c.controller ?? "codex") === selectedController)
+            .sort((a, b) => b.updatedAtMs - a.updatedAtMs)[0];
+          if (latest) {
+            const hydrated = await nativeChatHydrateConversation(p.generation, p.projectToken, latest.id);
+            if (hydrated.conversation) opened = sessionFromHydrated(p, hydrated.conversation);
+          }
+        } catch {
+          // Fresh chat if durable history is unavailable; dual-write still proceeds on send.
+        }
+        changeSessions(() => [opened]); setSelected(opened.id);
       }
       startPolling(p);
     } catch (err) { if (mounted.current) { setChallenge(null); setError(errorText(err)); } }
