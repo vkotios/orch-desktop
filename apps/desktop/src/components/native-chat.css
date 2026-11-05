@@ -67,4 +67,12 @@
 .native-clarification-status { align-self: center; color: var(--muted); font-size: 13px; }
 .native-clarification-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 4px; }
 .native-dialog-actions { justify-content: flex-end; margin-top: 20px; }
+.native-orch-panel { display: grid; gap: 10px; padding: 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--raised); }
+.native-orch-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.native-orch-form { display: grid; gap: 8px; }
+.native-orch-form label { display: grid; gap: 4px; font-size: 12px; color: var(--secondary); }
+.native-orch-form input, .native-orch-form select, .native-orch-form textarea { width: 100%; border: 1px solid var(--border); border-radius: 6px; padding: 7px 9px; background: var(--surface); color: var(--text); font: inherit; }
+.native-orch-handoff textarea { min-height: 72px; resize: vertical; }
+.native-orch-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.native-orch-runs ul { margin: 0; padding-left: 16px; color: var(--secondary); font-size: 12px; line-height: 1.5; }
 @media (max-width: 700px) { .native-sidebar { width: 155px; flex-basis: 155px; padding: 16px 10px; } .native-brand { flex-wrap: wrap; } .native-brand span { margin-left: 0; } .native-content { width: calc(100% - 24px); } .native-header { padding: 14px; } .native-composer-actions span { display: none; } }

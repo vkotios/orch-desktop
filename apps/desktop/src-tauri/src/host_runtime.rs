@@ -16,10 +16,28 @@ use tokio::time::{timeout, timeout_at, Instant};
 
 const MAX_HANDSHAKE: Duration = Duration::from_secs(10);
 const STDERR_TAIL_BYTES: usize = 4096;
-const NATIVE_COMMANDS: [&str; 11] = [
+const NATIVE_COMMANDS: [&str; 31] = [
     "ping",
     "discover_harnesses",
     "orch_dashboard",
+    "orch_claim",
+    "orch_release",
+    "orch_worktree_create",
+    "orch_pick",
+    "orch_run",
+    "orch_run_detail",
+    "orch_cancel",
+    "orch_scope",
+    "orch_review",
+    "orch_review_finish",
+    "orch_gate_status",
+    "orch_gate_record",
+    "orch_record",
+    "orch_cleanup",
+    "orch_finish",
+    "orch_adopt",
+    "orch_usage",
+    "orch_quota",
     "native_chat_validate_project",
     "native_chat_prepare_project",
     "direct_chat_send",
@@ -28,6 +46,8 @@ const NATIVE_COMMANDS: [&str; 11] = [
     "native_chat_answer",
     "direct_chat_cancel",
     "native_chat_close",
+    "native_chat_list_conversations",
+    "native_chat_hydrate_conversation",
 ];
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;

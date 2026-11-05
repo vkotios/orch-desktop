@@ -34,7 +34,28 @@ const NATIVE_COMMANDS = new Set([
   'native_chat_list_conversations',
   'native_chat_hydrate_conversation',
 ]);
-const ALLOWED_COMMANDS = new Set(['ping', 'shutdown', 'discover_harnesses', 'orch_dashboard', ...NATIVE_COMMANDS]);
+const ORCH_COMMANDS = [
+  'orch_dashboard',
+  'orch_claim',
+  'orch_release',
+  'orch_worktree_create',
+  'orch_pick',
+  'orch_run',
+  'orch_run_detail',
+  'orch_cancel',
+  'orch_scope',
+  'orch_review',
+  'orch_review_finish',
+  'orch_gate_status',
+  'orch_gate_record',
+  'orch_record',
+  'orch_cleanup',
+  'orch_finish',
+  'orch_adopt',
+  'orch_usage',
+  'orch_quota',
+];
+const ALLOWED_COMMANDS = new Set(['ping', 'shutdown', 'discover_harnesses', ...ORCH_COMMANDS, ...NATIVE_COMMANDS]);
 // Bound for closing the lazily created native-chat service on shutdown, EOF,
 // output faults and owner-fatal paths. Keeps the serial shutdown exchange
 // inside the Rust per-phase deadline; a close that exceeds it is reported

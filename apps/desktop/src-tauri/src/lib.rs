@@ -59,18 +59,20 @@ async fn host(app: &AppHandle) -> StartResult {
         .clone()
 }
 
-async fn route(app: &AppHandle, command: &str) -> Result<Value, String> {
-    host(app).await?.request(command, json!({})).await
+#[tauri::command]
+async fn discover_harnesses(app: AppHandle, args: Option<Value>) -> Result<Value, String> {
+    route_with_args(&app, "discover_harnesses", args.unwrap_or_else(|| json!({}))).await
 }
 
 #[tauri::command]
-async fn discover_harnesses(app: AppHandle) -> Result<Value, String> {
-    route(&app, "discover_harnesses").await
+async fn orch_dashboard(app: AppHandle, args: Option<Value>) -> Result<Value, String> {
+    route_with_args(&app, "orch_dashboard", args.unwrap_or_else(|| json!({}))).await
 }
 
+/// Generic host RPC for orch mutations and other allow-listed commands.
 #[tauri::command]
-async fn orch_dashboard(app: AppHandle) -> Result<Value, String> {
-    route(&app, "orch_dashboard").await
+async fn host_invoke(app: AppHandle, command: String, args: Option<Value>) -> Result<Value, String> {
+    route_with_args(&app, &command, args.unwrap_or_else(|| json!({}))).await
 }
 
 // Fixed native-chat slice: each command carries its literal host command
@@ -121,6 +123,16 @@ async fn direct_chat_cancel(app: AppHandle, args: Value) -> Result<Value, String
 #[tauri::command]
 async fn native_chat_close(app: AppHandle, args: Value) -> Result<Value, String> {
     route_with_args(&app, "native_chat_close", args).await
+}
+
+#[tauri::command]
+async fn native_chat_list_conversations(app: AppHandle, args: Value) -> Result<Value, String> {
+    route_with_args(&app, "native_chat_list_conversations", args).await
+}
+
+#[tauri::command]
+async fn native_chat_hydrate_conversation(app: AppHandle, args: Value) -> Result<Value, String> {
+    route_with_args(&app, "native_chat_hydrate_conversation", args).await
 }
 
 #[tauri::command]
@@ -195,6 +207,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             discover_harnesses,
             orch_dashboard,
+            host_invoke,
             native_chat_validate_project,
             native_chat_prepare_project,
             direct_chat_send,
@@ -203,6 +216,8 @@ pub fn run() {
             native_chat_answer,
             direct_chat_cancel,
             native_chat_close,
+            native_chat_list_conversations,
+            native_chat_hydrate_conversation,
             native_pick_project_folder
         ])
         .build(tauri::generate_context!())

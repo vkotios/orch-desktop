@@ -156,7 +156,16 @@ export async function callHost<T>(
   args: Record<string, any> = {},
 ): Promise<T> {
   if (isTauriRuntime()) {
-    return tauriInvoke<T>(command, args);
+    // Prefer the generic host_invoke for orch/discovery so new allow-listed
+    // commands do not each need a dedicated Tauri command wrapper.
+    if (
+      command === "discover_harnesses" ||
+      command === "orch_dashboard" ||
+      command.startsWith("orch_")
+    ) {
+      return tauriInvoke<T>("host_invoke", { command, args });
+    }
+    return tauriInvoke<T>(command, { args });
   }
   const res = await fetch("/api/invoke", {
     method: "POST",

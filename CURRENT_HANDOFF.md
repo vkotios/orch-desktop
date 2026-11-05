@@ -72,18 +72,18 @@ native Codex chat so conversations can persist and later resume. S3d tool-facts
 storage remains prepared but is **not** a gate on first durable text resume
 ([REUSE_AUDIT](docs/REUSE_AUDIT.md)).
 
-**Done locally toward that path:** Codex dual-write adapter
-`apps/desktop/server/native-session-persistence.mjs` journals turns, message
-deltas, and turn outcomes from `native-chat.mjs` while the mailbox still drains
-live events. Host opens `~/.cho-desktop/sessions.sqlite3` (or `CHO_SESSION_DB`).
-`native_chat_list_conversations` / `native_chat_hydrate_conversation` rebuild
-transcripts; NativeChat loads the latest durable conversation on prepare.
-Producer fence reclaim on reopen is included for Codex dual-write.
+**Done locally toward that path:** Codex and Claude dual-write through
+`native-session-persistence.mjs` (turns, deltas, outcomes) while the mailbox
+still drains live events. Host opens `~/.cho-desktop/sessions.sqlite3` (or
+`CHO_SESSION_DB`). List/hydrate RPCs rebuild transcripts; NativeChat loads the
+latest durable conversation on prepare. Producer fence reclaim on reopen is
+included.
 
-Still open: Claude actor dual-write, durable live poll cursor (mailbox still
-drains), mid-turn unknown handling, S3d tool hydrate, Stop/close coupling, and
-CHO-05 orch admission. Do not invent a second coordinator or lift Grok JSONL
-persistence.
+Still open: durable live poll cursor (mailbox still drains), mid-turn unknown
+handling, S3d tool hydrate, Stop/close coupling, and Windows installer
+qualification. Native CHO-05 orch mutations are admitted on the host and exposed
+via the NativeChat Agents panel. Release path: [RELEASE_v01](docs/RELEASE_v01.md).
+Do not invent a second coordinator or lift Grok JSONL persistence.
 
 Start by reading the current actors/mappers and the
 [message-delta](docs/contracts/SESSION_MESSAGE_DELTAS.md),
