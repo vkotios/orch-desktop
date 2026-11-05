@@ -322,7 +322,15 @@ export function createNativeSessionPersistence(options) {
     };
   }
 
-  function beginTurn({ conversationId, turnId, operationId, prompt, effort = null, evidence = null }) {
+  function beginTurn({
+    conversationId,
+    turnId,
+    operationId,
+    prompt,
+    effort = null,
+    claudeInputUuid = null,
+    evidence = null,
+  }) {
     assertOpen();
     const meta = conversations.get(conversationId);
     if (!meta) throw new Error(`unknown conversation ${conversationId}`);
@@ -331,6 +339,11 @@ export function createNativeSessionPersistence(options) {
     if (typeof prompt !== "string" || prompt.length === 0) {
       throw new Error("beginTurn requires a nonempty prompt");
     }
+    if (meta.controller === "claude") {
+      requireUuid(claudeInputUuid, "claudeInputUuid");
+    } else if (claudeInputUuid !== null) {
+      throw new Error("claudeInputUuid is Claude-only");
+    }
     const scope = scopeOf(meta, evidence);
     turns.queueTurn({
       ...scope,
@@ -338,10 +351,26 @@ export function createNativeSessionPersistence(options) {
       operationId,
       prompt,
       ...(effort != null ? { effort } : {}),
-      ...(meta.controller === "claude" ? {} : { claudeInputUuid: null }),
+      claudeInputUuid: meta.controller === "claude" ? claudeInputUuid : null,
     });
     turns.beginDispatch({ ...scope, turnId, operationId });
     return scope;
+  }
+
+  function setRequestedClaudeSession({ conversationId, sessionUuid, evidence = null }) {
+    assertOpen();
+    const meta = conversations.get(conversationId);
+    if (!meta) throw new Error(`unknown conversation ${conversationId}`);
+    if (meta.controller !== "claude") throw new Error("setRequestedClaudeSession is Claude-only");
+    requireUuid(sessionUuid, "sessionUuid");
+    bindings.setRequestedClaudeSession({
+      projectId: meta.projectId,
+      conversationId: meta.conversationId,
+      ownerToken: meta.ownerToken,
+      generation: meta.ownerGeneration,
+      sessionUuid,
+      evidence,
+    });
   }
 
   function afterThreadStart({ conversationId, nativeThreadId, evidence = null }) {
@@ -360,6 +389,25 @@ export function createNativeSessionPersistence(options) {
       generation: meta.ownerGeneration,
       controller: "codex",
       nativeThreadId,
+      evidence,
+    });
+    meta.boundNative = true;
+  }
+
+  function afterClaudeSessionBound({ conversationId, nativeSessionUuid, evidence = null }) {
+    assertOpen();
+    const meta = conversations.get(conversationId);
+    if (!meta) throw new Error(`unknown conversation ${conversationId}`);
+    if (meta.controller !== "claude") throw new Error("afterClaudeSessionBound is Claude-only");
+    requireUuid(nativeSessionUuid, "nativeSessionUuid");
+    if (meta.boundNative) return;
+    bindings.bindNativeRef({
+      projectId: meta.projectId,
+      conversationId: meta.conversationId,
+      ownerToken: meta.ownerToken,
+      generation: meta.ownerGeneration,
+      controller: "claude",
+      nativeSessionUuid,
       evidence,
     });
     meta.boundNative = true;
@@ -488,7 +536,9 @@ export function createNativeSessionPersistence(options) {
     ensureProject,
     ensureConversation,
     beginTurn,
+    setRequestedClaudeSession,
     afterThreadStart,
+    afterClaudeSessionBound,
     afterTurnWritten,
     afterObserved,
     appendDelta,

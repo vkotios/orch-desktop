@@ -1223,6 +1223,116 @@ describe("native rpc retire", () => {
   });
 });
 
+describe("Claude durable dual-write", () => {
+  it("journals Claude deltas and outcomes through the facade onEvent path", async () => {
+    const dir = tempDir();
+    const dbPath = join(dir, "claude-sessions.sqlite3");
+    const generation = randomUUID();
+    const sessionId = randomUUID();
+    const turnId = randomUUID();
+    const fatals = [];
+    let hooks;
+    const actor = {
+      send: vi.fn(async (args) => {
+        expect(args.requestedNativeSessionId).toMatch(/^[0-9a-f-]{36}$/);
+        expect(args.requestedNativeUserMessageId).toMatch(/^[0-9a-f-]{36}$/);
+        // Simulate activate + delta + complete after submit.
+        queueMicrotask(() => {
+          hooks.onEvent({
+            kind: "status",
+            text: "Claude turn started",
+            generation,
+            controller: "claude",
+            harness: "claude",
+            sessionId,
+            turnId,
+            nativeSessionId: args.requestedNativeSessionId,
+            nativeUserMessageId: args.requestedNativeUserMessageId,
+          });
+          hooks.onEvent({
+            kind: "message_delta",
+            text: "claude durable",
+            nativeMessageId: "m1",
+            generation,
+            controller: "claude",
+            harness: "claude",
+            sessionId,
+            turnId,
+            nativeSessionId: args.requestedNativeSessionId,
+            nativeUserMessageId: args.requestedNativeUserMessageId,
+          });
+          hooks.onEvent({
+            kind: "turn_complete",
+            nativeOutcome: "completed",
+            generation,
+            controller: "claude",
+            harness: "claude",
+            sessionId,
+            turnId,
+            nativeSessionId: args.requestedNativeSessionId,
+            nativeUserMessageId: args.requestedNativeUserMessageId,
+          });
+        });
+        return {
+          generation,
+          controller: "claude",
+          sessionId,
+          turnId,
+          submitted: true,
+          requestedNativeSessionId: args.requestedNativeSessionId,
+          requestedNativeUserMessageId: args.requestedNativeUserMessageId,
+        };
+      }),
+      touch: vi.fn(),
+      close: vi.fn(async () => {}),
+    };
+    const svc = createNativeChatService({
+      generation,
+      onFatal: (e) => fatals.push(e),
+      databasePath: dbPath,
+      openClaudeClient: async () => ({
+        models: [{ id: "claude-test", name: "Claude Test", isDefault: true, supportedEfforts: ["high"] }],
+        close: async () => {},
+      }),
+      createClaudeActor: async (opts) => { hooks = opts; return actor; },
+    });
+    const validated = await svc.handle("native_chat_validate_project", {
+      path: dir,
+      controller: "claude",
+    });
+    await svc.handle("native_chat_prepare_project", {
+      projectToken: validated.projectToken,
+      trusted: true,
+      controller: "claude",
+    });
+    await svc.handle("direct_chat_send", {
+      generation,
+      projectToken: validated.projectToken,
+      sessionId,
+      turnId,
+      model: "claude-test",
+      prompt: "persist claude",
+      role: "implement",
+      effort: "high",
+    });
+    await tick();
+    await tick();
+    const hydrated = await svc.handle("native_chat_hydrate_conversation", {
+      generation,
+      projectToken: validated.projectToken,
+      conversationId: sessionId,
+    });
+    expect(fatals).toHaveLength(0);
+    expect(hydrated.conversation?.messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ role: "user", text: "persist claude" }),
+        expect.objectContaining({ role: "assistant", text: "claude durable", outcome: "completed" }),
+      ]),
+    );
+    await svc.close();
+  });
+});
+
 describe("Codex durable dual-write", () => {
   it("journals deltas and outcomes into SQLite while the mailbox still drains", async () => {
     const dir = tempDir();

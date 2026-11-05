@@ -275,11 +275,23 @@ export function createClaudeChatActor(options) {
     if (!plain(args) || !idOk(args.sessionId) || !idOk(args.turnId) || !idOk(args.model) || !Object.hasOwn(TOOLS, args.role) || (args.effort !== undefined && !EFFORTS.has(args.effort)) || typeof args.prompt !== "string" || !args.prompt.length || args.prompt.length > 65_536) throw new Error("invalid Claude send arguments");
     const model = models.find((m) => m.id === args.model);
     if (!model || (args.effort !== undefined && !model.supportedEfforts?.includes(args.effort))) throw new Error("unknown Claude model or unsupported effort");
+    // Optional preassigned UUIDs let the host dual-write setRequestedClaudeSession
+    // / queueTurn before any CLI launch (CHO-03 persistence contract).
+    const requestedSessionId = args.requestedNativeSessionId;
+    const requestedUserId = args.requestedNativeUserMessageId;
+    if (requestedSessionId !== undefined && !idOk(requestedSessionId)) throw new Error("invalid Claude requestedNativeSessionId");
+    if (requestedUserId !== undefined && !idOk(requestedUserId)) throw new Error("invalid Claude requestedNativeUserMessageId");
     let session = sessions.get(args.sessionId);
     if (!session) {
       if (sessions.size >= 8) throw new Error("too many Claude sessions");
-      session = { nativeId: crypto.randomUUID(), model: args.model, role: args.role, effort: args.effort, admitted: new Set(), client: null, opening: null, token: null, lateCleanupError: null };
+      session = {
+        nativeId: requestedSessionId ?? crypto.randomUUID(),
+        model: args.model, role: args.role, effort: args.effort,
+        admitted: new Set(), client: null, opening: null, token: null, lateCleanupError: null,
+      };
       sessions.set(args.sessionId, session);
+    } else if (requestedSessionId !== undefined && session.nativeId !== requestedSessionId) {
+      throw new Error("Claude requestedNativeSessionId does not match the existing session");
     }
     if (session.admitted.has(args.turnId)) throw new Error("Claude turn already admitted");
     if (session.admitted.size >= 256) throw new Error("Claude turn history exhausted");
@@ -289,7 +301,14 @@ export function createClaudeChatActor(options) {
     let abort;
     const aborted = new Promise((_, reject) => { abort = reject; });
     aborted.catch(() => {});
-    const a = { session, sessionId: args.sessionId, turnId: args.turnId, userId: crypto.randomUUID(), observed: false, submitted: false, cancelPending: false, interruptSent: false, messageId: undefined, streamMessageId: null, continuationCredit: false, tools: new Map(), approvals: new Map(), clarifications: new Map(), abort, activationTimer: null, leaseTimer: null };
+    const a = {
+      session, sessionId: args.sessionId, turnId: args.turnId,
+      userId: requestedUserId ?? crypto.randomUUID(),
+      observed: false, submitted: false, cancelPending: false, interruptSent: false,
+      messageId: undefined, streamMessageId: null, continuationCredit: false,
+      tools: new Map(), approvals: new Map(), clarifications: new Map(),
+      abort, activationTimer: null, leaseTimer: null,
+    };
     active = a;
     activationDeadline(a, "Claude turn did not activate within 15s");
     lease(a);

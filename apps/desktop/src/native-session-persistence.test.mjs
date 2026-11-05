@@ -137,6 +137,85 @@ describe("native-session-persistence Codex dual-write", () => {
     expect(second.name).toBe(first.name);
   });
 
+  it("journals Claude request/bind/observe/delta/outcome", () => {
+    const { persistence, evidence } = makePersistence();
+    const project = persistence.ensureProject({
+      pathCanonical: "C:/synthetic/claude-persist",
+      name: "claude-persist",
+    });
+    const conversationId = randomUUID();
+    const turnId = randomUUID();
+    const operationId = randomUUID();
+    const sessionUuid = randomUUID();
+    const inputUuid = randomUUID();
+    persistence.ensureConversation({
+      projectId: project.id,
+      conversationId,
+      controller: "claude",
+      modelRequested: "claude-test",
+      effort: "high",
+      role: "implement",
+      evidence,
+    });
+    persistence.setRequestedClaudeSession({
+      conversationId,
+      sessionUuid,
+      evidence,
+    });
+    persistence.beginTurn({
+      conversationId,
+      turnId,
+      operationId,
+      prompt: "hi claude",
+      effort: "high",
+      claudeInputUuid: inputUuid,
+      evidence,
+    });
+    persistence.afterTurnWritten({ conversationId, turnId, operationId, evidence });
+    persistence.afterClaudeSessionBound({
+      conversationId,
+      nativeSessionUuid: sessionUuid,
+      evidence,
+    });
+    persistence.afterObserved({
+      conversationId,
+      turnId,
+      operationId,
+      nativeIdentity: sessionUuid,
+      nativeTurnId: null,
+      claudeInputUuid: inputUuid,
+      evidence,
+    });
+    persistence.appendDelta({
+      conversationId,
+      turnId,
+      operationId,
+      partId: randomUUID(),
+      nativeMessageId: "msg-1",
+      text: "hello from claude",
+      evidence,
+    });
+    persistence.settleTurn({
+      conversationId,
+      turnId,
+      operationId,
+      outcome: "completed",
+      nativeIdentity: sessionUuid,
+      nativeTurnId: null,
+      claudeInputUuid: inputUuid,
+      evidence,
+    });
+    const hydrated = persistence.hydrateConversation({
+      projectId: project.id,
+      conversationId,
+    });
+    expect(hydrated?.nativeSessionUuid).toBe(sessionUuid);
+    expect(hydrated?.messages).toEqual([
+      expect.objectContaining({ role: "user", text: "hi claude" }),
+      expect.objectContaining({ role: "assistant", text: "hello from claude", outcome: "completed" }),
+    ]);
+  });
+
   it("hydrates user and assistant messages from durable deltas", () => {
     const { persistence, evidence } = makePersistence();
     const project = persistence.ensureProject({

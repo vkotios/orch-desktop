@@ -95,23 +95,32 @@ export function createNativeChatService(options) {
     closed: false, dead: false, challenge: null, prepared: null, context: null,
     sessions: new Map(), active: null, approvals: new Map(), clarifications: new Map(),
     pendingSteers: new Set(), answerJobs: new Map(),
-    // Durable project row for the prepared workspace (Codex dual-write).
+    // Durable project row for the prepared workspace (Codex/Claude dual-write).
     durableProject: null,
+    // Claude active-turn durable handle keyed while a turn is in flight.
+    claudeDurable: null,
   };
 
   function ownerEvidence() {
     const prepared = state.prepared;
-    if (!prepared || prepared.controller !== "codex") return null;
-    return { connectionId: prepared.connectionId ?? prepared.client?.connectionId ?? null };
+    if (!prepared) return null;
+    if (prepared.controller === "codex") {
+      return { connectionId: prepared.connectionId ?? prepared.client?.connectionId ?? null };
+    }
+    if (prepared.controller === "claude") {
+      return { connectionId: prepared.connectionId ?? null };
+    }
+    return null;
   }
   function verifyPersistenceOwner(facts) {
     // Bindings/turns pass { action, projectId, conversationId, ownerToken,
-    // generation, evidence }. Live Codex writes require the prepared
-    // connection id to match the evidence supplied by this service.
+    // generation, evidence }. Live writes require the prepared connection id.
     if (state.dead || state.closed) return false;
     const prepared = state.prepared;
-    if (!prepared || prepared.controller !== "codex") return false;
-    const liveId = prepared.connectionId ?? prepared.client?.connectionId ?? null;
+    if (!prepared || (prepared.controller !== "codex" && prepared.controller !== "claude")) return false;
+    const liveId = prepared.connectionId
+      ?? (prepared.controller === "codex" ? prepared.client?.connectionId : null)
+      ?? null;
     if (liveId === null) return false;
     const evidence = facts !== null && typeof facts === "object" ? facts.evidence : null;
     if (evidence === null || typeof evidence !== "object") return false;
@@ -544,12 +553,35 @@ export function createNativeChatService(options) {
         catch (err) { context.cleanupError = err; state.dead = true; throw err; }
         if (!current()) throw new Error("preparing project was closed or superseded");
         owned = await createClaudeActor({ workspace: canonical, generation, models,
-          onEvent: (event) => { if (current()) { try { enqueue(event); } catch { /* enqueue fatalizes */ } } },
+          onEvent: (event) => {
+            if (!current()) return;
+            try {
+              handleClaudeDurableEvent(event);
+              enqueue(event);
+            } catch (err) {
+              // Durable dual-write failures are visible; mailbox enqueue still
+              // fatalizes on overflow via enqueue().
+              if (err?.message?.startsWith("durable ")) fatalize(err);
+              else { try { enqueue(event); } catch { /* enqueue fatalizes */ } fatalize(err); }
+            }
+          },
           onFatal: (err) => { if (current()) fatalize(err); },
           ...(options?.openClaudeClient ? { openClient: options.openClaudeClient } : {}),
         });
         if (!current()) throw new Error("preparing project was closed or superseded");
-        state.prepared = { controller: "claude", projectToken: pending.projectToken, path: canonical, name: pending.name, models, actor: owned };
+        state.prepared = {
+          controller: "claude",
+          projectToken: pending.projectToken,
+          path: canonical,
+          name: pending.name,
+          models,
+          actor: owned,
+          connectionId: crypto.randomUUID(),
+        };
+        const durable = await ensurePersistence();
+        if (durable) {
+          state.durableProject = durable.ensureProject({ pathCanonical: canonical, name: pending.name });
+        }
       } else {
         owned = await openClient({
           workspace: canonical,
@@ -582,11 +614,184 @@ export function createNativeChatService(options) {
     }
   }
 
+  function ensureClaudeWritten(handle) {
+    // Stream events can arrive before actor.send resolves. Record written on
+    // the first correlated durable event so settle never races ahead of it.
+    if (!persistence || handle.written) return;
+    durablePersist("claude record written", () => {
+      persistence.afterTurnWritten({
+        conversationId: handle.sessionId,
+        turnId: handle.turnId,
+        operationId: handle.operationId,
+        evidence: ownerEvidence(),
+      });
+    });
+    handle.written = true;
+  }
+
+  function handleClaudeDurableEvent(event) {
+    const handle = state.claudeDurable;
+    if (!persistence || !handle || !event || event.sessionId !== handle.sessionId || event.turnId !== handle.turnId) return;
+    ensureClaudeWritten(handle);
+    if (!handle.observed && (event.kind === "status" || event.nativeSessionId || event.kind === "message_delta")) {
+      const nativeSessionId = event.nativeSessionId ?? handle.nativeSessionId;
+      if (typeof nativeSessionId === "string" && nativeSessionId.length > 0) {
+        durablePersist("claude bind", () => {
+          persistence.afterClaudeSessionBound({
+            conversationId: handle.sessionId,
+            nativeSessionUuid: nativeSessionId,
+            evidence: ownerEvidence(),
+          });
+          persistence.afterObserved({
+            conversationId: handle.sessionId,
+            turnId: handle.turnId,
+            operationId: handle.operationId,
+            nativeIdentity: nativeSessionId,
+            nativeTurnId: null,
+            claudeInputUuid: handle.claudeInputUuid,
+            evidence: ownerEvidence(),
+          });
+        });
+        handle.observed = true;
+        handle.nativeSessionId = nativeSessionId;
+      }
+    }
+    if (event.kind === "message_delta" && handle.observed) {
+      const partId = crypto.randomUUID();
+      durablePersist("claude message delta", () => {
+        persistence.appendDelta({
+          conversationId: handle.sessionId,
+          turnId: handle.turnId,
+          operationId: handle.operationId,
+          partId,
+          nativeMessageId: typeof event.nativeMessageId === "string" ? event.nativeMessageId : partId,
+          text: typeof event.text === "string" ? event.text : "",
+          evidence: ownerEvidence(),
+        });
+      });
+    }
+    if (typeof event.nativeOutcome === "string" && TERMINAL.has(event.nativeOutcome) && handle.observed) {
+      durablePersist("claude settle", () => {
+        persistence.settleTurn({
+          conversationId: handle.sessionId,
+          turnId: handle.turnId,
+          operationId: handle.operationId,
+          outcome: event.nativeOutcome,
+          nativeIdentity: handle.nativeSessionId,
+          nativeTurnId: null,
+          claudeInputUuid: handle.claudeInputUuid,
+          evidence: ownerEvidence(),
+        });
+      });
+      state.claudeDurable = null;
+    } else if (typeof event.nativeOutcome === "string" && event.nativeOutcome === "unknown" && handle.operationId) {
+      durablePersist("claude settle unknown", () => {
+        persistence.settleTurn({
+          conversationId: handle.sessionId,
+          turnId: handle.turnId,
+          operationId: handle.operationId,
+          outcome: "unknown",
+          evidence: ownerEvidence(),
+        });
+      });
+      state.claudeDurable = null;
+    }
+  }
+
+  async function cmdSendClaude(args) {
+    if (!isValidId(args.sessionId)) throw new Error("direct_chat_send requires a bounded nonempty sessionId");
+    if (!isValidId(args.turnId)) throw new Error("direct_chat_send requires a bounded nonempty turnId");
+    if (typeof args.prompt !== "string" || args.prompt.length === 0 || args.prompt.length > MAX_PROMPT_CHARS) {
+      throw new Error("direct_chat_send requires a nonempty prompt of at most 65536 chars");
+    }
+    const durable = await ensurePersistence();
+    let requestedNativeSessionId;
+    let requestedNativeUserMessageId;
+    let operationId = null;
+    if (durable && state.durableProject) {
+      durable.ensureConversation({
+        projectId: state.durableProject.id,
+        conversationId: args.sessionId,
+        controller: "claude",
+        modelRequested: args.model,
+        effort: args.effort,
+        role: args.role,
+        evidence: ownerEvidence(),
+      });
+      let session = state.sessions.get(args.sessionId);
+      if (session === undefined) {
+        if (state.sessions.size >= MAX_SESSIONS) throw new Error("too many chat sessions (max 8); start a new chat after closing");
+        session = {
+          sessionId: args.sessionId,
+          role: args.role,
+          model: args.model,
+          nativeThreadId: null,
+          nativeSessionUuid: null,
+          admitted: new Set(),
+        };
+        state.sessions.set(args.sessionId, session);
+      }
+      requestedNativeSessionId = session.nativeSessionUuid ?? crypto.randomUUID();
+      if (session.nativeSessionUuid === null) {
+        durablePersist("claude request session", () => {
+          durable.setRequestedClaudeSession({
+            conversationId: args.sessionId,
+            sessionUuid: requestedNativeSessionId,
+            evidence: ownerEvidence(),
+          });
+        });
+        session.nativeSessionUuid = requestedNativeSessionId;
+        session.role = args.role;
+        session.model = args.model;
+      }
+      requestedNativeUserMessageId = crypto.randomUUID();
+      operationId = crypto.randomUUID();
+      durable.beginTurn({
+        conversationId: args.sessionId,
+        turnId: args.turnId,
+        operationId,
+        prompt: args.prompt,
+        effort: args.effort,
+        claudeInputUuid: requestedNativeUserMessageId,
+        evidence: ownerEvidence(),
+      });
+      state.claudeDurable = {
+        sessionId: args.sessionId,
+        turnId: args.turnId,
+        operationId,
+        claudeInputUuid: requestedNativeUserMessageId,
+        nativeSessionId: requestedNativeSessionId,
+        observed: false,
+        written: false,
+      };
+    }
+    try {
+      const ack = await state.prepared.actor.send({
+        ...args,
+        ...(requestedNativeSessionId ? { requestedNativeSessionId } : {}),
+        ...(requestedNativeUserMessageId ? { requestedNativeUserMessageId } : {}),
+      });
+      if (durable && operationId && state.claudeDurable?.operationId === operationId) {
+        // Idempotent backup if no stream events arrived before send resolved.
+        ensureClaudeWritten(state.claudeDurable);
+        if (typeof ack?.requestedNativeSessionId === "string") {
+          state.claudeDurable.nativeSessionId = ack.requestedNativeSessionId;
+          const session = state.sessions.get(args.sessionId);
+          if (session) session.nativeSessionUuid = ack.requestedNativeSessionId;
+        }
+      }
+      return ack;
+    } catch (err) {
+      if (state.claudeDurable?.operationId === operationId) state.claudeDurable = null;
+      throw err;
+    }
+  }
+
   async function cmdSend(args) {
     requireLive();
     requireGeneration(args);
     requireToken(args);
-    if (state.prepared.controller === "claude") return state.prepared.actor.send(args);
+    if (state.prepared.controller === "claude") return cmdSendClaude(args);
     if (!isValidId(args.sessionId)) throw new Error("direct_chat_send requires a bounded nonempty sessionId");
     if (!isValidId(args.turnId)) throw new Error("direct_chat_send requires a bounded nonempty turnId");
     if (typeof args.prompt !== "string" || args.prompt.length === 0 || args.prompt.length > MAX_PROMPT_CHARS) throw new Error("direct_chat_send requires a nonempty prompt of at most 65536 chars");
@@ -932,23 +1137,23 @@ export function createNativeChatService(options) {
     });
     if (conversation === null) return { generation, conversation: null };
     // Register the session so later sends reuse the durable conversation id
-    // and keep the native thread id for Codex continuation.
-    if (conversation.controller === "codex") {
-      let session = state.sessions.get(conversation.conversationId);
-      if (session === undefined && state.sessions.size < MAX_SESSIONS) {
-        session = {
-          sessionId: conversation.conversationId,
-          role: conversation.role ?? "implement",
-          model: conversation.model,
-          nativeThreadId: conversation.nativeThreadId,
-          admitted: new Set(),
-        };
-        state.sessions.set(conversation.conversationId, session);
-      } else if (session !== undefined && conversation.nativeThreadId) {
-        session.nativeThreadId = conversation.nativeThreadId;
-        if (conversation.role) session.role = conversation.role;
-        if (conversation.model) session.model = conversation.model;
-      }
+    // and keep native identities for continuation.
+    let session = state.sessions.get(conversation.conversationId);
+    if (session === undefined && state.sessions.size < MAX_SESSIONS) {
+      session = {
+        sessionId: conversation.conversationId,
+        role: conversation.role ?? "implement",
+        model: conversation.model,
+        nativeThreadId: conversation.nativeThreadId,
+        nativeSessionUuid: conversation.nativeSessionUuid,
+        admitted: new Set(),
+      };
+      state.sessions.set(conversation.conversationId, session);
+    } else if (session !== undefined) {
+      if (conversation.nativeThreadId) session.nativeThreadId = conversation.nativeThreadId;
+      if (conversation.nativeSessionUuid) session.nativeSessionUuid = conversation.nativeSessionUuid;
+      if (conversation.role) session.role = conversation.role;
+      if (conversation.model) session.model = conversation.model;
     }
     return { generation, conversation };
   }
