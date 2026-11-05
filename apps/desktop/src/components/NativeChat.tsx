@@ -443,7 +443,7 @@ export function NativeChat() {
       <p className="native-muted">Conversation text is stored locally and restored when you reopen this project.</p>
       {project && <><div className="native-project"><Icon name="folder" size={16} /><div><strong>{project.name}</strong><small title={project.path}>{project.path}</small></div></div>
         <button className="native-button" onClick={newChat} disabled={lost || !project.models.length || sessions.length >= NATIVE_MAX_SESSIONS}><Icon name="plus" size={15} /> New chat</button>
-        <OrchAgentsPanel repoPath={project.path} disabled={lost || busy || Boolean(loading)} />
+        <OrchAgentsPanel repoPath={project.path} conversationId={selected || null} disabled={lost || busy || Boolean(loading)} />
         <nav aria-label="Chats" className="native-chat-list">{sessions.map((s) => <button key={s.id} className={s.id === selected ? "selected" : ""} onClick={() => selectChat(s.id)}><Icon name="chat" size={15} /><span>{s.title}</span>{s.busy && <span aria-label="Working">·</span>}</button>)}</nav>
         <button className="native-close-project" onClick={() => void closeProject()} disabled={busy || Boolean(loading) || lost}>Close project</button></>}
     </aside>

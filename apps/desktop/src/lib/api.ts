@@ -161,7 +161,8 @@ export async function callHost<T>(
     if (
       command === "discover_harnesses" ||
       command === "orch_dashboard" ||
-      command.startsWith("orch_")
+      command.startsWith("orch_") ||
+      command.startsWith("delegation_")
     ) {
       return tauriInvoke<T>("host_invoke", { command, args });
     }

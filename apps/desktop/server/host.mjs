@@ -57,7 +57,19 @@ const ORCH_COMMANDS = [
   'orch_usage',
   'orch_quota',
 ];
-const ALLOWED_COMMANDS = new Set(['ping', 'shutdown', 'discover_harnesses', ...ORCH_COMMANDS, ...NATIVE_COMMANDS]);
+const DELEGATION_COMMANDS = new Set([
+  'delegation_list',
+  'delegation_upsert',
+  'delegation_set_disposition',
+]);
+const ALLOWED_COMMANDS = new Set([
+  'ping',
+  'shutdown',
+  'discover_harnesses',
+  ...ORCH_COMMANDS,
+  ...NATIVE_COMMANDS,
+  ...DELEGATION_COMMANDS,
+]);
 // Bound for closing the lazily created native-chat service on shutdown, EOF,
 // output faults and owner-fatal paths. Keeps the serial shutdown exchange
 // inside the Rust per-phase deadline; a close that exceeds it is reported
@@ -83,6 +95,13 @@ export async function runHost(options = {}) {
   const sessionDatabasePath = resolveSessionDatabasePath(databasePath);
   const dispatchFn = dispatch
     ?? ((command, args) => import('./bridge.mjs').then((mod) => mod.handleBridgeCommand(command, args)));
+  let delegationStore = null;
+  async function getDelegationStore() {
+    if (delegationStore) return delegationStore;
+    const mod = await import('./delegation-associations.mjs');
+    delegationStore = mod.createDelegationAssociations();
+    return delegationStore;
+  }
 
   return new Promise((resolve) => {
     let done = false;
@@ -243,6 +262,29 @@ export async function runHost(options = {}) {
           data = await service.handle(env.command, env.args);
         }
         catch (err) { await sendError(env.requestId, 'COMMAND_FAILED', err?.message ?? String(err)); return; }
+        await sendResult(env.requestId, data);
+        return;
+      }
+      if (DELEGATION_COMMANDS.has(env.command)) {
+        let data;
+        try {
+          const store = await getDelegationStore();
+          const args = env.args && typeof env.args === 'object' ? env.args : {};
+          if (env.command === 'delegation_list') {
+            data = { associations: store.list(args) };
+          } else if (env.command === 'delegation_upsert') {
+            data = { association: store.upsert(args) };
+          } else if (env.command === 'delegation_set_disposition') {
+            data = {
+              association: store.setDisposition(args.id, args.disposition, args.note ?? null),
+            };
+          } else {
+            throw new Error(`unknown delegation command ${env.command}`);
+          }
+        } catch (err) {
+          await sendError(env.requestId, 'COMMAND_FAILED', err?.message ?? String(err));
+          return;
+        }
         await sendResult(env.requestId, data);
         return;
       }

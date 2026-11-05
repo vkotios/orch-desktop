@@ -16,7 +16,7 @@ use tokio::time::{timeout, timeout_at, Instant};
 
 const MAX_HANDSHAKE: Duration = Duration::from_secs(10);
 const STDERR_TAIL_BYTES: usize = 4096;
-const NATIVE_COMMANDS: [&str; 33] = [
+const NATIVE_COMMANDS: [&str; 36] = [
     "ping",
     "discover_harnesses",
     "orch_dashboard",
@@ -38,6 +38,9 @@ const NATIVE_COMMANDS: [&str; 33] = [
     "orch_adopt",
     "orch_usage",
     "orch_quota",
+    "delegation_list",
+    "delegation_upsert",
+    "delegation_set_disposition",
     "native_chat_validate_project",
     "native_chat_prepare_project",
     "direct_chat_send",

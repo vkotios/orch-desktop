@@ -1,16 +1,24 @@
 import { useState } from "react";
 import { callHost, type OrchCommandResult, type OrchDashboardData } from "../lib/api";
-import { startAgentTask } from "../lib/agent-task";
+import {
+  acceptDelegation,
+  discardDelegation,
+  integrateDelegation,
+  listDelegations,
+  startAgentTask,
+  type DelegationAssociation,
+} from "../lib/agent-task";
 import { Icon } from "./Chrome";
 
 type Props = {
   repoPath: string;
+  conversationId?: string | null;
   disabled?: boolean;
 };
 
-export function OrchAgentsPanel({ repoPath, disabled = false }: Props) {
+export function OrchAgentsPanel({ repoPath, conversationId = null, disabled = false }: Props) {
   const [open, setOpen] = useState(false);
-  const [wp, setWp] = useState("cho-03");
+  const [wp, setWp] = useState("cho-05");
   const [slice, setSlice] = useState("delegate");
   const [cli, setCli] = useState("codex");
   const [model, setModel] = useState("");
@@ -20,11 +28,16 @@ export function OrchAgentsPanel({ repoPath, disabled = false }: Props) {
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
   const [dashboard, setDashboard] = useState<OrchDashboardData | null>(null);
+  const [associations, setAssociations] = useState<DelegationAssociation[]>([]);
 
   async function refresh() {
     try {
-      const data = await callHost<OrchDashboardData>("orch_dashboard");
+      const [data, listed] = await Promise.all([
+        callHost<OrchDashboardData>("orch_dashboard"),
+        listDelegations(repoPath),
+      ]);
       setDashboard(data);
+      setAssociations(listed);
       setError("");
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -70,12 +83,56 @@ export function OrchAgentsPanel({ repoPath, disabled = false }: Props) {
         model,
         handoffText,
         effort,
+        conversationId,
       });
       setStatus(result.text || "Agent started in an isolated worktree.");
       await refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       setStatus("");
+      await refresh().catch(() => {});
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onAccept(item: DelegationAssociation) {
+    setBusy(true);
+    setError("");
+    try {
+      await acceptDelegation(callHost, item.id, item.runId);
+      setStatus(`Accepted ${item.wp}/${item.slice} (no Git mutation).`);
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onIntegrate(item: DelegationAssociation) {
+    setBusy(true);
+    setError("");
+    try {
+      await integrateDelegation(callHost, item);
+      setStatus(`Integrated ${item.wp} via orch finish.`);
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onDiscard(item: DelegationAssociation) {
+    setBusy(true);
+    setError("");
+    try {
+      await discardDelegation(callHost, item);
+      setStatus(`Discarded ${item.wp}/${item.slice}.`);
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(false);
     }
@@ -98,6 +155,7 @@ export function OrchAgentsPanel({ repoPath, disabled = false }: Props) {
   }
 
   const runs = dashboard?.runs ?? [];
+  const openAssociations = associations.filter((item) => item.disposition === "none");
 
   return (
     <section className="native-orch-panel" aria-label="Delegated agents">
@@ -108,7 +166,7 @@ export function OrchAgentsPanel({ repoPath, disabled = false }: Props) {
         </button>
       </header>
       <p className="native-muted">
-        Claim a work package, create a worktree, and launch a worker through orch. Accept/integrate remain explicit.
+        Claim, worktree, and run are recoverable. Accept records a decision only; integrate and discard are separate.
       </p>
       {(error || status) && (
         <div role={error ? "alert" : "status"} className={error ? "native-notice error" : "native-notice"}>
@@ -164,6 +222,42 @@ export function OrchAgentsPanel({ repoPath, disabled = false }: Props) {
         </button>
       </div>
       <div className="native-orch-runs" aria-live="polite">
+        <p className="native-muted">Open associations</p>
+        {openAssociations.length === 0 ? (
+          <p className="native-muted">None yet.</p>
+        ) : (
+          <ul>
+            {openAssociations.slice(0, 8).map((item) => (
+              <li key={item.id}>
+                <strong>{item.wp}/{item.slice}</strong> · {item.stage}
+                {item.runId ? ` · ${item.runId}` : ""}
+                {item.worktreePath ? (
+                  <small className="native-muted" title={item.worktreePath}>
+                    Worktree: {item.worktreePath}
+                  </small>
+                ) : null}
+                <div className="native-orch-actions">
+                  <button type="button" className="native-button" disabled={busy} onClick={() => void onAccept(item)}>
+                    Accept
+                  </button>
+                  <button
+                    type="button"
+                    className="native-button"
+                    disabled={busy}
+                    title="Finish the work package in orch. Separate from Accept."
+                    onClick={() => void onIntegrate(item)}
+                  >
+                    Integrate
+                  </button>
+                  <button type="button" className="native-button" disabled={busy} onClick={() => void onDiscard(item)}>
+                    Discard
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+        <p className="native-muted">Recent orch runs</p>
         {runs.length === 0 ? (
           <p className="native-muted">No orch runs yet.</p>
         ) : (
