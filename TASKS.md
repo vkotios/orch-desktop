@@ -17,8 +17,8 @@ The accepted delivery sequence is [IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_P
 
 Current evidence covers real continuing Codex and Claude debug-runtime conversations with tool permissions, clarification, cancellation and owned cleanup. Both windows pass focused rendered conversation checks. Broader UI polish, installed release and clean-machine acceptance remain open.
 
-- [ ] **CHO-03:** S1–S3c accepted (`ccb8a30`); Codex+Claude dual-write and hydrate resume in place. Next: durable poll cursor, S3d/tools, Stop/close coupling. Reuse: [REUSE_AUDIT](docs/REUSE_AUDIT.md). See [CHO-03](docs/work-packages/CHO-03.md).
-- [ ] **CHO-05 / release:** Native host admits orch mutations; NativeChat Agents panel can claim/worktree/run. Installer qualification and public v0.1 still open — [RELEASE_v01](docs/RELEASE_v01.md).
+- [x] **CHO-03 (local):** Dual-write, hydrate, durable poll cursor, drafts, close settle, S3d tool facts + actor wiring. Approvals/clarifications still mailbox-only. Reuse: [REUSE_AUDIT](docs/REUSE_AUDIT.md). See [CHO-03](docs/work-packages/CHO-03.md).
+- [x] **CHO-05 (local):** Recoverable delegation associations + explicit Accept / Integrate / Discard (accept ≠ Git). Installer qualification and public v0.1 still open — [RELEASE_v01](docs/RELEASE_v01.md).
 - [ ] **CHO-06:** replace the generic Starting indicator while an empty response waits on a clarification; retain explicit waiting/submission/error states and no default answer.
 - [ ] **Maintenance:** remove the unused local clarification reset helper when cleaning the API. Generic invoke rejection must continue to require Stop unless pre-admission failure is proven. Give answer-capacity rejection a distinct reason if admission limits change; current caps match and no reachable loss was established.
 - [ ] **CHO-04 qualification:** repeat final Codex bundle success/Stop/recovery after subscription quota is available. The current final probe establishes explicit submission followed by an honestly reported provider-limit failure; prior successful runtime/rendered evidence is retained separately.

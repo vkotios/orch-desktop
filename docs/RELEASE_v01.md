@@ -8,11 +8,12 @@ Target: Windows 11 x64 installer + public GitHub source once product journeys qu
 | --- | --- |
 | Open app / pick project / discover CLIs | NativeChat + host discovery |
 | Real Codex/Claude continuing conversation | Native preview; dual-write to SQLite |
-| Persist / resume text across reopen | Dual-write + list/hydrate on prepare |
-| Delegate via orch (claim/worktree/run) | Host allow-list + Agents panel in NativeChat |
+| Persist / resume text across reopen | Dual-write + list/hydrate + drafts + durable poll |
+| Delegate via orch (claim/worktree/run) | Host allow-list + Agents panel + recoverable associations |
+| Accept / integrate / discard | Explicit Actions; accept records only (no hidden Git) |
 | Native CLI auth (no credential copy) | Unchanged — uses installed CLIs |
 
-Still not release-qualified: packaged installer smoke on a clean machine, durable live poll cursor, Claude native resume (`--resume`), S3d tool chrome, Stop/close coupling, and RapidAI NOTICE attribution.
+Still not release-qualified: packaged installer smoke on a clean machine, Claude native resume (`--resume`) breadth, full CHO-06 polish, and RapidAI NOTICE attribution. Public repo / tag / signing require the owner.
 
 ## Build commands
 

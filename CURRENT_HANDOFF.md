@@ -60,30 +60,19 @@ CHO-03 storage is implemented and locally verified through:
 - S3a durable events, replay cursors and bounded snapshots.
 - S3b atomic terminal journal/outcome event/snapshot composition.
 - S3c typed body-backed text deltas and a bounded last-message-turn marker.
+- S3d typed tool lifecycle facts with actor dual-write + hydrate/poll projection.
 
-**The native mailbox, host polling and UI still use memory.** These storage
-modules are not yet a persistent end-to-end application. CHO-03 remains in
-progress; do not mark it finished or release its existing orchestration claim.
+**Local CHO-03 consumer path is wired:** dual-write, hydrate, durable poll
+cursor (hybrid with mailbox), drafts, close settle, and tool facts. Approvals
+and clarifications remain mailbox-only. CHO-05 local associations + Accept /
+Integrate / Discard are in NativeChat. Release/public/installer still open.
 
 ## Next concrete slice
 
-**Product-critical path (in progress):** wire the existing SQLite stack into
-native Codex chat so conversations can persist and later resume. S3d tool-facts
-storage remains prepared but is **not** a gate on first durable text resume
-([REUSE_AUDIT](docs/REUSE_AUDIT.md)).
-
-**Done locally toward that path:** Codex and Claude dual-write through
-`native-session-persistence.mjs` (turns, deltas, outcomes) while the mailbox
-still drains live events. Host opens `~/.cho-desktop/sessions.sqlite3` (or
-`CHO_SESSION_DB`). List/hydrate RPCs rebuild transcripts; NativeChat loads the
-latest durable conversation on prepare. Producer fence reclaim on reopen is
-included.
-
-Still open: durable live poll cursor (mailbox still drains), mid-turn unknown
-handling, S3d tool hydrate, Stop/close coupling, and Windows installer
-qualification. Native CHO-05 orch mutations are admitted on the host and exposed
-via the NativeChat Agents panel. Release path: [RELEASE_v01](docs/RELEASE_v01.md).
-Do not invent a second coordinator or lift Grok JSONL persistence.
+**Product path next:** CHO-06 interaction polish that still blocks journeys
+(diff viewer, richer recovery UX), then CHO-07/08 installer evidence with the
+owner. Do not invent a second coordinator or lift Grok JSONL persistence.
+Release path: [RELEASE_v01](docs/RELEASE_v01.md).
 
 Start by reading the current actors/mappers and the
 [message-delta](docs/contracts/SESSION_MESSAGE_DELTAS.md),
