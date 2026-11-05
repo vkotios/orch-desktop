@@ -13,7 +13,9 @@ Target: Windows 11 x64 installer + public GitHub source once product journeys qu
 | Accept / integrate / discard | Explicit Actions; accept records only (no hidden Git) |
 | Native CLI auth (no credential copy) | Unchanged — uses installed CLIs |
 
-Still not release-qualified: packaged installer smoke on a clean machine, Claude native resume (`--resume`) breadth, full CHO-06 polish, and RapidAI NOTICE attribution. Public repo / tag / signing require the owner.
+Still not release-qualified: packaged installer smoke on a clean machine, Claude native resume (`--resume`) breadth, full CHO-06 polish (diff viewer), and RapidAI NOTICE attribution. Public repo / tag / signing require the owner.
+
+Local agent note (2026-11-05 Europe/London): `npm run typecheck`, desktop Vitest, and `vite` production build pass on this machine; `rustc`/`cargo` are not on PATH here, so the Tauri installer artifact was not produced in this run.
 
 ## Build commands
 
