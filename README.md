@@ -1,4 +1,8 @@
-# CHO-desktop (`cli-agentic-coordinator` + Multi-Harness Desktop GUI)
+# orch-desktop (CHO Desktop)
+
+Private development repository for CHO Desktop. Start with the
+[current handoff](CURRENT_HANDOFF.md) for the accepted checkpoint, verification,
+remaining work and implementation/review workflow.
 
 **CHO-desktop** combines the multi-harness desktop shell architecture of [`RapidAI/grok-build-desktop`](https://github.com/RapidAI/grok-build-desktop) with the multi-agent coordination engine of [`vkotios/cli-agentic-coordinator`](https://github.com/vkotios/cli-agentic-coordinator) (`orch`).
 
