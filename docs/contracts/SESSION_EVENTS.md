@@ -82,3 +82,7 @@ single concurrent sequence winner, exact replay/byte budgets/cursor errors and
 ABORT/IGNORE snapshot-fault plus outer body/event rollback. Controller and
 complete GLM 5.3 high/Vibe review leave no unresolved High or Medium issue.
 The native mailbox, host polling and UI remain unwired to this store.
+
+S3b now composes terminal journal settlement and typed outcome publication in one
+transaction; see [SESSION_TURN_OUTCOMES](SESSION_TURN_OUTCOMES.md). Other typed
+projections and actual host polling remain pending.

@@ -1,6 +1,6 @@
 # CHO Desktop implementation status
 
-Updated: 2026-11-04. Integration branch: `codex/cho-v01-foundation`. Native Codex/Claude conversations and the clarification source milestone are accepted locally; source checkpoint `926110a` is verified by controller checks and independent GLM review.
+Updated: 2026-11-05. Integration branch: `codex/cho-v01-foundation`. Native Codex/Claude conversations and the clarification source milestone are accepted locally; source checkpoint `926110a` is verified by controller checks and independent GLM review.
 
 Product contract: [specification](PRODUCT_SPEC.md). Sequence: [plan](IMPLEMENTATION_PLAN.md). Sonnet findings: [validated dispositions](reviews/FINDINGS_DISPOSITION.md). Current package: [CHO-03 durable sessions](work-packages/CHO-03.md). Native Codex and Claude runtime and focused rendered conversation checks pass; broader [CHO-04 qualification](work-packages/CHO-04.md) remains open.
 
@@ -250,3 +250,19 @@ The native mailbox, host polling and UI remain unwired to this store.
 
 See [SESSION_EVENTS](contracts/SESSION_EVENTS.md). Next: typed host coupling
 and replay polling, followed by UI persistence and explicit recovery.
+
+## Atomic terminal-outcome/event coupling
+
+S3b source `6d06a67` couples terminal turn settlement, the handoff journal,
+a typed durable outcome event and the last-terminal snapshot in one transaction.
+Late older outcomes preserve the newer turn summary; exact retries preserve the
+original event and native-correlation checks. Snapshot failures roll back all four
+records. All 696 package tests, including 22 outcome tests, type checking
+and web build pass. Installed and bundled Node process probes establish reopen,
+Codex/Claude facts, a single competing sequence winner, exact retry and complete
+ABORT/IGNORE, stale-sequence and outer-transaction rollback. Controller and complete
+GLM 5.3 high/Vibe review leave no unresolved High or Medium issue.
+The host, native mailbox and UI still use memory; application durability remains
+unqualified until those consumers are implemented and tested.
+
+See [SESSION_TURN_OUTCOMES](contracts/SESSION_TURN_OUTCOMES.md).

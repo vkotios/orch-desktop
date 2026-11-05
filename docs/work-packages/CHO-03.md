@@ -197,6 +197,7 @@ actual process/pending-map qualification remain unwired.
 - S2i — Complete locally: explicit keep/drop resolution, version checks and immutable idempotent resolution receipts.
 - S2 standalone storage APIs are implemented; consumer prerequisites and S3–S5 remain open.
 - S3a — Complete locally: durable event/cursor/snapshot storage (`b104e83`), no mailbox replacement yet.
+- S3b — Complete locally: atomic terminal-outcome/event coupling (`6d06a67`), no host/UI consumer yet.
 - S3 remaining — Host/native event coupling: durable event+projection+outcome commits,
   replay-by-cursor poll replacing destructive drain, ownership checks, paged
   resync, interrupt-and-close with persisted Stop intent, visible
@@ -361,3 +362,30 @@ Low follow-ups before host/import consumers: clarify the null-cursor comment
 body refs, orphan/malformed snapshot and payload cases, transaction commit and
 deleted-body cases to persistent tests. Measure repeated canonicalization and
 bounded candidate-page serialization before high-volume streaming.
+
+## Atomic terminal-outcome/event coupling — S3b
+
+S3b source `6d06a67` couples terminal turn settlement, the handoff journal,
+a typed durable outcome event and the last-terminal snapshot in one transaction.
+Late older outcomes preserve the newer turn summary; exact retries preserve the
+original event and native-correlation checks. Snapshot failures roll back all four
+records. All 696 package tests, including 22 outcome tests, type checking
+and web build pass. Installed and bundled Node process probes establish reopen,
+Codex/Claude facts, a single competing sequence winner, exact retry and complete
+ABORT/IGNORE, stale-sequence and outer-transaction rollback. Controller and complete
+GLM 5.3 high/Vibe review leave no unresolved High or Medium issue.
+The host, native mailbox and UI still use memory; application durability remains
+unqualified until those consumers are implemented and tested.
+
+See [SESSION_TURN_OUTCOMES](../contracts/SESSION_TURN_OUTCOMES.md). Next: remaining
+typed message/tool/permission reducers and bounded body/event composition, actual
+owner/access proofs, then replay polling and storage-error/Stop/close integration.
+Before wiring, address the relevant inherited storage consumer follow-ups; retain
+the explicit no-replay and acknowledgement-versus-process-stop boundaries.
+Additional persistent cases before consumers: expected-sequence shape errors,
+constructor argument/no-I/O behavior, null/primitive typed namespaces, Claude
+factless outcomes and namespace validation, expired transaction helpers and
+publishing a same-owner terminal journal without an existing outcome event.
+Process races and full rollback already have separate installed/bundled-runtime
+evidence. Keep the trusted-clock assumption and preserve/reserve snapshot space
+for the outcome namespace in future projection writers.
