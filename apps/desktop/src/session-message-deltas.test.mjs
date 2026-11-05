@@ -591,6 +591,11 @@ describe("S3c snapshot watermark preservation", () => {
       expectedSeq: 4,
     });
 
+    // Immediate check: outcome writer must have preserved the newer T2 marker.
+    const midSnap = JSON.parse(snapshotRow(fx.store, fx.C).projection_json).state.lastMessageTurn;
+    assert.equal(midSnap.turnId, T2);
+    assert.equal(midSnap.turnSeq, 2);
+
     // Another delta on the still-observed second turn (seq 5): verifies the
     // message writer preserves the outcome written by the outcome writer.
     const partD = randomUUID();
