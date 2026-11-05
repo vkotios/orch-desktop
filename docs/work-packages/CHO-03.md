@@ -199,10 +199,14 @@ actual process/pending-map qualification remain unwired.
 - S3a — Complete locally: durable event/cursor/snapshot storage (`b104e83`), no mailbox replacement yet.
 - S3b — Complete locally: atomic terminal-outcome/event coupling (`6d06a67`), no host/UI consumer yet.
 - S3c — Complete locally: typed body-backed message deltas (`ccb8a30`); native/UI consumers remain pending.
-- S3 remaining — Host/native event coupling: durable event+projection+outcome commits,
-  replay-by-cursor poll replacing destructive drain, ownership checks, paged
-  resync, interrupt-and-close with persisted Stop intent, visible
-  disk-full/corruption handling.
+- S3d — Prepared: typed tool lifecycle facts + body summaries
+  ([SESSION_TOOL_FACTS](../contracts/SESSION_TOOL_FACTS.md),
+  [handoff](CHO-03-s3d-tool-lifecycle-handoff.md)). Not implemented yet.
+- S3 remaining — After S3d: permission/transcript projections, then host/native
+  event coupling: durable event+projection+outcome commits, replay-by-cursor
+  poll replacing destructive drain, ownership checks, paged resync,
+  interrupt-and-close with persisted Stop intent, visible
+  disk-full/corruption handling. Reuse audit: [REUSE_AUDIT](../REUSE_AUDIT.md).
 - S4 — UI drafts/history: CAS drafts with per-save-id immutable conflicts,
   bounded history/list reads, rename/archive/search onto the store, one producer
   per conversation at a time.
@@ -409,9 +413,11 @@ high/Vibe review leave no unresolved High or Medium issue.
 The native mailbox, host polling and UI still use memory. Full transcript
 projection and application restart durability are not yet qualified.
 
-See [SESSION_MESSAGE_DELTAS](../contracts/SESSION_MESSAGE_DELTAS.md). Next: typed
-tool/permission facts and transcript/history reader projection, actual owner and
-access proof, host replay polling, visible storage errors and Stop/close coupling.
+See [SESSION_MESSAGE_DELTAS](../contracts/SESSION_MESSAGE_DELTAS.md). Next: S3d
+[tool lifecycle facts](../contracts/SESSION_TOOL_FACTS.md)
+([handoff](CHO-03-s3d-tool-lifecycle-handoff.md)), then permission/transcript
+projections, actual owner/access proof, host replay polling, visible storage
+errors and Stop/close coupling.
 Future writers preserve both metadata namespaces and reserve snapshot capacity.
 The future actor consumer must allocate stable part IDs once and verify native
 message-level correlation before append; this API does not observe provider

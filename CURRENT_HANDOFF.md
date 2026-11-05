@@ -9,7 +9,9 @@ The product is still called **CHO Desktop** in source, package names and older d
 Read the [product specification](docs/PRODUCT_SPEC.md),
 [implementation status](docs/IMPLEMENTATION_STATUS.md),
 [implementation plan](docs/IMPLEMENTATION_PLAN.md),
-[task register](TASKS.md), and [current work package, CHO-03](docs/work-packages/CHO-03.md).
+[task register](TASKS.md), [current work package, CHO-03](docs/work-packages/CHO-03.md),
+the [reuse audit](docs/REUSE_AUDIT.md), and the prepared
+[S3d tool-lifecycle handoff](docs/work-packages/CHO-03-s3d-tool-lifecycle-handoff.md).
 This handoff is the current entry point; older milestone paragraphs describe their
 own checkpoints, not completion of the whole product.
 
@@ -65,20 +67,25 @@ progress; do not mark it finished or release its existing orchestration claim.
 
 ## Next concrete slice
 
-Implement typed tool lifecycle facts and body summaries with a bounded reducer
-contract grounded in the existing Codex/Claude normalized tool events. Then
-complete permission facts and the transcript/history reader, actual owner and
+**S3d (prepared):** implement typed tool lifecycle facts and body summaries per
+[SESSION_TOOL_FACTS](docs/contracts/SESSION_TOOL_FACTS.md) using the
+[orch handoff](docs/work-packages/CHO-03-s3d-tool-lifecycle-handoff.md). Storage
+only — do not wire mailbox/host/UI in that slice. Reuse boundaries:
+[REUSE_AUDIT](docs/REUSE_AUDIT.md).
+
+After S3d: permission facts and transcript/history reader, actual owner and
 access proofs, host replay polling, visible storage failures, and Stop/close
 coupling. S4 UI history/drafts and S5 explicit restart/import/export/restore
-follow those consumers.
+follow those consumers. Do not simply replace `mailbox.push()` with a database
+call; do not invent a second coordinator or lift Grok JSONL persistence.
 
 Start by reading the current actors/mappers and the
+[tool-facts](docs/contracts/SESSION_TOOL_FACTS.md),
 [message-delta](docs/contracts/SESSION_MESSAGE_DELTAS.md),
 [outcome](docs/contracts/SESSION_TURN_OUTCOMES.md),
 [event](docs/contracts/SESSION_EVENTS.md),
 [body](docs/contracts/SESSION_BODIES.md), and
-[storage](docs/contracts/SESSION_STORAGE.md) contracts. Do not simply replace
-`mailbox.push()` with a database call.
+[storage](docs/contracts/SESSION_STORAGE.md) contracts.
 
 Preserve these invariants:
 
