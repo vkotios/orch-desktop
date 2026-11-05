@@ -4,8 +4,21 @@
 // only the high-water mark is kept. Undecodable input ends the host
 // fail-closed instead of fabricating a correlation.
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { PROTOCOL_VERSION, MAX_FRAME_BYTES, encodeFrame, decodeFrame } from './protocol.mjs';
+
+function resolveSessionDatabasePath(explicit) {
+  if (typeof explicit === 'string' && explicit.length > 0) return explicit;
+  if (typeof process.env.CHO_SESSION_DB === 'string' && process.env.CHO_SESSION_DB.length > 0) {
+    return process.env.CHO_SESSION_DB;
+  }
+  const dir = path.join(os.homedir(), '.cho-desktop');
+  try { fs.mkdirSync(dir, { recursive: true }); } catch { /* openSessionStore will surface path errors */ }
+  return path.join(dir, 'sessions.sqlite3');
+}
 
 // Fixed native-chat slice. These never reach the browser bridge dispatcher;
 // they are handled by the lazily created native-chat service below.
@@ -40,7 +53,9 @@ function parseSenderId(requestId) {
 
 export async function runHost(options = {}) {
   const { input = process.stdin, output = process.stdout, error = process.stderr,
-    generation = crypto.randomUUID(), dispatch, serviceFactory, openClient, onFatal } = options ?? {};
+    generation = crypto.randomUUID(), dispatch, serviceFactory, openClient, onFatal,
+    databasePath } = options ?? {};
+  const sessionDatabasePath = resolveSessionDatabasePath(databasePath);
   const dispatchFn = dispatch
     ?? ((command, args) => import('./bridge.mjs').then((mod) => mod.handleBridgeCommand(command, args)));
 
@@ -93,7 +108,14 @@ export async function runHost(options = {}) {
           return mod.createNativeChatService(ctx);
         });
         nativeServicePromise = Promise.resolve()
-          .then(() => factory({ generation, onFatal: ownerFatal, openClient }))
+          .then(() => factory({
+            generation,
+            onFatal: ownerFatal,
+            openClient,
+            // Enable CHO-03 dual-write for Codex native chat. Injected
+            // serviceFactory tests that omit databasePath stay mailbox-only.
+            ...(serviceFactory ? {} : { databasePath: sessionDatabasePath }),
+          }))
           .then(
             (service) => { nativeService = service; return service; },
             (err) => { nativeServicePromise = null; throw err; },

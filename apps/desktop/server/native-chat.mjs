@@ -91,7 +91,58 @@ export function createNativeChatService(options) {
   const createClaudeActor = options?.createClaudeActor ?? (async (o) => (await import("./claude-chat-actor.mjs")).createClaudeChatActor(o));
 
   const mailbox = createEventMailbox();
-  const state = { closed: false, dead: false, challenge: null, prepared: null, context: null, sessions: new Map(), active: null, approvals: new Map(), clarifications: new Map(), pendingSteers: new Set(), answerJobs: new Map() };
+  const state = {
+    closed: false, dead: false, challenge: null, prepared: null, context: null,
+    sessions: new Map(), active: null, approvals: new Map(), clarifications: new Map(),
+    pendingSteers: new Set(), answerJobs: new Map(),
+    // Durable project row for the prepared workspace (Codex dual-write).
+    durableProject: null,
+  };
+
+  function ownerEvidence() {
+    const prepared = state.prepared;
+    if (!prepared || prepared.controller !== "codex") return null;
+    return { connectionId: prepared.connectionId ?? prepared.client?.connectionId ?? null };
+  }
+  function verifyPersistenceOwner(facts) {
+    // Bindings/turns pass { action, projectId, conversationId, ownerToken,
+    // generation, evidence }. Live Codex writes require the prepared
+    // connection id to match the evidence supplied by this service.
+    if (state.dead || state.closed) return false;
+    const prepared = state.prepared;
+    if (!prepared || prepared.controller !== "codex") return false;
+    const liveId = prepared.connectionId ?? prepared.client?.connectionId ?? null;
+    if (liveId === null) return false;
+    const evidence = facts !== null && typeof facts === "object" ? facts.evidence : null;
+    return evidence !== null && typeof evidence === "object" && evidence.connectionId === liveId;
+  }
+
+  // Optional CHO-03 dual-write. Unit tests omit databasePath; the host passes
+  // one so Codex turns journal into SQLite while the mailbox stays live.
+  let persistence = options?.persistence ?? null;
+  const persistenceDatabasePath =
+    persistence === null && typeof options?.databasePath === "string" && options.databasePath.length > 0
+      ? options.databasePath
+      : null;
+  if (persistence !== null && (typeof persistence !== "object" || typeof persistence.ensureProject !== "function")) {
+    throw new TypeError("createNativeChatService persistence must expose the native session persistence API");
+  }
+  async function ensurePersistence() {
+    if (persistence !== null) return persistence;
+    if (persistenceDatabasePath === null) return null;
+    const { createNativeSessionPersistence } = await import("./native-session-persistence.mjs");
+    persistence = createNativeSessionPersistence({
+      databasePath: persistenceDatabasePath,
+      hostGeneration: generation,
+      verifyOwnerEvidence: verifyPersistenceOwner,
+    });
+    return persistence;
+  }
+  function durablePersist(label, fn) {
+    if (!persistence) return;
+    try { fn(); }
+    catch (err) { throw new Error(`durable ${label} failed: ${messageOf(err)}`); }
+  }
 
   function notifyOwner(err) {
     try { onFatal(err); } catch { /* owner callback must not break teardown */ }
@@ -230,14 +281,49 @@ export function createNativeChatService(options) {
     invalidateApprovals();
     clearClarifications();
   }
+  function durableSettle(a, outcome) {
+    if (!persistence || !a.operationId || !a.observed) return;
+    durablePersist("settle", () => {
+      persistence.settleTurn({
+        conversationId: a.sessionId,
+        turnId: a.turnId,
+        operationId: a.operationId,
+        outcome,
+        nativeIdentity: a.nativeThreadId,
+        nativeTurnId: a.nativeTurnId,
+        evidence: ownerEvidence(),
+      });
+    });
+  }
   function deliverMapped(a, mapped) {
     let terminal = false;
+    let terminalOutcome = null;
     for (const item of mapped) {
       if (item.kind === "model_verified") continue; // the selected model is never verified here
-      if (typeof item.nativeOutcome === "string" && TERMINAL.has(item.nativeOutcome)) terminal = true;
+      if (typeof item.nativeOutcome === "string" && TERMINAL.has(item.nativeOutcome)) {
+        terminal = true;
+        terminalOutcome = item.nativeOutcome;
+      }
+      if (item.kind === "message_delta" && persistence && a.operationId && a.observed) {
+        const partId = crypto.randomUUID();
+        durablePersist("message delta", () => {
+          persistence.appendDelta({
+            conversationId: a.sessionId,
+            turnId: a.turnId,
+            operationId: a.operationId,
+            partId,
+            nativeMessageId: typeof item.nativeItemId === "string" ? item.nativeItemId : partId,
+            text: typeof item.text === "string" ? item.text : "",
+            evidence: ownerEvidence(),
+          });
+        });
+      }
       enqueue({ ...item, generation, turnId: a.turnId });
     }
-    if (terminal) settleTerminal(a);
+    if (terminal) {
+      if (terminalOutcome) durableSettle(a, terminalOutcome);
+      settleTerminal(a);
+    }
   }
   function deliverNotification(a, method, params) {
     const item = params.item;
@@ -269,6 +355,19 @@ export function createNativeChatService(options) {
     if (a.nativeTurnId !== null) return a.nativeTurnId === nativeTurnId;
     a.nativeTurnId = nativeTurnId;
     a.activated = true;
+    if (persistence && a.operationId && !a.observed && a.nativeThreadId !== null) {
+      durablePersist("observe", () => {
+        persistence.afterObserved({
+          conversationId: a.sessionId,
+          turnId: a.turnId,
+          operationId: a.operationId,
+          nativeIdentity: a.nativeThreadId,
+          nativeTurnId,
+          evidence: ownerEvidence(),
+        });
+      });
+      a.observed = true;
+    }
     clearTimer(a);
     flushStash(a);
     if (state.active === a && a.cancelPending) interruptOnce(a);
@@ -460,6 +559,10 @@ export function createNativeChatService(options) {
           .filter((m) => isPlainObject(m) && typeof m.id === "string" && m.id.length > 0)
           .map((m) => Object.freeze({ id: m.id, name: nonEmptyString(m.name) ?? m.id, isDefault: m.isDefault === true }));
         state.prepared = { controller: "codex", projectToken: pending.projectToken, path: canonical, name: pending.name, models: Object.freeze(models), client: owned, connectionId: owned.connectionId };
+        const durable = await ensurePersistence();
+        if (durable) {
+          state.durableProject = durable.ensureProject({ pathCanonical: canonical, name: pending.name });
+        }
       }
       owned = null; // transferred to prepared project
       const models = state.prepared.models.map((m) => ({ ...m, ...(m.supportedEfforts ? { supportedEfforts: [...m.supportedEfforts] } : {}) }));
@@ -502,7 +605,12 @@ export function createNativeChatService(options) {
     }
     session.admitted.add(args.turnId);
     const client = prepared.client;
-    const a = { sessionId: args.sessionId, turnId: args.turnId, nativeThreadId: session.nativeThreadId, nativeTurnId: null, ackTurnId: null, activated: false, terminal: false, cancelPending: false, interruptSent: false, timer: null, stash: [], seenAsyncItems: new Set() };
+    const a = {
+      sessionId: args.sessionId, turnId: args.turnId, nativeThreadId: session.nativeThreadId,
+      nativeTurnId: null, ackTurnId: null, activated: false, terminal: false, cancelPending: false,
+      interruptSent: false, timer: null, stash: [], seenAsyncItems: new Set(),
+      operationId: null, observed: false, written: false,
+    };
     state.active = a; // pending before any provider request so early events bind here
     renewLease(a);
     const timer = setTimeout(() => {
@@ -512,12 +620,43 @@ export function createNativeChatService(options) {
     a.timer = timer;
     let turnRequested = false;
     try {
+      const durable = await ensurePersistence();
+      if (durable && state.durableProject) {
+        // UI session/turn ids are already UUIDs; use them as store conversation/turn ids.
+        durable.ensureConversation({
+          projectId: state.durableProject.id,
+          conversationId: args.sessionId,
+          controller: "codex",
+          modelRequested: args.model,
+          effort: args.effort,
+          role: args.role,
+          evidence: ownerEvidence(),
+        });
+        a.operationId = crypto.randomUUID();
+        durable.beginTurn({
+          conversationId: args.sessionId,
+          turnId: args.turnId,
+          operationId: a.operationId,
+          prompt: args.prompt,
+          effort: args.effort,
+          evidence: ownerEvidence(),
+        });
+      }
       if (session.nativeThreadId === null) {
         const threadResult = await client.request("thread/start", { model: args.model, modelProvider: "openai", cwd: prepared.path, sandbox: args.role === "review" ? "read-only" : "workspace-write", approvalPolicy: "untrusted", config: { mcp_servers: {} } });
         const threadId = extractThreadId(threadResult);
         if (threadId === null) throw new Error("native thread/start did not return result.thread.id");
         session.nativeThreadId = threadId; session.role = args.role; session.model = args.model;
         a.nativeThreadId = threadId;
+        if (durable && a.operationId) {
+          durablePersist("bind native thread", () => {
+            durable.afterThreadStart({
+              conversationId: args.sessionId,
+              nativeThreadId: threadId,
+              evidence: ownerEvidence(),
+            });
+          });
+        }
       }
       if (state.active !== a) throw new Error("native chat service is closed");
       turnRequested = true;
@@ -537,6 +676,17 @@ export function createNativeChatService(options) {
       }
       if (state.dead || state.closed) throw new Error("native chat service is closed");
       a.ackTurnId = ackTurnId;
+      if (durable && a.operationId && !a.written) {
+        durablePersist("record written", () => {
+          durable.afterTurnWritten({
+            conversationId: args.sessionId,
+            turnId: args.turnId,
+            operationId: a.operationId,
+            evidence: ownerEvidence(),
+          });
+        });
+        a.written = true;
+      }
       if (state.active === a && a.nativeTurnId === null) {
         const earlyTerminal = a.stash.find((raw) => raw.method === "turn/completed");
         if (earlyTerminal && eventTurnId(earlyTerminal.method, earlyTerminal.params) !== ackTurnId) {
@@ -546,6 +696,19 @@ export function createNativeChatService(options) {
         }
         if (earlyTerminal) {
           a.nativeTurnId = ackTurnId;
+          if (durable && a.operationId && !a.observed) {
+            durablePersist("early observe", () => {
+              durable.afterObserved({
+                conversationId: args.sessionId,
+                turnId: args.turnId,
+                operationId: a.operationId,
+                nativeIdentity: a.nativeThreadId,
+                nativeTurnId: ackTurnId,
+                evidence: ownerEvidence(),
+              });
+            });
+            a.observed = true;
+          }
           flushStash(a);
         }
       }
@@ -749,6 +912,10 @@ export function createNativeChatService(options) {
     if (state.closed) { if (state.closing) await state.closing; return; }
     state.closed = true;
     await resetProject();
+    if (persistence && typeof persistence.close === "function") {
+      try { persistence.close(); } catch { /* store close is best-effort on shutdown */ }
+      persistence = null;
+    }
   }
 
   return { handle, close };

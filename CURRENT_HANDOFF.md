@@ -67,24 +67,28 @@ progress; do not mark it finished or release its existing orchestration claim.
 
 ## Next concrete slice
 
-**S3d (prepared):** implement typed tool lifecycle facts and body summaries per
-[SESSION_TOOL_FACTS](docs/contracts/SESSION_TOOL_FACTS.md) using the
-[orch handoff](docs/work-packages/CHO-03-s3d-tool-lifecycle-handoff.md). Storage
-only — do not wire mailbox/host/UI in that slice. Reuse boundaries:
-[REUSE_AUDIT](docs/REUSE_AUDIT.md).
+**Product-critical path (in progress):** wire the existing SQLite stack into
+native Codex chat so conversations can persist and later resume. S3d tool-facts
+storage remains prepared but is **not** a gate on first durable text resume
+([REUSE_AUDIT](docs/REUSE_AUDIT.md)).
 
-After S3d: permission facts and transcript/history reader, actual owner and
-access proofs, host replay polling, visible storage failures, and Stop/close
-coupling. S4 UI history/drafts and S5 explicit restart/import/export/restore
-follow those consumers. Do not simply replace `mailbox.push()` with a database
-call; do not invent a second coordinator or lift Grok JSONL persistence.
+**Done locally toward that path:** Codex dual-write adapter
+`apps/desktop/server/native-session-persistence.mjs` journals turns, message
+deltas, and turn outcomes from `native-chat.mjs` while the mailbox still drains
+live events. The host opens `~/.cho-desktop/sessions.sqlite3` (or
+`CHO_SESSION_DB`). Claude actor dual-write, history hydrate RPC/UI, durable poll
+cursor, fence reclaim after host restart, and S3d tool hydrate remain open.
+
+After hydrate + reclaim: permission facts / S3d tool facts as fidelity, then
+Stop/close coupling and CHO-05 orch admission. Do not invent a second
+coordinator or lift Grok JSONL persistence.
 
 Start by reading the current actors/mappers and the
-[tool-facts](docs/contracts/SESSION_TOOL_FACTS.md),
 [message-delta](docs/contracts/SESSION_MESSAGE_DELTAS.md),
 [outcome](docs/contracts/SESSION_TURN_OUTCOMES.md),
 [event](docs/contracts/SESSION_EVENTS.md),
-[body](docs/contracts/SESSION_BODIES.md), and
+[body](docs/contracts/SESSION_BODIES.md),
+[bindings](docs/contracts/SESSION_BINDINGS.md), and
 [storage](docs/contracts/SESSION_STORAGE.md) contracts.
 
 Preserve these invariants:

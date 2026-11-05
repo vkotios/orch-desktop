@@ -199,13 +199,16 @@ actual process/pending-map qualification remain unwired.
 - S3a — Complete locally: durable event/cursor/snapshot storage (`b104e83`), no mailbox replacement yet.
 - S3b — Complete locally: atomic terminal-outcome/event coupling (`6d06a67`), no host/UI consumer yet.
 - S3c — Complete locally: typed body-backed message deltas (`ccb8a30`); native/UI consumers remain pending.
-- S3d — Prepared: typed tool lifecycle facts + body summaries
+- S3d — Prepared (not a gate on first text resume): typed tool lifecycle facts
   ([SESSION_TOOL_FACTS](../contracts/SESSION_TOOL_FACTS.md),
   [handoff](CHO-03-s3d-tool-lifecycle-handoff.md)). Not implemented yet.
-- S3 remaining — After S3d: permission/transcript projections, then host/native
-  event coupling: durable event+projection+outcome commits, replay-by-cursor
-  poll replacing destructive drain, ownership checks, paged resync,
-  interrupt-and-close with persisted Stop intent, visible
+- Host dual-write (Codex) — Locally started: `native-session-persistence.mjs`
+  journals turns/deltas/outcomes from `native-chat.mjs`; mailbox still live.
+  Missing: history hydrate RPC/UI, durable poll cursor, Claude path, fence
+  reclaim after host restart, Stop/close coupling.
+- S3 remaining — After hydrate: permission/transcript + S3d tool fidelity,
+  replay-by-cursor poll replacing destructive drain, ownership checks, paged
+  resync, interrupt-and-close with persisted Stop intent, visible
   disk-full/corruption handling. Reuse audit: [REUSE_AUDIT](../REUSE_AUDIT.md).
 - S4 — UI drafts/history: CAS drafts with per-save-id immutable conflicts,
   bounded history/list reads, rename/archive/search onto the store, one producer

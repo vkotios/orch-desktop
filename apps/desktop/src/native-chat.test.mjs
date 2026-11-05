@@ -2,10 +2,13 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, basename } from "node:path";
+import { randomUUID } from "node:crypto";
 import { PassThrough } from "node:stream";
 import { createNativeChatService } from "../server/native-chat.mjs";
 import { createNativeRpc } from "../server/native-rpc.mjs";
 import { runHost } from "../server/host.mjs";
+import { openSessionStore } from "../server/session-store.mjs";
+import { createSessionEvents } from "../server/session-events.mjs";
 
 const GEN = "gen-1";
 const tick = () => new Promise((r) => setImmediate(r));
@@ -1217,5 +1220,77 @@ describe("native rpc retire", () => {
     await expect(pending).resolves.toBe("fine");
     expect(h.fatal).toHaveLength(0);
     h.peer.close();
+  });
+});
+
+describe("Codex durable dual-write", () => {
+  it("journals deltas and outcomes into SQLite while the mailbox still drains", async () => {
+    const dir = tempDir();
+    const dbPath = join(dir, "sessions.sqlite3");
+    const generation = randomUUID();
+    const sessionId = randomUUID();
+    const turnId = randomUUID();
+    const client = new FakeClient();
+    const fatals = [];
+    const svc = createNativeChatService({
+      generation,
+      onFatal: (e) => fatals.push(e),
+      openClient: async (opts) => { client.handlers = opts; return client; },
+      databasePath: dbPath,
+    });
+    const validated = await svc.handle("native_chat_validate_project", { path: dir });
+    await svc.handle("native_chat_prepare_project", {
+      projectToken: validated.projectToken,
+      trusted: true,
+    });
+    const ack = await svc.handle("direct_chat_send", {
+      generation,
+      projectToken: validated.projectToken,
+      sessionId,
+      turnId,
+      model: "gpt-test",
+      prompt: "persist me",
+      role: "implement",
+      effort: "medium",
+    });
+    expect(ack.nativeThreadId).toBe("th-1");
+    client.note("turn/started", { threadId: "th-1", turn: { id: ack.nativeTurnId } });
+    client.note("item/agentMessage/delta", {
+      threadId: "th-1",
+      turnId: ack.nativeTurnId,
+      itemId: "item-1",
+      delta: "hello durable",
+    });
+    completeTurn(client, "th-1", ack.nativeTurnId, "completed");
+    const polled = await svc.handle("native_chat_poll", {
+      generation,
+      projectToken: validated.projectToken,
+    });
+    expect(polled.events.some((e) => e.kind === "message_delta")).toBe(true);
+    expect(polled.events.some((e) => e.kind === "turn_complete")).toBe(true);
+    expect(fatals).toHaveLength(0);
+
+    await svc.close();
+
+    const store = openSessionStore({ databasePath: dbPath });
+    try {
+      const events = createSessionEvents({ store, verifyOwnerEvidence: () => true });
+      const projects = store.transaction((tx) =>
+        tx.all("SELECT id, path_canonical FROM projects ORDER BY created_at_ms")
+      );
+      expect(projects).toHaveLength(1);
+      expect(projects[0].path_canonical).toBe(dir);
+      const page = events.pollEvents({
+        projectId: projects[0].id,
+        conversationId: sessionId,
+        cursor: null,
+        limit: 32,
+      });
+      const kinds = page.events.map((e) => e.kind);
+      expect(kinds).toContain("message_delta");
+      expect(kinds).toContain("turn_outcome");
+    } finally {
+      store.close();
+    }
   });
 });
