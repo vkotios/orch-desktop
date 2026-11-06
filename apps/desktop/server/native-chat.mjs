@@ -159,6 +159,24 @@ export function createNativeChatService(options) {
     }
     return true;
   }
+  function verifyPendingQuestion(facts) {
+    if (state.dead) return false;
+    if (state.closed && !state.shuttingDown) return false;
+    if (facts === null || typeof facts !== "object") return false;
+    const clarificationId = facts.clarificationId;
+    if (typeof clarificationId !== "string" || clarificationId.length === 0) return false;
+    const rec = state.clarifications.get(clarificationId);
+    if (rec === undefined) return false;
+    if (rec.sessionId !== facts.conversationId || rec.turnId !== facts.turnId) return false;
+    const request = facts.request;
+    if (request === null || typeof request !== "object") return false;
+    if (rec.connectionId !== request.connectionId) return false;
+    if (rec.parsed.nativeItemId !== request.nativeItemId) return false;
+    if (facts.action === "queue" || facts.action === "dispatch") {
+      if (rec.responding !== true && facts.action === "dispatch") return false;
+    }
+    return true;
+  }
   function evidenceProcessDead(evidence) {
     if (evidence === null || typeof evidence !== "object") return false;
     if (evidence.reason !== "host-reclaim") return false;
@@ -212,6 +230,7 @@ export function createNativeChatService(options) {
       livenessPath: `${persistenceDatabasePath}.liveness.json`,
       verifyOwnerEvidence: verifyPersistenceOwner,
       verifyPendingApproval,
+      verifyPendingQuestion,
     });
     return persistence;
   }
@@ -354,6 +373,20 @@ export function createNativeChatService(options) {
   function clearClarifications(emit = true) {
     for (const rec of state.clarifications.values()) {
       if (rec.requestId !== undefined) retireInbound(rec.requestId);
+      if (persistence) {
+        durablePersist("retire clarification", () => {
+          try {
+            persistence.retireClarification({
+              conversationId: rec.sessionId,
+              turnId: rec.turnId,
+              clarificationId: rec.clarificationId,
+              evidence: ownerEvidence(),
+            });
+          } catch {
+            /* already retired or never registered */
+          }
+        });
+      }
       if (emit) enqueue(clarificationEvent(rec, "clarification_resolved"));
     }
     state.clarifications.clear();
@@ -371,9 +404,49 @@ export function createNativeChatService(options) {
   function registerClarification(a, parsed, requestId) {
     if (state.clarifications.size >= MAX_PENDING_CLARIFICATIONS) throw new Error("too many pending native clarifications");
     const clarificationId = crypto.randomUUID();
-    const rec = { clarificationId, parsed, requestId, sessionId: a.sessionId, turnId: a.turnId,
-      connectionId: state.prepared.client.connectionId, responding: false };
+    const connectionId = state.prepared.client.connectionId;
+    const rec = {
+      clarificationId,
+      parsed,
+      requestId,
+      sessionId: a.sessionId,
+      turnId: a.turnId,
+      connectionId,
+      responding: false,
+      answerOperationId: null,
+    };
     state.clarifications.set(clarificationId, rec);
+    if (persistence && a.observed) {
+      try {
+        const questions = parsed.questions.map((q) => ({
+          id: q.id,
+          header: q.header,
+          question: q.question,
+          options: q.options === null
+            ? null
+            : q.options.map((o) => ({ label: o.label, description: o.description ?? "" })),
+          multiSelect: q.multiSelect === true,
+          isOther: q.isOther === true,
+        }));
+        durablePersist("register clarification", () => {
+          persistence.registerClarification({
+            conversationId: a.sessionId,
+            turnId: a.turnId,
+            clarificationId,
+            route: requestId === undefined ? "codex_async" : "codex_request",
+            connectionId,
+            nativeItemId: parsed.nativeItemId,
+            nativeRequestId: requestId === undefined ? null : requestId,
+            questions,
+            pendingEvidence: { clarificationId, requestId },
+            evidence: ownerEvidence(),
+          });
+        });
+      } catch (err) {
+        state.clarifications.delete(clarificationId);
+        throw err;
+      }
+    }
     enqueue({ ...clarificationEvent(rec, "clarification"), isBlocking: parsed.isBlocking, questions: parsed.questions });
   }
   // Only a known not-admitted failure may release the turn locally.
@@ -1473,7 +1546,38 @@ export function createNativeChatService(options) {
     } catch (err) { return receipt(false, "invalid", messageOf(err)); }
     const client = state.prepared.client;
     rec.responding = true;
+    const durable = persistence;
+    const operationId = crypto.randomUUID();
+    rec.answerOperationId = operationId;
+    if (durable) {
+      try {
+        durablePersist("queue clarification answer", () => {
+          durable.queueClarificationAnswer({
+            conversationId: args.sessionId,
+            turnId: args.turnId,
+            clarificationId: args.clarificationId,
+            operationId,
+            answers: args.answers,
+            pendingEvidence: { clarificationId: args.clarificationId, requestId: rec.requestId },
+            evidence: ownerEvidence(),
+          });
+          durable.beginClarificationAnswerDispatch({
+            conversationId: args.sessionId,
+            turnId: args.turnId,
+            clarificationId: args.clarificationId,
+            operationId,
+            pendingEvidence: { clarificationId: args.clarificationId, requestId: rec.requestId },
+            evidence: ownerEvidence(),
+          });
+        });
+      } catch (err) {
+        rec.responding = false;
+        rec.answerOperationId = null;
+        return receipt(false, "invalid", messageOf(err));
+      }
+    }
     let pending;
+    let outcome = "unknown";
     try {
       if (rec.requestId === undefined) {
         const controller = new AbortController();
@@ -1483,8 +1587,10 @@ export function createNativeChatService(options) {
         const response = await client.request("turn/steer", { threadId: rec.parsed.nativeThreadId, expectedTurnId,
           input: [{ type: "text", text: encoded }] }, { signal: controller.signal });
         if (!isPlainObject(response) || response.turnId !== expectedTurnId) throw new Error("native steer ACK did not match the expected turn");
+        outcome = "acknowledged";
       } else {
         await client.respond(rec.requestId, encoded);
+        outcome = "written";
       }
       if (state.clarifications.get(rec.clarificationId) === rec) {
         state.clarifications.delete(rec.clarificationId);
@@ -1494,13 +1600,31 @@ export function createNativeChatService(options) {
     } catch (err) {
       const current = state.clarifications.get(rec.clarificationId) === rec && state.active === a && !state.dead && !state.closed;
       if (err?.code === "NOT_SENT") {
+        outcome = "not_sent";
         if (current) rec.responding = false;
         return receipt(false, current ? "not_sent" : "stale");
       }
+      outcome = "unknown";
       fatalize(new Error("native clarification response failed; outcome unknown"));
       throw new Error("native clarification response failed; outcome unknown");
     } finally {
       if (pending) state.pendingSteers.delete(pending);
+      if (durable && rec.answerOperationId === operationId) {
+        durablePersist("settle clarification answer", () => {
+          try {
+            durable.settleClarificationAnswer({
+              conversationId: args.sessionId,
+              turnId: args.turnId,
+              clarificationId: args.clarificationId,
+              operationId,
+              outcome,
+              evidence: ownerEvidence(),
+            });
+          } catch {
+            /* already settled or never queued */
+          }
+        });
+      }
     }
   }
 

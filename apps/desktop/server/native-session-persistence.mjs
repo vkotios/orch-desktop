@@ -20,6 +20,7 @@ import { createSessionTurnOutcomes } from "./session-turn-outcomes.mjs";
 import { createSessionEvents } from "./session-events.mjs";
 import { createSessionBodies } from "./session-bodies.mjs";
 import { createSessionApprovals } from "./session-approvals.mjs";
+import { createSessionClarifications } from "./session-clarifications.mjs";
 
 function defaultLivenessPath() {
   if (typeof process.env.CHO_PRODUCER_LIVENESS === "string" && process.env.CHO_PRODUCER_LIVENESS.trim()) {
@@ -172,6 +173,7 @@ function requireUuid(value, label) {
  *   hostGeneration: string,
  *   verifyOwnerEvidence: (evidence: unknown) => boolean,
  *   verifyPendingApproval?: (facts: unknown) => boolean,
+ *   verifyPendingQuestion?: (facts: unknown) => boolean,
  *   now?: () => number,
  * }} options
  */
@@ -191,6 +193,10 @@ export function createNativeSessionPersistence(options) {
     typeof options.verifyPendingApproval === "function"
       ? options.verifyPendingApproval
       : () => false;
+  const verifyPendingQuestion =
+    typeof options.verifyPendingQuestion === "function"
+      ? options.verifyPendingQuestion
+      : () => false;
   const livenessPath = typeof options.livenessPath === "string" && options.livenessPath.length > 0
     ? options.livenessPath
     : defaultLivenessPath();
@@ -208,6 +214,12 @@ export function createNativeSessionPersistence(options) {
     store,
     verifyOwnerEvidence,
     verifyPendingApproval,
+    now,
+  });
+  const clarifications = createSessionClarifications({
+    store,
+    verifyOwnerEvidence,
+    verifyPendingQuestion,
     now,
   });
 
@@ -571,6 +583,115 @@ export function createNativeSessionPersistence(options) {
     requireUuid(conversationId, "conversationId");
     requireUuid(approvalId, "approvalId");
     return approvals.getApproval({ projectId, conversationId, operationId: approvalId });
+  }
+
+  function registerClarification({
+    conversationId,
+    turnId,
+    clarificationId,
+    route,
+    connectionId,
+    nativeItemId,
+    nativeRequestId = null,
+    questions,
+    pendingEvidence = null,
+    evidence = null,
+  }) {
+    assertOpen();
+    const meta = conversations.get(conversationId);
+    if (!meta) throw new Error(`unknown conversation ${conversationId}`);
+    return clarifications.registerClarification({
+      ...scopeOf(meta, evidence),
+      turnId,
+      clarificationId,
+      route,
+      connectionId,
+      nativeItemId,
+      nativeRequestId,
+      questions,
+      pendingEvidence,
+    });
+  }
+
+  function queueClarificationAnswer({
+    conversationId,
+    turnId,
+    clarificationId,
+    operationId,
+    answers,
+    pendingEvidence = null,
+    evidence = null,
+  }) {
+    assertOpen();
+    const meta = conversations.get(conversationId);
+    if (!meta) throw new Error(`unknown conversation ${conversationId}`);
+    return clarifications.queueAnswer({
+      ...scopeOf(meta, evidence),
+      turnId,
+      clarificationId,
+      operationId,
+      answers,
+      pendingEvidence,
+    });
+  }
+
+  function beginClarificationAnswerDispatch({
+    conversationId,
+    turnId,
+    clarificationId,
+    operationId,
+    pendingEvidence = null,
+    evidence = null,
+  }) {
+    assertOpen();
+    const meta = conversations.get(conversationId);
+    if (!meta) throw new Error(`unknown conversation ${conversationId}`);
+    return clarifications.beginAnswerDispatch({
+      ...scopeOf(meta, evidence),
+      turnId,
+      clarificationId,
+      operationId,
+      pendingEvidence,
+    });
+  }
+
+  function settleClarificationAnswer({
+    conversationId,
+    turnId,
+    clarificationId,
+    operationId,
+    outcome,
+    request = null,
+    evidence = null,
+  }) {
+    assertOpen();
+    const meta = conversations.get(conversationId);
+    if (!meta) throw new Error(`unknown conversation ${conversationId}`);
+    const args = {
+      ...scopeOf(meta, evidence),
+      turnId,
+      clarificationId,
+      operationId,
+      outcome,
+    };
+    if (request !== null) args.request = request;
+    return clarifications.settleAnswer(args);
+  }
+
+  function retireClarification({
+    conversationId,
+    turnId,
+    clarificationId,
+    evidence = null,
+  }) {
+    assertOpen();
+    const meta = conversations.get(conversationId);
+    if (!meta) throw new Error(`unknown conversation ${conversationId}`);
+    return clarifications.retireClarification({
+      ...scopeOf(meta, evidence),
+      turnId,
+      clarificationId,
+    });
   }
 
   /**
@@ -1286,6 +1407,11 @@ export function createNativeSessionPersistence(options) {
     beginApprovalDispatch,
     settleApproval,
     getApproval,
+    registerClarification,
+    queueClarificationAnswer,
+    beginClarificationAnswerDispatch,
+    settleClarificationAnswer,
+    retireClarification,
     reconcileStrandedTurns,
     releaseProducer,
     releaseAllProducers,

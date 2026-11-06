@@ -17,7 +17,7 @@ The accepted delivery sequence is [IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_P
 
 Current evidence covers real continuing Codex and Claude debug-runtime conversations with tool permissions, clarification, cancellation and owned cleanup. Both windows pass focused rendered conversation checks. Broader UI polish, installed release and clean-machine acceptance remain open.
 
-- [~] **CHO-03:** Recovery defects + F-11 `excludeTurns` + approval dual-write + search/export/import host APIs + S3d child-process probes landed ([progress](docs/evidence/PROGRESS-MATRIX-2026-11-06.md)). Still open: clarification durable dual-write, full migration, live resume qualification.
+- [~] **CHO-03:** Recovery defects + F-11 `excludeTurns` + approval/clarification dual-write + search/export/import host APIs + S3d child-process probes landed ([progress](docs/evidence/PROGRESS-MATRIX-2026-11-06.md)). Still open: full schema migration path, live resume qualification.
 - [~] **CHO-04/05:** Host admission, uncertain adopt/abandon, read-only Diff drawer, and panel evidence landed. Integrate remains honestly disabled (no fake Git path). Live delegated change + independent review remain blocked. [Release gates](docs/RELEASE_v01.md).
 - [x] **CHO-06:** replace the generic Starting indicator while an empty response waits on a clarification; retain explicit waiting/submission/error states and no default answer.
 - [ ] **Maintenance:** remove the unused local clarification reset helper when cleaning the API. Generic invoke rejection must continue to require Stop unless pre-admission failure is proven. Give answer-capacity rejection a distinct reason if admission limits change; current caps match and no reachable loss was established.
