@@ -74,3 +74,6 @@ exe hash after the combined bundle step is the NSIS-patched binary.
 - Rust/Cargo: `1.99.1` at `%USERPROFILE%\.cargo\bin` (added to PATH for this session)
 - MSVC Build Tools 2022 present (`14.44.35207`)
 - Node: workspace `v24.22.1`; staged runtime `v24.22.2`
+- Owner marked all three requested env setup external actions done (2026-11-06 Europe/London)
+- Edge WebView runtime present under `C:\Program Files (x86)\Microsoft\EdgeWebView\Application` (156.x)
+- This private-worker run has no linked Cursor cloud Environment record; local machine setup is the source of truth
