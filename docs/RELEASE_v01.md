@@ -10,16 +10,17 @@ Target: Windows 11 x64 installer + public GitHub source once product journeys qu
 | Real Codex/Claude continuing conversation | Prior debug-preview evidence; current durable resume wiring needs integrated qualification |
 | Persist / resume text across reopen | Recovery defects from the 2026-11-05 audit are repaired in code; live reopen qualification remains |
 | Delegate via orch (claim/worktree/run) | Intent-before-effect associations + host-admitted `orch_run` dir; end-to-end journey still open |
-| Accept / Finish / discard | Accept / Finish / Discard exist; Integrate remains disabled; Finish warns worktree removal |
+| Accept / Finish / Integrate / discard | Accept / Finish / Discard / Integrate exist and stay separate; Integrate merges after Accept with dry-run confirm; Finish warns worktree removal |
 | Native CLI auth (no credential copy) | Unchanged — uses installed CLIs |
 
 Still not release-qualified: packaged installer smoke on a clean machine, live
-Codex/Claude reopen/tool/approval matrix, full CHO-06 polish (diff viewer), and
-RapidAI NOTICE attribution. Public repo / tag / signing require the owner.
+Codex/Claude reopen/tool/approval matrix, owner scaling/WebView2 keyboard
+evidence, and RapidAI NOTICE attribution. Public repo / tag / signing require
+the owner.
 
 Current validation (2026-11-06 Europe/London), completion candidate above `76076fb`:
-767 package tests, typecheck, web build, 61 focused coordinator tests, staged
-`.runtime`, and 12 Rust host tests. See
+743 desktop package tests (+ shared), typecheck, web build; see
+[progress matrix](evidence/PROGRESS-MATRIX-2026-11-06.md),
 [completion evidence](evidence/CURSOR-COMPLETION-2026-11-06.md),
 the [audit](reviews/CURSOR-DELIVERY-REVIEW-2026-11-05.md), and
 [Cursor completion instruction](CURSOR_COMPLETION_INSTRUCTIONS.md).
