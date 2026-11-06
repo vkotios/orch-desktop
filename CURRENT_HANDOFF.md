@@ -23,13 +23,15 @@ integration, recovery, and release qualification.
 ## Active continuation checkpoint — 2026-11-06
 
 Audited base remains `76076fb3cd6c82f3ca7d74220d226e34955521c4`. Cursor completion
-work above that base repairs the audited CHO-03 recovery defects and CHO-04/05
-admission/delegation gaps (see
-[evidence](docs/evidence/CURSOR-COMPLETION-2026-11-06.md)). Local verification on
-the completion candidate: **767** package tests, typecheck, web build, 61 focused
-coordinator tests, staged `.runtime` (Node 24.22.2), and 12 Rust host tests.
-Release/clean-machine AC rows and live Codex/Claude qualification remain blocked
-on owner environments/accounts. M2/M3 exit gates are improved but not closed.
+continues past the first correction batch through CHO-03/04/05/06/07 accessible
+work (see [progress matrix](docs/evidence/PROGRESS-MATRIX-2026-11-06.md) and
+[evidence](docs/evidence/CURSOR-COMPLETION-2026-11-06.md)). Implemented locally:
+recovery fixes, `excludeTurns`, approval dual-write, search/export/import host
+APIs, S3d child-process probes, uncertain adopt/abandon, read-only Diff drawer,
+CSP/NOTICE/support/privacy/security/CONTRIBUTING, native Windows CI job.
+Unfinished accessible: clarification durable dual-write, explicit Git integrate,
+file-reference surface, rendered viewport evidence. Externally blocked: live
+CLI qualification, clean-machine AC-01/13/15, independent review, push/tag/sign.
 
 The verified checkpoint table and workforce paragraphs below describe earlier
 work. For the owner-supplied Cursor continuation, the plan's current execution

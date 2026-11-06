@@ -250,6 +250,56 @@ export async function abandonDelegation(associationId: string, note?: string) {
   });
 }
 
+/**
+ * Adopt an uncertain association when orch still reports a live run id.
+ * Never relaunches; only reattaches observed identity under host authority.
+ */
+export async function adoptUncertainDelegation(
+  invoke: OrchInvoke,
+  association: DelegationAssociation,
+) {
+  if (association.stage !== "uncertain") {
+    throw new Error("Only uncertain associations can be adopted.");
+  }
+  let runId = association.runId;
+  let worktreePath = association.worktreePath;
+  if (runId) {
+    const detail = await invoke("orch_run_detail", { runId });
+    if (!detail.ok) {
+      throw new Error(detail.text || "Could not inspect the recorded run before adopt.");
+    }
+  } else {
+    throw new Error(
+      "No run id was recorded for this uncertain association. Abandon it or inspect orch manually before retrying.",
+    );
+  }
+  return callHost<{ association: DelegationAssociation }>("delegation_upsert", {
+    id: association.id,
+    stage: "running",
+    runId,
+    worktreePath,
+    note: "Adopted after uncertain recovery; not relaunched.",
+  });
+}
+
+export async function readDelegationDiff(
+  associationId: string,
+  filePath?: string,
+) {
+  return callHost<{
+    associationId: string;
+    worktreePath: string;
+    repoPath: string;
+    files: Array<{ status: string; path: string }>;
+    path: string | null;
+    patch: string | null;
+    readOnly: boolean;
+  }>("delegation_worktree_diff", {
+    id: associationId,
+    ...(filePath ? { path: filePath } : {}),
+  });
+}
+
 /** Record acceptance only — never merges, pushes, or deletes worktrees. */
 export async function acceptDelegation(
   invoke: OrchInvoke,

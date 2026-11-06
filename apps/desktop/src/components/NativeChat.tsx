@@ -4,10 +4,12 @@ import { FormattedMarkdown } from "./FormattedMarkdown";
 import { NativeClarificationCard } from "./NativeClarificationCard";
 import { OrchAgentsPanel } from "./OrchAgentsPanel";
 import {
-  nativeChatAnswer, nativeChatCancel, nativeChatClose, nativeChatGetDraft,
-  nativeChatHydrateConversation, nativeChatListConversations, nativeChatPoll,
-  nativeChatPrepareProject, nativeChatRespond, nativeChatSaveDraft, nativeChatSend,
-  nativeChatValidateProject, nativeChatPickProjectFolder,
+  nativeChatAnswer, nativeChatArchiveConversation, nativeChatCancel, nativeChatClose,
+  nativeChatExportConversation, nativeChatGetDraft, nativeChatHydrateConversation,
+  nativeChatListConversations, nativeChatListDraftConflicts, nativeChatPoll,
+  nativeChatPrepareProject, nativeChatRenameConversation, nativeChatResolveDraftConflict,
+  nativeChatRespond, nativeChatSaveDraft, nativeChatSend, nativeChatValidateProject,
+  nativeChatPickProjectFolder,
   type NativeClarificationRequest, type NativeController, type NativeDecision, type NativeEffort,
   type NativeEventCursor, type NativeHydratedConversation, type NativeModelInfo,
   type NativePrepareResult, type NativeRole, type NativeValidateResult,
@@ -82,6 +84,7 @@ export function NativeChat() {
   const sessionsRef = useRef<NativeUiSession[]>([]);
   const [selected, setSelected] = useState("");
   const [draft, setDraft] = useState("");
+  const [chatSearch, setChatSearch] = useState("");
   const [loading, setLoading] = useState("");
   const [error, setError] = useState("");
   const [lost, setLost] = useState(false);
@@ -103,6 +106,9 @@ export function NativeChat() {
   const controllerName = labelController(projectController);
   const availableEfforts = modelEfforts(projectController, project?.models.find((m) => m.id === current?.model));
   const busy = sessions.some((s) => s.busy) || sendPending;
+  const visibleSessions = chatSearch.trim()
+    ? sessions.filter((s) => s.title.toLowerCase().includes(chatSearch.trim().toLowerCase()))
+    : sessions;
 
   function changeSessions(fn: (current: NativeUiSession[]) => NativeUiSession[]) {
     const next = fn(sessionsRef.current);
@@ -558,7 +564,113 @@ export function NativeChat() {
       {project && <><div className="native-project"><Icon name="folder" size={16} /><div><strong>{project.name}</strong><small title={project.path}>{project.path}</small></div></div>
         <button className="native-button" onClick={newChat} disabled={lost || !project.models.length || sessions.length >= NATIVE_MAX_SESSIONS}><Icon name="plus" size={15} /> New chat</button>
         <OrchAgentsPanel repoPath={project.path} conversationId={selected || null} disabled={lost || busy || Boolean(loading)} />
-        <nav aria-label="Chats" className="native-chat-list">{sessions.map((s) => <button key={s.id} className={s.id === selected ? "selected" : ""} onClick={() => selectChat(s.id)}><Icon name="chat" size={15} /><span>{s.title}</span>{s.busy && <span aria-label="Working">·</span>}</button>)}</nav>
+        <label className="native-search">
+          <span className="sr-only">Search chats</span>
+          <input
+            value={chatSearch}
+            onChange={(e) => setChatSearch(e.target.value)}
+            placeholder="Search chats"
+            disabled={lost}
+          />
+        </label>
+        <nav aria-label="Chats" className="native-chat-list">{visibleSessions.map((s) => <button key={s.id} className={s.id === selected ? "selected" : ""} onClick={() => selectChat(s.id)}><Icon name="chat" size={15} /><span>{s.title}</span>{s.busy && <span aria-label="Working">·</span>}</button>)}</nav>
+        {selected && !lost ? (
+          <div className="native-orch-actions">
+            <button
+              type="button"
+              className="native-button"
+              disabled={busy || Boolean(loading)}
+              onClick={() => {
+                const title = window.prompt("Rename chat", current?.title || "Chat");
+                if (!title || !project) return;
+                void nativeChatRenameConversation(project.generation, project.projectToken, selected, title)
+                  .then(() => changeSessions((all) => all.map((s) => s.id === selected ? { ...s, title } : s)))
+                  .catch((err) => setError(errorText(err)));
+              }}
+            >
+              Rename
+            </button>
+            <button
+              type="button"
+              className="native-button"
+              disabled={busy || Boolean(loading)}
+              onClick={() => {
+                if (!project) return;
+                void nativeChatExportConversation(project.generation, project.projectToken, selected)
+                  .then((result) => {
+                    const blob = new Blob([JSON.stringify(result.export, null, 2)], { type: "application/json" });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement("a");
+                    a.href = url;
+                    a.download = `cho-conversation-${selected.slice(0, 8)}.json`;
+                    a.click();
+                    URL.revokeObjectURL(url);
+                    setLoading("Exported conversation.");
+                    setTimeout(() => { if (mounted.current) setLoading(""); }, 1500);
+                  })
+                  .catch((err) => setError(errorText(err)));
+              }}
+            >
+              Export
+            </button>
+            <button
+              type="button"
+              className="native-button"
+              disabled={busy || Boolean(loading)}
+              onClick={() => {
+                if (!project) return;
+                void nativeChatArchiveConversation(project.generation, project.projectToken, selected, true)
+                  .then(() => {
+                    changeSessions((all) => all.filter((s) => s.id !== selected));
+                    const next = sessionsRef.current.find((s) => s.id !== selected);
+                    setSelected(next?.id || "");
+                    setDraft("");
+                  })
+                  .catch((err) => setError(errorText(err)));
+              }}
+            >
+              Archive
+            </button>
+            <button
+              type="button"
+              className="native-button"
+              disabled={busy || Boolean(loading)}
+              onClick={() => {
+                if (!project) return;
+                void nativeChatListDraftConflicts(project.generation, project.projectToken, selected)
+                  .then(async (listed) => {
+                    const open = listed.conflicts.filter((c) => !c.resolution);
+                    if (open.length === 0) {
+                      setError("");
+                      setLoading("No open draft conflicts.");
+                      setTimeout(() => { if (mounted.current) setLoading(""); }, 1500);
+                      return;
+                    }
+                    const conflict = open[0];
+                    const keepLocal = window.confirm(
+                      `Draft conflict at base v${conflict.baseVersion}. OK keeps the current composer text; Cancel drops the conflicting save.`,
+                    );
+                    await nativeChatResolveDraftConflict({
+                      generation: project.generation,
+                      projectToken: project.projectToken,
+                      conversationId: selected,
+                      conflictId: conflict.saveId,
+                      resolutionId: crypto.randomUUID(),
+                      expectedVersion: conflict.baseVersion,
+                      action: keepLocal ? "kept" : "dropped",
+                      ...(keepLocal ? { text: draft } : {}),
+                    });
+                    setError("");
+                    setLoading(keepLocal ? "Kept local draft." : "Dropped conflicting draft save.");
+                    setTimeout(() => { if (mounted.current) setLoading(""); }, 1500);
+                  })
+                  .catch((err) => setError(errorText(err)));
+              }}
+            >
+              Resolve draft conflict
+            </button>
+          </div>
+        ) : null}
         <button className="native-close-project" onClick={() => void closeProject()} disabled={busy || Boolean(loading) || lost}>Close project</button></>}
     </aside>
     <main className="native-main">
@@ -569,7 +681,19 @@ export function NativeChat() {
         {project && current && <><div className="native-settings"><label>Model <select value={current.model} disabled={current.threadStarted || current.messages.length > 0 || current.busy || sendPending || lost} onChange={(e) => chooseModel(e.target.value)}>{project.models.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}</select></label><label>Access <select value={current.role} disabled={current.threadStarted || current.messages.length > 0 || current.busy || sendPending || lost} onChange={(e) => updateSettings({ role: e.target.value as NativeRole })}><option value="implement">Editing</option><option value="review">Read-only</option></select></label><label>Effort <select value={current.effort ?? ""} disabled={((current.threadStarted || current.messages.length > 0) && current.controller === "claude") || current.busy || sendPending || lost || !availableEfforts.length} onChange={(e) => updateSettings({ effort: e.target.value as NativeEffort })}>{availableEfforts.length ? availableEfforts.map((e) => <option key={e} value={e}>{e === "xhigh" ? "Extra high" : e === "max" ? "Max" : e[0].toUpperCase() + e.slice(1)}</option>) : <option value="">Default</option>}</select></label></div>
           {(current.threadStarted || current.messages.length > 0) && <p className="native-hint">{current.controller === "codex" ? "Start a new chat to change the model or access." : "Start a new chat to change these settings."}</p>}
           {projectController === "claude" && current.role === "review" && <p className="native-hint">Review mode limits Claude to read tools.</p>}
-          <div className="native-messages" aria-live="polite">{current.messages.length === 0 && <div className="native-welcome"><h1>What would you like to work on?</h1><p>Ask {controllerName} about this project or describe a change.</p></div>}{current.messages.map((m) => <article className={`native-message ${m.role}`} key={m.id}><div className="native-message-label">{m.role === "user" ? "You" : controllerName}</div>{m.text ? <FormattedMarkdown text={m.text} /> : m.isStreaming ? <span className="native-muted">Starting…</span> : null}{m.tools.map((t) => <div className="native-tool" key={t.id}>{t.title} · {t.status}</div>)}{m.statusText && <p className="native-muted">{m.statusText}</p>}{m.outcome && <p className={m.isError ? "native-outcome error" : "native-outcome"}>{m.outcome}{m.outcomeNote ? `: ${m.outcomeNote}` : ""}</p>}{current.clarifications.filter((r) => r.turnId === m.id).map((r) => <NativeClarificationCard key={r.clarificationId} request={r} disabled={lost || current.cancelling || current.unavailable} onAnswer={(answers) => void answerClarification(r, answers)} />)}</article>)}<div ref={bottomRef} /></div>
+          <div className="native-messages" aria-live="polite">{current.messages.length === 0 && <div className="native-welcome"><h1>What would you like to work on?</h1><p>Ask {controllerName} about this project or describe a change.</p></div>}{current.messages.map((m) => {
+            const waitingClarifications = current.clarifications.filter((r) => r.turnId === m.id);
+            const waitingOnClarification = m.isStreaming && !m.text && waitingClarifications.some((r) => !r.answering);
+            const answeringClarification = m.isStreaming && !m.text && waitingClarifications.some((r) => r.answering);
+            const emptyStatus = waitingOnClarification
+              ? "Waiting for your answer…"
+              : answeringClarification
+                ? "Submitting answer…"
+                : m.isStreaming
+                  ? "Starting…"
+                  : null;
+            return <article className={`native-message ${m.role}`} key={m.id}><div className="native-message-label">{m.role === "user" ? "You" : controllerName}</div>{m.text ? <FormattedMarkdown text={m.text} /> : emptyStatus ? <span className="native-muted">{emptyStatus}</span> : null}{m.tools.map((t) => <div className="native-tool" key={t.id}>{t.title} · {t.status}</div>)}{m.statusText && <p className="native-muted">{m.statusText}</p>}{m.outcome && <p className={m.isError ? "native-outcome error" : "native-outcome"}>{m.outcome}{m.outcomeNote ? `: ${m.outcomeNote}` : ""}</p>}{waitingClarifications.map((r) => <NativeClarificationCard key={r.clarificationId} request={r} disabled={lost || current.cancelling || current.unavailable} onAnswer={(answers) => void answerClarification(r, answers)} />)}</article>;
+          })}<div ref={bottomRef} /></div>
           <div className="native-approvals">{current.approvals.map((a) => <section className="native-approval" key={a.approvalId} aria-label="Approval request"><strong>{a.approvalType === "command" ? "Command approval" : a.approvalType === "file" ? "File change approval" : "Tool approval"}</strong><pre>{a.text}</pre><div>{a.decisions.length ? a.decisions.map((d) => <button key={d} className="native-button" disabled={pendingDecisions.includes(a.approvalId) || current.cancelling || lost} onClick={() => void decide(a.approvalId, d)}>{d === "accept" ? "Accept" : d === "decline" ? "Decline" : "Cancel"}</button>) : <span>No supported decisions are available.</span>}</div></section>)}</div>
           <div className="native-composer"><label className="sr-only" htmlFor="native-prompt">Message {controllerName}</label><textarea id="native-prompt" value={draft} onChange={(e) => { const text = e.target.value; setDraft(text); if (current) queueDraftSave(current.id, text); }} onKeyDown={composerKey} placeholder={`Message ${controllerName}…`} disabled={lost || current.unavailable} rows={3} /><div className="native-composer-actions"><span>Enter to send · Shift+Enter for a new line</span>{current.busy ? <button className="native-button" onClick={() => void stop()} disabled={current.cancelling || lost}><Icon name="stop" size={14} />{current.cancelling ? "Stopping…" : "Stop"}</button> : <button className="native-primary" onClick={() => void send()} disabled={!draft.trim() || draft.length > 65536 || busy || lost || !current.model}><Icon name="arrow" size={15} /> Send</button>}</div></div></>}
       </div>

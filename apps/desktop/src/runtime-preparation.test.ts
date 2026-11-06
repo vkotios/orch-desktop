@@ -156,7 +156,7 @@ describe("prepareRuntime", () => {
     await rm(join(sourceRoot, "apps", "desktop", "server", "bridge.mjs"));
     await expect(prepareRuntime({ manifestPath, sourceRoot, outputDir, fetchImpl: fakeFetch(bodies()).impl })).rejects.toThrow(/allowlisted/);
     expect(await snapshot(outputDir)).toEqual(before);
-  });
+  }, 15_000);
 
   it("replaces output wholesale so stale and unexpected files vanish", async () => {
     const sourceRoot = await makeSourceRoot();

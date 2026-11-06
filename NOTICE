@@ -1,0 +1,20 @@
+CHO Desktop
+Copyright contributors to the CHO Desktop / orch-desktop project.
+
+This product includes software developed for CHO Desktop and third-party
+components distributed under their respective licenses.
+
+---------------------------------------------------------------------------
+Retained architectural scaffold attribution
+
+Portions of the desktop shell layout and packaging approach were informed by
+RapidAI/grok-build-desktop (Apache License 2.0). CHO Desktop does not adopt
+that project's persistence, trust, framing, or keyring implementations.
+
+RapidAI/grok-build-desktop
+Copyright 2023-2026 SpaceXAI
+Licensed under the Apache License, Version 2.0
+https://github.com/RapidAI/grok-build-desktop
+
+See also orch/THIRD_PARTY.md for coordinator dependency notices where present.
+---------------------------------------------------------------------------

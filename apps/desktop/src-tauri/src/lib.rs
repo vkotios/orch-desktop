@@ -146,6 +146,36 @@ async fn native_chat_get_draft(app: AppHandle, args: Value) -> Result<Value, Str
 }
 
 #[tauri::command]
+async fn native_chat_list_draft_conflicts(app: AppHandle, args: Value) -> Result<Value, String> {
+    route_with_args(&app, "native_chat_list_draft_conflicts", args).await
+}
+
+#[tauri::command]
+async fn native_chat_resolve_draft_conflict(app: AppHandle, args: Value) -> Result<Value, String> {
+    route_with_args(&app, "native_chat_resolve_draft_conflict", args).await
+}
+
+#[tauri::command]
+async fn native_chat_rename_conversation(app: AppHandle, args: Value) -> Result<Value, String> {
+    route_with_args(&app, "native_chat_rename_conversation", args).await
+}
+
+#[tauri::command]
+async fn native_chat_archive_conversation(app: AppHandle, args: Value) -> Result<Value, String> {
+    route_with_args(&app, "native_chat_archive_conversation", args).await
+}
+
+#[tauri::command]
+async fn native_chat_export_conversation(app: AppHandle, args: Value) -> Result<Value, String> {
+    route_with_args(&app, "native_chat_export_conversation", args).await
+}
+
+#[tauri::command]
+async fn native_chat_import_transcript(app: AppHandle, args: Value) -> Result<Value, String> {
+    route_with_args(&app, "native_chat_import_transcript", args).await
+}
+
+#[tauri::command]
 async fn native_pick_project_folder(window: WebviewWindow) -> Result<Option<String>, String> {
     let (tx, rx) = tokio::sync::oneshot::channel();
     window
@@ -230,6 +260,12 @@ pub fn run() {
             native_chat_hydrate_conversation,
             native_chat_save_draft,
             native_chat_get_draft,
+            native_chat_list_draft_conflicts,
+            native_chat_resolve_draft_conflict,
+            native_chat_rename_conversation,
+            native_chat_archive_conversation,
+            native_chat_export_conversation,
+            native_chat_import_transcript,
             native_pick_project_folder
         ])
         .build(tauri::generate_context!())

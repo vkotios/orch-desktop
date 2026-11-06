@@ -38,16 +38,16 @@ exe hash after the combined bundle step is the NSIS-patched binary.
 | F-03 | Fixed | `resetProject` try/finally always closes native client; settle failure rethrown after close |
 | F-08 | Fixed | Pre-observation / fatalize / Claude send-failure settle `unknown`; prepare-time `reconcileStrandedTurns` |
 | C-01 | Fixed | `readBodyText` concatenates buffers then decodes once; unicode boundary hydrate test |
-| F-05 | Fixed (partial) | Liveness records `createdAt`, exclusive lock, EPERM/uncertain ≠ dead |
+| F-05 | Fixed | Liveness records `createdAt`, exclusive lock, EPERM/uncertain ≠ dead |
 | F-02 | Fixed (partial) | Durable recovery when live progress lost; cursor not advanced past withheld durable events; reducer tests |
-| F-13 | Fixed (partial) | Stable `factId` per `(toolCallId,phase)`; drop Codex `nativeMessageId` fallback; storage failures still surface (RUN-04) |
+| F-13 | Fixed | Stable `factId`; Codex `nativeMessageId` fallback dropped; S3d installed-Node reopen + race probes |
 | F-06 | Fixed (partial) | Draft meta merge, conflict notice, unmount timer cancel, restore prompt on send failure |
-| F-07 | Fixed (partial) | Restore multiple conversations; truncation/unbound notices; hydrate errors surfaced |
-| F-04 | Fixed (partial) | Intent-before-effect, conversation filter, uncertain stage, no relaunch without run id |
+| F-07 | Fixed (partial) | Restore multiple conversations; search/export/import host APIs; truncation notices |
+| F-04 | Fixed (partial) | Intent-before-effect; uncertain adopt/abandon UI; no silent relaunch |
 | F-01 | Fixed (partial) | Host `admitOrchArgs` strips `ownerApprovedModel`/`allow`, derives `orch_run` dir from association |
-| F-09 | Fixed (partial) | Finish warns worktree removal; uncertain gates Accept/Finish; dry-run before discard cleanup |
-| F-10 | Docs pending update in this pass | Status docs refreshed with honest wording |
-| F-11 | Open | `excludeTurns` optional; needs installed Codex schema check |
+| F-09 | Fixed (partial) | Finish/Discard evidence; read-only Diff drawer; Integrate remains disabled (no fake Git path) |
+| F-10 | Fixed | Status/progress docs use implemented/verified/unfinished/blocked vocabulary |
+| F-11 | Fixed | Installed Codex 0.156.1 schema evidence + `excludeTurns: true` on resume + contract test |
 
 ## AC-01–AC-15 matrix (accessible local work only)
 
@@ -57,11 +57,11 @@ exe hash after the combined bundle step is the NSIS-patched binary.
 | AC-02 | partial | Distinct error paths exist in host/UI; live CLI/sign-in matrix not re-run |
 | AC-03 | partial | Resume wiring + hydrate present; live reopen with real CLI not qualified here |
 | AC-04 | partial | Draft/switch fixes landed; rendered journey evidence not captured |
-| AC-05 | partial | Prior mailbox approval/cancel evidence; durable approval journal still unwired |
+| AC-05 | partial | Durable approval dual-write journalled; live CLI deny/cancel/stale still owner-blocked |
 | AC-06 | partial | Association intent + host-admitted run dir; end-to-end orch launch not re-qualified |
-| AC-07 | partial | Uncertain stages + no silent relaunch; live interrupt/reconcile journey open |
-| AC-08 | blocked | Independent review + diff UI journey incomplete |
-| AC-09 | partial | Accept/Finish/Discard wording fixed; Integrate disabled; Git integrate still unavailable |
+| AC-07 | partial | Uncertain adopt/abandon UI; live interrupt/reconcile journey open |
+| AC-08 | blocked | Independent review unavailable; read-only Diff drawer implemented locally |
+| AC-09 | partial | Accept/Finish/Discard wording fixed; Integrate disabled pending explicit Git path |
 | AC-10 | partial | orch process identity reused; owned cancel path exists |
 | AC-11 | partial | Host allowlist + admission; bridge security tests pass |
 | AC-12 | blocked | Needs rendered 1360×880 / 960×720 / scaling keyboard evidence |

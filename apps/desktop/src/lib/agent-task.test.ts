@@ -6,7 +6,7 @@ vi.mock("./api", () => ({
   callHost: (...args: unknown[]) => callHost(...args),
 }));
 
-const { startAgentTask } = await import("./agent-task");
+const { adoptUncertainDelegation, startAgentTask } = await import("./agent-task");
 
 const task = {
   repo: "C:/project",
@@ -24,7 +24,9 @@ const ok = (output: object = {}) => ({
   text: "",
 });
 
-function association(patch: Record<string, unknown> = {}) {
+function association(
+  patch: Partial<import("./agent-task").DelegationAssociation> = {},
+): import("./agent-task").DelegationAssociation {
   return {
     id: "assoc-1",
     conversationId: null,
@@ -146,5 +148,31 @@ describe("agent task preparation", () => {
     ).rejects.toThrow("instructions");
     expect(invoke).not.toHaveBeenCalled();
     expect(callHost).not.toHaveBeenCalled();
+  });
+
+  it("adopts an uncertain association with a recorded run without relaunching", async () => {
+    const invoke = vi.fn().mockResolvedValue(ok({ id: "run-1" }));
+    const result = await adoptUncertainDelegation(
+      invoke,
+      association({
+        stage: "uncertain",
+        runId: "run-1",
+        worktreePath: "C:/project/.worktrees/WP-UI",
+      }),
+    );
+    expect(invoke).toHaveBeenCalledWith("orch_run_detail", { runId: "run-1" });
+    expect(callHost).toHaveBeenCalledWith(
+      "delegation_upsert",
+      expect.objectContaining({ id: "assoc-1", stage: "running", runId: "run-1" }),
+    );
+    expect(result.association.stage).toBe("running");
+  });
+
+  it("refuses adopt when uncertain association has no run id", async () => {
+    const invoke = vi.fn();
+    await expect(
+      adoptUncertainDelegation(invoke, association({ stage: "uncertain", runId: null })),
+    ).rejects.toThrow("No run id");
+    expect(invoke).not.toHaveBeenCalled();
   });
 });

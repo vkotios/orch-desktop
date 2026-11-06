@@ -8,7 +8,81 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { PROTOCOL_VERSION, MAX_FRAME_BYTES, encodeFrame, decodeFrame } from './protocol.mjs';
+
+const execFileAsync = promisify(execFile);
+
+/**
+ * Read-only changed-file / unified-diff surface for an owned association.
+ * Display only — never mutates Git, accepts, integrates or cleans up.
+ */
+async function readAssociationWorktreeDiff(store, args) {
+  const associationId = typeof args?.id === 'string' ? args.id : null;
+  if (!associationId) throw new Error('delegation_worktree_diff requires id');
+  const association = store.get(associationId);
+  if (!association) throw new Error('association not found');
+  const worktreePath = association.worktreePath;
+  if (typeof worktreePath !== 'string' || worktreePath.length === 0) {
+    throw new Error('association has no worktree path yet');
+  }
+  const resolved = path.resolve(worktreePath);
+  if (!fs.existsSync(resolved)) throw new Error('worktree path does not exist');
+  const repoRoot = path.resolve(association.repoPath);
+  const rel = path.relative(repoRoot, resolved);
+  if (rel.startsWith('..') || path.isAbsolute(rel)) {
+    throw new Error('worktree path is outside the associated repository');
+  }
+  async function git(gitArgs) {
+    try {
+      const { stdout } = await execFileAsync('git', gitArgs, {
+        cwd: resolved,
+        encoding: 'utf8',
+        maxBuffer: 2 * 1024 * 1024,
+        windowsHide: true,
+      });
+      return stdout;
+    } catch (err) {
+      const stderr = err && typeof err === 'object' ? err.stderr : '';
+      throw new Error(`git ${gitArgs[0]} failed: ${String(stderr || err?.message || err).slice(0, 400)}`);
+    }
+  }
+  const statusOut = await git(['status', '--porcelain', '--untracked-files=all']);
+  const files = statusOut
+    .split(/\r?\n/)
+    .map((line) => line.trimEnd())
+    .filter((line) => line.length > 0)
+    .map((line) => {
+      const status = line.slice(0, 2);
+      const filePath = line.slice(3).replace(/\\/g, '/');
+      return { status, path: filePath };
+    })
+    .slice(0, 200);
+  let patch = null;
+  const focus = typeof args.path === 'string' && args.path.length > 0 && args.path.length <= 1024
+    ? args.path.replace(/\\/g, '/')
+    : null;
+  if (focus) {
+    if (focus.includes('..') || path.isAbsolute(focus)) {
+      throw new Error('diff path must be repository-relative');
+    }
+    const raw = await git(['diff', '--no-ext-diff', '--', focus]);
+    patch = raw.length > 200_000 ? `${raw.slice(0, 200_000)}\n… truncated` : raw;
+  } else if (files.length > 0) {
+    const raw = await git(['diff', '--no-ext-diff', '--stat']);
+    patch = raw.length > 20_000 ? `${raw.slice(0, 20_000)}\n… truncated` : raw;
+  }
+  return {
+    associationId,
+    worktreePath: resolved,
+    repoPath: repoRoot,
+    files,
+    path: focus,
+    patch,
+    readOnly: true,
+  };
+}
 
 function resolveSessionDatabasePath(explicit) {
   if (typeof explicit === 'string' && explicit.length > 0) return explicit;
@@ -35,6 +109,12 @@ const NATIVE_COMMANDS = new Set([
   'native_chat_hydrate_conversation',
   'native_chat_save_draft',
   'native_chat_get_draft',
+  'native_chat_list_draft_conflicts',
+  'native_chat_resolve_draft_conflict',
+  'native_chat_rename_conversation',
+  'native_chat_archive_conversation',
+  'native_chat_export_conversation',
+  'native_chat_import_transcript',
 ]);
 const ORCH_COMMANDS = [
   'orch_dashboard',
@@ -61,6 +141,7 @@ const DELEGATION_COMMANDS = new Set([
   'delegation_list',
   'delegation_upsert',
   'delegation_set_disposition',
+  'delegation_worktree_diff',
 ]);
 const ALLOWED_COMMANDS = new Set([
   'ping',
@@ -278,6 +359,8 @@ export async function runHost(options = {}) {
             data = {
               association: store.setDisposition(args.id, args.disposition, args.note ?? null),
             };
+          } else if (env.command === 'delegation_worktree_diff') {
+            data = await readAssociationWorktreeDiff(store, args);
           } else {
             throw new Error(`unknown delegation command ${env.command}`);
           }

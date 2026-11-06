@@ -1,35 +1,52 @@
 import React, { useMemo } from "react";
 
-/**
- * Lightweight, dependency-free Markdown renderer for clean assistant response text.
- * Renders fenced code blocks, headings, bullet lists, and inline code cleanly.
- */
-export function FormattedMarkdown({ text }: { text: string }) {
-  const segments = useMemo(() => {
-    const out: Array<{
-      type: "code" | "prose";
-      lang?: string;
-      content: string;
-    }> = [];
-    const fenceRe = /```([a-zA-Z0-9_-]*)\r?\n([\s\S]*?)```/g;
-    let lastIdx = 0;
-    let match: RegExpExecArray | null;
-    while ((match = fenceRe.exec(text)) !== null) {
-      if (match.index > lastIdx) {
-        out.push({ type: "prose", content: text.slice(lastIdx, match.index) });
-      }
+type Segment = {
+  type: "code" | "prose";
+  lang?: string;
+  content: string;
+  unfinished?: boolean;
+};
+
+function splitMarkdown(text: string): Segment[] {
+  const out: Segment[] = [];
+  let remaining = text;
+  while (remaining.length > 0) {
+    const open = remaining.match(/```([a-zA-Z0-9_-]*)\r?\n/);
+    if (!open || open.index === undefined) {
+      out.push({ type: "prose", content: remaining });
+      break;
+    }
+    if (open.index > 0) {
+      out.push({ type: "prose", content: remaining.slice(0, open.index) });
+    }
+    const afterOpen = remaining.slice(open.index + open[0].length);
+    const closeIdx = afterOpen.indexOf("```");
+    if (closeIdx === -1) {
       out.push({
         type: "code",
-        lang: match[1] || "text",
-        content: match[2].replace(/\n$/, ""),
+        lang: open[1] || "text",
+        content: afterOpen.replace(/\n$/, ""),
+        unfinished: true,
       });
-      lastIdx = match.index + match[0].length;
+      break;
     }
-    if (lastIdx < text.length) {
-      out.push({ type: "prose", content: text.slice(lastIdx) });
-    }
-    return out;
-  }, [text]);
+    out.push({
+      type: "code",
+      lang: open[1] || "text",
+      content: afterOpen.slice(0, closeIdx).replace(/\n$/, ""),
+      unfinished: false,
+    });
+    remaining = afterOpen.slice(closeIdx + 3);
+  }
+  return out;
+}
+
+/**
+ * Lightweight, dependency-free Markdown renderer for assistant response text.
+ * Closed and unfinished fenced code blocks render as code (streaming-safe).
+ */
+export function FormattedMarkdown({ text }: { text: string }) {
+  const segments = useMemo(() => splitMarkdown(text), [text]);
 
   if (!text || !text.trim()) {
     return <span className="empty-stream-placeholder">Working…</span>;
@@ -57,9 +74,9 @@ export function FormattedMarkdown({ text }: { text: string }) {
       {segments.map((seg, i) => {
         if (seg.type === "code") {
           return (
-            <div key={i} className="md-code-block">
+            <div key={i} className={`md-code-block${seg.unfinished ? " md-code-unfinished" : ""}`}>
               <div className="md-code-header">
-                <span>{seg.lang || "code"}</span>
+                <span>{seg.lang || "code"}{seg.unfinished ? " · streaming" : ""}</span>
                 <button
                   type="button"
                   className="md-copy-btn"

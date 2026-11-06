@@ -1,10 +1,13 @@
 import { useState } from "react";
 import { callHost, type OrchCommandResult, type OrchDashboardData } from "../lib/api";
 import {
+  abandonDelegation,
   acceptDelegation,
+  adoptUncertainDelegation,
   discardDelegation,
   finishDelegation,
   listDelegations,
+  readDelegationDiff,
   startAgentTask,
   type DelegationAssociation,
 } from "../lib/agent-task";
@@ -34,16 +37,60 @@ export function OrchAgentsPanel({ repoPath, conversationId = null, disabled = fa
   const [dashboard, setDashboard] = useState<OrchDashboardData | null>(null);
   const [associations, setAssociations] = useState<DelegationAssociation[]>([]);
   const [resumeId, setResumeId] = useState<string | null>(null);
+  const [evidence, setEvidence] = useState<Record<string, string>>({});
+  const [diffText, setDiffText] = useState("");
+  const [diffTitle, setDiffTitle] = useState("");
 
   async function refresh() {
     try {
       const [data, listed] = await Promise.all([
         callHost<OrchDashboardData>("orch_dashboard"),
-        listDelegations(repoPath),
+        listDelegations(repoPath, conversationId),
       ]);
       setDashboard(data);
       setAssociations(listed);
       setError("");
+      const nextEvidence: Record<string, string> = {};
+      for (const item of listed.filter((a) => isOpenDisposition(a.disposition)).slice(0, 8)) {
+        const parts: string[] = [];
+        try {
+          const gate = await callHost<OrchCommandResult>("orch_gate_status", {
+            wp: item.wp,
+            slice: item.slice,
+          });
+          parts.push(`gate: ${gate.text || JSON.stringify(gate.output || {}).slice(0, 160)}`);
+        } catch (err) {
+          parts.push(`gate: ${err instanceof Error ? err.message : String(err)}`);
+        }
+        if (item.runId) {
+          try {
+            const detail = await callHost<OrchCommandResult>("orch_run_detail", {
+              runId: item.runId,
+            });
+            parts.push(`run: ${detail.text || JSON.stringify(detail.output || {}).slice(0, 160)}`);
+          } catch (err) {
+            parts.push(`run: ${err instanceof Error ? err.message : String(err)}`);
+          }
+          try {
+            const scope = await callHost<OrchCommandResult>("orch_scope", {
+              runId: item.runId,
+            });
+            parts.push(`scope: ${scope.text || JSON.stringify(scope.output || {}).slice(0, 120)}`);
+          } catch (err) {
+            parts.push(`scope: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        }
+        try {
+          const cleanup = await callHost<OrchCommandResult>("orch_cleanup", {
+            wp: item.wp,
+          });
+          parts.push(`cleanup preview: ${cleanup.text || JSON.stringify(cleanup.output || {}).slice(0, 160)}`);
+        } catch (err) {
+          parts.push(`cleanup preview: ${err instanceof Error ? err.message : String(err)}`);
+        }
+        nextEvidence[item.id] = parts.join(" · ");
+      }
+      setEvidence(nextEvidence);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -139,6 +186,57 @@ export function OrchAgentsPanel({ repoPath, conversationId = null, disabled = fa
       setStatus(`Discarded ${item.wp}/${item.slice}.`);
       if (resumeId === item.id) setResumeId(null);
       await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onAdoptUncertain(item: DelegationAssociation) {
+    setBusy(true);
+    setError("");
+    try {
+      await adoptUncertainDelegation(callHost, item);
+      setStatus(`Adopted uncertain association ${item.wp}/${item.slice}.`);
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onAbandonUncertain(item: DelegationAssociation) {
+    setBusy(true);
+    setError("");
+    try {
+      await abandonDelegation(item.id);
+      setStatus(`Abandoned uncertain association ${item.wp}/${item.slice}.`);
+      if (resumeId === item.id) setResumeId(null);
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onShowDiff(item: DelegationAssociation) {
+    setBusy(true);
+    setError("");
+    try {
+      const diff = await readDelegationDiff(item.id);
+      const lines = [
+        `Worktree: ${diff.worktreePath}`,
+        `Files: ${diff.files.length}`,
+        ...diff.files.slice(0, 40).map((f) => `${f.status} ${f.path}`),
+        "",
+        diff.patch || "(no patch summary)",
+      ];
+      setDiffTitle(`${item.wp}/${item.slice} changes`);
+      setDiffText(lines.join("\n"));
+      setStatus(`Loaded read-only diff for ${item.wp}/${item.slice}.`);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -245,6 +343,11 @@ export function OrchAgentsPanel({ repoPath, conversationId = null, disabled = fa
                     Worktree: {item.worktreePath}
                   </small>
                 ) : null}
+                {evidence[item.id] ? (
+                  <small className="native-muted" title={evidence[item.id]}>
+                    Evidence: {evidence[item.id]}
+                  </small>
+                ) : null}
                 <div className="native-orch-actions">
                   <button
                     type="button"
@@ -260,6 +363,38 @@ export function OrchAgentsPanel({ repoPath, conversationId = null, disabled = fa
                   >
                     Use for resume
                   </button>
+                  {item.worktreePath ? (
+                    <button
+                      type="button"
+                      className="native-button"
+                      disabled={busy}
+                      title="Read-only changed-file summary for the owned worktree."
+                      onClick={() => void onShowDiff(item)}
+                    >
+                      Diff
+                    </button>
+                  ) : null}
+                  {item.stage === "uncertain" ? (
+                    <>
+                      <button
+                        type="button"
+                        className="native-button"
+                        disabled={busy || !item.runId}
+                        title="Reattach a recorded run without relaunching."
+                        onClick={() => void onAdoptUncertain(item)}
+                      >
+                        Adopt
+                      </button>
+                      <button
+                        type="button"
+                        className="native-button"
+                        disabled={busy}
+                        onClick={() => void onAbandonUncertain(item)}
+                      >
+                        Abandon uncertain
+                      </button>
+                    </>
+                  ) : null}
                   {item.disposition === "none" && item.stage !== "uncertain" ? (
                     <button type="button" className="native-button" disabled={busy} onClick={() => void onAccept(item)}>
                       Accept
@@ -278,7 +413,7 @@ export function OrchAgentsPanel({ repoPath, conversationId = null, disabled = fa
                     type="button"
                     className="native-button"
                     disabled
-                    title="Git integration is not available yet. Finish is coordinator closure only."
+                    title="Explicit Git merge/cherry-pick is not implemented. Finish is coordinator closure only."
                   >
                     Integrate
                   </button>
@@ -303,6 +438,17 @@ export function OrchAgentsPanel({ repoPath, conversationId = null, disabled = fa
             ))}
           </ul>
         )}
+        {diffText ? (
+          <section className="native-orch-diff" aria-label={diffTitle || "Worktree changes"}>
+            <header className="native-orch-header">
+              <strong>{diffTitle || "Worktree changes"}</strong>
+              <button type="button" className="native-close-project" onClick={() => { setDiffText(""); setDiffTitle(""); }}>
+                Close diff
+              </button>
+            </header>
+            <pre className="native-orch-diff-body">{diffText}</pre>
+          </section>
+        ) : null}
       </div>
     </section>
   );

@@ -19,6 +19,7 @@ import { createSessionToolFacts } from "./session-tool-facts.mjs";
 import { createSessionTurnOutcomes } from "./session-turn-outcomes.mjs";
 import { createSessionEvents } from "./session-events.mjs";
 import { createSessionBodies } from "./session-bodies.mjs";
+import { createSessionApprovals } from "./session-approvals.mjs";
 
 function defaultLivenessPath() {
   if (typeof process.env.CHO_PRODUCER_LIVENESS === "string" && process.env.CHO_PRODUCER_LIVENESS.trim()) {
@@ -170,6 +171,7 @@ function requireUuid(value, label) {
  *   databasePath: string,
  *   hostGeneration: string,
  *   verifyOwnerEvidence: (evidence: unknown) => boolean,
+ *   verifyPendingApproval?: (facts: unknown) => boolean,
  *   now?: () => number,
  * }} options
  */
@@ -185,6 +187,10 @@ export function createNativeSessionPersistence(options) {
   if (typeof verifyOwnerEvidence !== "function") {
     throw new TypeError("createNativeSessionPersistence requires verifyOwnerEvidence");
   }
+  const verifyPendingApproval =
+    typeof options.verifyPendingApproval === "function"
+      ? options.verifyPendingApproval
+      : () => false;
   const livenessPath = typeof options.livenessPath === "string" && options.livenessPath.length > 0
     ? options.livenessPath
     : defaultLivenessPath();
@@ -198,6 +204,12 @@ export function createNativeSessionPersistence(options) {
   const outcomes = createSessionTurnOutcomes({ store, verifyOwnerEvidence, now });
   const events = createSessionEvents({ store, verifyOwnerEvidence, now });
   const bodies = createSessionBodies({ store, verifyOwnerEvidence, now });
+  const approvals = createSessionApprovals({
+    store,
+    verifyOwnerEvidence,
+    verifyPendingApproval,
+    now,
+  });
 
   /** @type {Map<string, { id: string, pathCanonical: string, name: string }>} */
   const projectsByPath = new Map();
@@ -448,10 +460,205 @@ export function createNativeSessionPersistence(options) {
     return Buffer.concat(chunks).toString("utf8");
   }
 
-  function listConversations({ projectId, limit = 50 }) {
+  function listConversations({ projectId, limit = 50, query = "", includeArchived = false }) {
     assertOpen();
     requireUuid(projectId, "projectId");
-    return records.listConversations({ projectId, limit, offset: 0, includeArchived: false });
+    return records.listConversations({
+      projectId,
+      limit,
+      offset: 0,
+      includeArchived: includeArchived === true,
+      query: typeof query === "string" ? query : "",
+    });
+  }
+
+  /**
+   * Journal a live mailbox approval before any UI decision. Does not grant a
+   * response right by itself; the host must keep the live pending map in sync.
+   */
+  function registerApproval({
+    conversationId,
+    turnId,
+    approvalId,
+    nativeRequestId,
+    connectionId,
+    nativeItemId,
+    approvalType,
+    decisions,
+    pendingEvidence = null,
+    evidence = null,
+  }) {
+    assertOpen();
+    const meta = conversations.get(conversationId);
+    if (!meta) throw new Error(`unknown conversation ${conversationId}`);
+    requireUuid(turnId, "turnId");
+    requireUuid(approvalId, "approvalId");
+    return approvals.registerApproval({
+      ...scopeOf(meta, evidence),
+      turnId,
+      operationId: approvalId,
+      nativeRequestId,
+      connectionId,
+      nativeItemId,
+      approvalType,
+      decisions,
+      pendingEvidence,
+    });
+  }
+
+  function decideApproval({
+    conversationId,
+    turnId,
+    approvalId,
+    decision,
+    pendingEvidence = null,
+    evidence = null,
+  }) {
+    assertOpen();
+    const meta = conversations.get(conversationId);
+    if (!meta) throw new Error(`unknown conversation ${conversationId}`);
+    return approvals.decideApproval({
+      ...scopeOf(meta, evidence),
+      turnId,
+      operationId: approvalId,
+      decision,
+      pendingEvidence,
+    });
+  }
+
+  function beginApprovalDispatch({
+    conversationId,
+    turnId,
+    approvalId,
+    pendingEvidence = null,
+    evidence = null,
+  }) {
+    assertOpen();
+    const meta = conversations.get(conversationId);
+    if (!meta) throw new Error(`unknown conversation ${conversationId}`);
+    return approvals.beginApprovalDispatch({
+      ...scopeOf(meta, evidence),
+      turnId,
+      operationId: approvalId,
+      pendingEvidence,
+    });
+  }
+
+  function settleApproval({
+    conversationId,
+    turnId,
+    approvalId,
+    outcome,
+    request = null,
+    evidence = null,
+  }) {
+    assertOpen();
+    const meta = conversations.get(conversationId);
+    if (!meta) throw new Error(`unknown conversation ${conversationId}`);
+    const args = {
+      ...scopeOf(meta, evidence),
+      turnId,
+      operationId: approvalId,
+      outcome,
+    };
+    if (request !== null) args.request = request;
+    return approvals.settleApproval(args);
+  }
+
+  function getApproval({ projectId, conversationId, approvalId }) {
+    assertOpen();
+    requireUuid(projectId, "projectId");
+    requireUuid(conversationId, "conversationId");
+    requireUuid(approvalId, "approvalId");
+    return approvals.getApproval({ projectId, conversationId, operationId: approvalId });
+  }
+
+  /**
+   * Read-only export of hydrated transcript + metadata. Native execution
+   * permissions are never included.
+   */
+  function exportConversation({ projectId, conversationId }) {
+    assertOpen();
+    const hydrated = hydrateConversation({ projectId, conversationId });
+    if (!hydrated) return null;
+    return {
+      format: "cho.session.export.v1",
+      exportedAtMs: Date.now(),
+      projectId,
+      conversation: hydrated,
+    };
+  }
+
+  /**
+   * Import a prior export or plain message list as a read-only transcript.
+   * Creates a new conversation with NULL native ids and no producer fence.
+   */
+  function importTranscript({
+    projectId,
+    source,
+    sourceKey,
+    title = "",
+    controller = "codex",
+    messages = [],
+  }) {
+    assertOpen();
+    requireUuid(projectId, "projectId");
+    if (typeof source !== "string" || source.length === 0 || source.length > 128) {
+      throw new Error("importTranscript requires a bounded source");
+    }
+    if (typeof sourceKey !== "string" || sourceKey.length === 0 || sourceKey.length > 512) {
+      throw new Error("importTranscript requires a bounded sourceKey");
+    }
+    if (controller !== "codex" && controller !== "claude") {
+      throw new Error("importTranscript controller must be codex or claude");
+    }
+    if (!Array.isArray(messages)) throw new Error("importTranscript requires messages array");
+    const existing = store.transaction((tx) =>
+      tx.get("SELECT conversation_id AS conversationId FROM imports WHERE source = ? AND source_key = ?", [
+        source,
+        sourceKey,
+      ]),
+    );
+    if (existing?.conversationId) {
+      return {
+        created: false,
+        conversationId: existing.conversationId,
+        importBatchId: null,
+      };
+    }
+    const conversationId = randomUUID();
+    const importBatchId = randomUUID();
+    const stamp = typeof now === "function" ? now() : Date.now();
+    records.createConversation({
+      id: conversationId,
+      projectId,
+      controller,
+      title: typeof title === "string" ? title.slice(0, 256) : "",
+    });
+    // Persist import receipt + a single transcript body for readers. Native
+    // refs/fences/permissions are intentionally omitted (SESSION_STORAGE §5).
+    const bodyText = JSON.stringify({
+      v: 1,
+      kind: "imported_transcript",
+      messages: messages.slice(0, 500).map((m) => ({
+        role: m && typeof m.role === "string" ? m.role.slice(0, 32) : "assistant",
+        text: m && typeof m.text === "string" ? m.text.slice(0, 200_000) : "",
+      })),
+    });
+    store.transaction((tx) => {
+      tx.run(
+        "INSERT INTO imports(source, source_key, conversation_id, import_batch_id, created_at_ms) VALUES (?, ?, ?, ?, ?)",
+        [source, sourceKey, conversationId, importBatchId, stamp],
+      );
+      // bodies table expects content-addressed rows via session-bodies; for the
+      // import receipt path store the transcript JSON as conversation draft text
+      // so history UI can surface it without fabricating turn journals.
+      tx.run(
+        "INSERT INTO drafts(conversation_id, text, version, updated_at_ms) VALUES (?, ?, 1, ?) ON CONFLICT(conversation_id) DO UPDATE SET text=excluded.text, version=drafts.version+1, updated_at_ms=excluded.updated_at_ms",
+        [conversationId, bodyText, stamp],
+      );
+    });
+    return { created: true, conversationId, importBatchId };
   }
 
   /**
@@ -936,6 +1143,26 @@ export function createNativeSessionPersistence(options) {
     return records.getDraft({ projectId, conversationId });
   }
 
+  function listDraftConflicts({ projectId, conversationId }) {
+    assertOpen();
+    return records.listDraftConflicts({ projectId, conversationId });
+  }
+
+  function resolveDraftConflict(args) {
+    assertOpen();
+    return records.resolveDraftConflict(args);
+  }
+
+  function renameConversation({ projectId, conversationId, title }) {
+    assertOpen();
+    return records.renameConversation({ projectId, conversationId, title });
+  }
+
+  function setConversationArchived({ projectId, conversationId, archived }) {
+    assertOpen();
+    return records.setConversationArchived({ projectId, conversationId, archived });
+  }
+
   function saveDraft({ projectId, conversationId, saveId, expectedVersion, text }) {
     assertOpen();
     requireUuid(projectId, "projectId");
@@ -1045,9 +1272,20 @@ export function createNativeSessionPersistence(options) {
     pollUiCatchup,
     getDraft,
     saveDraft,
+    listDraftConflicts,
+    resolveDraftConflict,
+    renameConversation,
+    setConversationArchived,
     getSnapshot,
     listConversations,
     hydrateConversation,
+    exportConversation,
+    importTranscript,
+    registerApproval,
+    decideApproval,
+    beginApprovalDispatch,
+    settleApproval,
+    getApproval,
     reconcileStrandedTurns,
     releaseProducer,
     releaseAllProducers,
