@@ -581,11 +581,14 @@ export function nativeChatHydrateConversation(
   generation: string,
   projectToken: string,
   conversationId: string,
+  options: { maxEventPages?: number; turnLimit?: number } = {},
 ): Promise<{ generation: string; conversation: NativeHydratedConversation | null }> {
   return invokeNative("native_chat_hydrate_conversation", {
     generation,
     projectToken,
     conversationId,
+    ...(Number.isSafeInteger(options.maxEventPages) ? { maxEventPages: options.maxEventPages } : {}),
+    ...(Number.isSafeInteger(options.turnLimit) ? { turnLimit: options.turnLimit } : {}),
   });
 }
 

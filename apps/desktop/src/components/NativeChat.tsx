@@ -85,6 +85,7 @@ export function NativeChat() {
   const [selected, setSelected] = useState("");
   const [draft, setDraft] = useState("");
   const [chatSearch, setChatSearch] = useState("");
+  const [historyTruncated, setHistoryTruncated] = useState(false);
   const [loading, setLoading] = useState("");
   const [error, setError] = useState("");
   const [lost, setLost] = useState(false);
@@ -372,6 +373,7 @@ export function NativeChat() {
               const session = sessionFromHydrated(p, hydrated.conversation);
               if (hydrated.conversation.hasMoreEvents) {
                 hydrateNotice = "Earlier transcript pages exist for one or more chats; only the recent window was loaded.";
+                if (mounted.current) setHistoryTruncated(true);
               }
               if (!hydrated.conversation.nativeThreadId && !hydrated.conversation.nativeSessionUuid && session.messages.length > 0) {
                 hydrateNotice = hydrateNotice || "A prior native session is unbound; continuing may start a new provider context. Prefer an explicit new chat if unsure.";
@@ -414,13 +416,63 @@ export function NativeChat() {
     draftMetaRef.current.set(session.id, { version: 0 });
   }
 
+  async function flushDraftFor(conversationId: string) {
+    const owner = ownerRef.current;
+    if (!owner || lost) {
+      cancelDraftTimer(conversationId);
+      return;
+    }
+    cancelDraftTimer(conversationId);
+    const meta = draftMetaRef.current.get(conversationId) ?? { version: 0 };
+    await (meta.chain ?? Promise.resolve()).catch(() => {});
+    const latest = draftMetaRef.current.get(conversationId) ?? meta;
+    const text = typeof latest.pendingText === "string"
+      ? latest.pendingText
+      : (selectedRef.current === conversationId ? draft : null);
+    if (typeof text !== "string") return;
+    const session = sessionsRef.current.find((s) => s.id === conversationId);
+    try {
+      const result = await nativeChatSaveDraft({
+        generation: owner.project.generation,
+        projectToken: owner.project.projectToken,
+        conversationId,
+        saveId: crypto.randomUUID(),
+        expectedVersion: latest.version,
+        text,
+        modelRequested: session?.model ?? null,
+        effort: session?.effort ?? null,
+        role: session?.role ?? "implement",
+      });
+      if (result.saved && result.receipt && typeof result.receipt.version === "number") {
+        draftMetaRef.current.set(conversationId, {
+          version: result.receipt.version,
+          pendingText: null,
+        });
+        if (result.receipt.status === "conflict" && mounted.current) {
+          setError("Draft conflict while switching chats. Resolve it before sending.");
+        }
+      }
+    } catch {
+      /* best-effort flush */
+    }
+  }
+
   function selectChat(id: string) {
     if (id === selected) return;
     const previous = selected;
-    if (previous) cancelDraftTimer(previous);
+    if (previous) void flushDraftFor(previous);
     setSelected(id);
-    if (project) void loadDraftFor(id, project);
-    else setDraft("");
+    if (project) {
+      void loadDraftFor(id, project);
+      void nativeChatListDraftConflicts(project.generation, project.projectToken, id)
+        .then((listed) => {
+          const open = listed.conflicts.filter((c) => !c.resolution);
+          if (open.length > 0 && mounted.current && selectedRef.current === id) {
+            setError(`Open draft conflict(s): ${open.length}. Use Resolve draft conflict.`);
+          }
+        })
+        .catch(() => {});
+    } else setDraft("");
   }
 
   async function closeProject() {
@@ -631,6 +683,34 @@ export function NativeChat() {
             >
               Archive
             </button>
+            {historyTruncated ? (
+              <button
+                type="button"
+                className="native-button"
+                disabled={busy || Boolean(loading)}
+                onClick={() => {
+                  if (!project || !selected) return;
+                  setLoading("Loading more history…");
+                  void nativeChatHydrateConversation(project.generation, project.projectToken, selected, {
+                    maxEventPages: 256,
+                    turnLimit: 300,
+                  })
+                    .then((result) => {
+                      if (!result.conversation) throw new Error("Conversation not found.");
+                      const session = sessionFromHydrated(project, result.conversation);
+                      changeSessions((all) => all.map((s) => (s.id === selected ? session : s)));
+                      setHistoryTruncated(Boolean(result.conversation.hasMoreEvents));
+                      setError(result.conversation.hasMoreEvents
+                        ? "Loaded a larger history window; more pages may still remain."
+                        : "");
+                    })
+                    .catch((err) => setError(errorText(err)))
+                    .finally(() => { if (mounted.current) setLoading(""); });
+                }}
+              >
+                Load more history
+              </button>
+            ) : null}
             <button
               type="button"
               className="native-button"

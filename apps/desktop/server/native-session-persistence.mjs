@@ -786,14 +786,16 @@ export function createNativeSessionPersistence(options) {
    * Rebuild a UI-shaped transcript from durable turns + message_delta bodies.
    * Does not restore live approvals/clarifications (still memory-only).
    */
-  function hydrateConversation({ projectId, conversationId }) {
+  function hydrateConversation({ projectId, conversationId, maxEventPages = 64, turnLimit = 100 }) {
     assertOpen();
     requireUuid(projectId, "projectId");
     requireUuid(conversationId, "conversationId");
     const conversation = records.getConversation({ projectId, conversationId });
     if (!conversation) return null;
+    const pageCap = Math.min(512, Math.max(1, Number.isSafeInteger(maxEventPages) ? maxEventPages : 64));
+    const turnCap = Math.min(500, Math.max(1, Number.isSafeInteger(turnLimit) ? turnLimit : 100));
     // listTurns strips prompts by design; hydrate each turn via getTurn.
-    const turnSummaries = turns.listTurns({ projectId, conversationId, limit: 100, offset: 0 });
+    const turnSummaries = turns.listTurns({ projectId, conversationId, limit: turnCap, offset: 0 });
     /** @type {Map<string, string[]>} */
     const deltaTexts = new Map();
     /** @type {Map<string, Array<{ id: string, title: string, status: string }>>} */
@@ -804,7 +806,7 @@ export function createNativeSessionPersistence(options) {
     let tip = 0;
     let hasMoreEvents = false;
     let eventCursor = null;
-    for (let pageGuard = 0; pageGuard < 64; pageGuard += 1) {
+    for (let pageGuard = 0; pageGuard < pageCap; pageGuard += 1) {
       const page = events.pollEvents({
         projectId,
         conversationId,

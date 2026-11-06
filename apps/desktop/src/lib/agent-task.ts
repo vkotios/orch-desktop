@@ -144,7 +144,10 @@ export async function startAgentTask(invoke: OrchInvoke, task: AgentTask) {
       id: association.id,
       stage: "preparing_worktree",
     });
-    const claim = await invoke("orch_claim", { wp: task.wp });
+    const claim = await invoke("orch_claim", {
+      associationId: association.id,
+      wp: task.wp,
+    });
     if (!claim.ok) {
       await upsertAssociation({
         id: association.id,
@@ -159,6 +162,7 @@ export async function startAgentTask(invoke: OrchInvoke, task: AgentTask) {
     });
 
     const worktree = await invoke("orch_worktree_create", {
+      associationId: association.id,
       repo: task.repo,
       wp: task.wp,
       slice: task.slice,
@@ -334,12 +338,19 @@ export async function finishDelegation(
   invoke: OrchInvoke,
   association: DelegationAssociation,
 ) {
+  const preview = await invoke("orch_cleanup", {
+    associationId: association.id,
+    wp: association.wp,
+  });
   const finished = await invoke("orch_finish", {
+    associationId: association.id,
     wp: association.wp,
   });
   if (!finished.ok) {
     throw new Error(
-      finished.text || "Could not finish this work package in orch.",
+      `${finished.text || "Could not finish this work package in orch."}${
+        preview.text ? ` Cleanup preview: ${preview.text}` : ""
+      }`,
     );
   }
   return callHost<{ association: DelegationAssociation }>(
@@ -350,6 +361,27 @@ export async function finishDelegation(
       note: "Finished via orch_finish (no Git merge). Worktree cleanup may remove the isolated tree.",
     },
   );
+}
+
+/** Cancel a live orch run bound to an association. Does not discard the worktree. */
+export async function cancelDelegationRun(
+  invoke: OrchInvoke,
+  association: DelegationAssociation,
+) {
+  if (!association.runId) {
+    throw new Error("This association has no run id to cancel.");
+  }
+  const cancelled = await invoke("orch_cancel", {
+    runId: association.runId,
+  });
+  if (!cancelled.ok) {
+    throw new Error(cancelled.text || "Could not cancel the delegated run.");
+  }
+  return callHost<{ association: DelegationAssociation }>("delegation_upsert", {
+    id: association.id,
+    stage: "uncertain",
+    note: "Worker cancel requested from CHO desktop; inspect before relaunch.",
+  });
 }
 
 /** @deprecated Use finishDelegation — orch_finish is not Git integration. */
@@ -367,9 +399,11 @@ export async function discardDelegation(
 ) {
   // Dry-run first so the UI/error path can surface retention reasons.
   const preview = await invoke("orch_cleanup", {
+    associationId: association.id,
     wp: association.wp,
   });
   const cleanup = await invoke("orch_cleanup", {
+    associationId: association.id,
     wp: association.wp,
     apply: true,
   });
@@ -381,6 +415,7 @@ export async function discardDelegation(
     );
   }
   const released = await invoke("orch_release", {
+    associationId: association.id,
     wp: association.wp,
     force: true,
     reason: "discarded from CHO desktop",

@@ -4,6 +4,7 @@ import {
   abandonDelegation,
   acceptDelegation,
   adoptUncertainDelegation,
+  cancelDelegationRun,
   discardDelegation,
   finishDelegation,
   listDelegations,
@@ -164,20 +165,6 @@ export function OrchAgentsPanel({ repoPath, conversationId = null, disabled = fa
     }
   }
 
-  async function onFinish(item: DelegationAssociation) {
-    setBusy(true);
-    setError("");
-    try {
-      await finishDelegation(callHost, item);
-      setStatus(`Finished ${item.wp} in orch (not a Git merge).`);
-      await refresh();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setBusy(false);
-    }
-  }
-
   async function onDiscard(item: DelegationAssociation) {
     setBusy(true);
     setError("");
@@ -237,6 +224,46 @@ export function OrchAgentsPanel({ repoPath, conversationId = null, disabled = fa
       setDiffTitle(`${item.wp}/${item.slice} changes`);
       setDiffText(lines.join("\n"));
       setStatus(`Loaded read-only diff for ${item.wp}/${item.slice}.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onCancelRun(item: DelegationAssociation) {
+    setBusy(true);
+    setError("");
+    try {
+      await cancelDelegationRun(callHost, item);
+      setStatus(`Cancel requested for ${item.runId}.`);
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onFinish(item: DelegationAssociation) {
+    setBusy(true);
+    setError("");
+    try {
+      const preview = await callHost<OrchCommandResult>("orch_cleanup", {
+        associationId: item.id,
+        wp: item.wp,
+      });
+      const previewText = preview.text || JSON.stringify(preview.output || {}).slice(0, 240);
+      const confirmed = window.confirm(
+        `Finish ${item.wp}/${item.slice}? This closes the orch claim and may remove the worktree (not a Git merge).\n\nCleanup preview:\n${previewText}`,
+      );
+      if (!confirmed) {
+        setStatus("Finish cancelled.");
+        return;
+      }
+      await finishDelegation(callHost, item);
+      setStatus(`Finished ${item.wp} in orch (not a Git merge).`);
+      await refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -372,6 +399,17 @@ export function OrchAgentsPanel({ repoPath, conversationId = null, disabled = fa
                       onClick={() => void onShowDiff(item)}
                     >
                       Diff
+                    </button>
+                  ) : null}
+                  {item.runId && item.disposition === "none" && item.stage !== "uncertain" ? (
+                    <button
+                      type="button"
+                      className="native-button"
+                      disabled={busy}
+                      title="Request orch cancel for the recorded run. Does not discard the worktree."
+                      onClick={() => void onCancelRun(item)}
+                    >
+                      Stop worker
                     </button>
                   ) : null}
                   {item.stage === "uncertain" ? (

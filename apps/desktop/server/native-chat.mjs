@@ -1834,9 +1834,13 @@ export function createNativeChatService(options) {
     if (!isValidId(args.conversationId)) throw new Error("native_chat_hydrate_conversation requires conversationId");
     const durable = await ensurePersistence();
     if (!durable || !state.durableProject) return { generation, conversation: null };
+    const maxEventPages = Number.isSafeInteger(args.maxEventPages) ? args.maxEventPages : 64;
+    const turnLimit = Number.isSafeInteger(args.turnLimit) ? args.turnLimit : 100;
     const conversation = durable.hydrateConversation({
       projectId: state.durableProject.id,
       conversationId: args.conversationId,
+      maxEventPages,
+      turnLimit,
     });
     if (conversation === null) return { generation, conversation: null };
     // Register the session so later sends reuse the durable conversation id

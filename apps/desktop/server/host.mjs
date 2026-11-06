@@ -354,7 +354,12 @@ export async function runHost(options = {}) {
           if (env.command === 'delegation_list') {
             data = { associations: store.list(args) };
           } else if (env.command === 'delegation_upsert') {
-            data = { association: store.upsert(args) };
+            // Renderer may not invent terminal dispositions via upsert.
+            const admitted = { ...args };
+            if (admitted.disposition && admitted.disposition !== 'none') {
+              delete admitted.disposition;
+            }
+            data = { association: store.upsert(admitted) };
           } else if (env.command === 'delegation_set_disposition') {
             data = {
               association: store.setDisposition(args.id, args.disposition, args.note ?? null),
@@ -407,7 +412,13 @@ export async function runHost(options = {}) {
         if (association.disposition !== 'none') {
           throw new Error('orch_run association is no longer open');
         }
-        args.dir = association.worktreePath;
+        const worktreePath = path.resolve(association.worktreePath);
+        const repoRoot = path.resolve(association.repoPath);
+        const rel = path.relative(repoRoot, worktreePath);
+        if (rel.startsWith('..') || path.isAbsolute(rel)) {
+          throw new Error('orch_run worktree path is outside the associated repository');
+        }
+        args.dir = worktreePath;
         args.wp = association.wp;
         args.slice = association.slice;
         args.by = 'owner';
@@ -416,6 +427,18 @@ export async function runHost(options = {}) {
       if (command === 'orch_worktree_create') {
         delete args.force;
         args.by = 'owner';
+        const associationId = typeof args.associationId === 'string' ? args.associationId : null;
+        if (associationId) {
+          const store = await getDelegationStore();
+          const association = store.get(associationId);
+          if (!association) throw new Error('orch_worktree_create association not found');
+          if (association.disposition !== 'none') {
+            throw new Error('orch_worktree_create association is no longer open');
+          }
+          args.repo = association.repoPath;
+          args.wp = association.wp;
+          args.slice = association.slice;
+        }
         return args;
       }
       if (command === 'orch_release') {
@@ -429,6 +452,20 @@ export async function runHost(options = {}) {
         return args;
       }
       if (command === 'orch_cleanup' || command === 'orch_finish' || command === 'orch_claim') {
+        delete args.force;
+        args.by = 'owner';
+        const associationId = typeof args.associationId === 'string' ? args.associationId : null;
+        if (associationId) {
+          const store = await getDelegationStore();
+          const association = store.get(associationId);
+          if (!association) throw new Error(`${command} association not found`);
+          args.wp = association.wp;
+        } else if (typeof args.wp !== 'string' || args.wp.length === 0) {
+          throw new Error(`${command} requires associationId or wp`);
+        }
+        return args;
+      }
+      if (command === 'orch_cancel') {
         delete args.force;
         args.by = 'owner';
         return args;

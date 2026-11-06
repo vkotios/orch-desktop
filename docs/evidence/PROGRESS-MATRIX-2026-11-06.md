@@ -26,9 +26,9 @@ Status vocabulary:
 | Package | Implemented | Independently verified | Unfinished | Externally blocked |
 | --- | --- | --- | --- | --- |
 | CHO-03 | Recovery batch; approval + clarification dual-write journals; search/export/import host APIs; S3d probes | Local package tests; S3d child probes; excludeTurns schema test | Full schema migration path; deeper producer→hydrate consumer mapping for tool facts | Live reopen with real CLIs |
-| CHO-04/05 | Host admission; associations; panel evidence; adopt/abandon; read-only Diff | agent-task unit tests | Explicit Git integrate; denied-scope live journey; independent review round | Independent reviewer quota; live orch worker launch |
-| CHO-06 | Unfinished fence render; clarification waiting copy; rename/archive/search/export; Diff drawer | Markdown + panel unit checks | File references; viewport/a11y evidence capture | Rendered scaling evidence on owner display |
-| CHO-07 | CSP; NOTICE; SUPPORT_MATRIX; PRIVACY; SECURITY; CONTRIBUTING; Vitest advisory note; native CI job; MSI/NSIS | Local native build + cargo test earlier in session | DevDependency Vitest upgrade PR (documented, not claimed clear) | Clean-machine install; signing; public repo |
+| CHO-04/05 | Host admission hardened (worktree under repo; association-bound claim/worktree/finish/cleanup); adopt/abandon; Stop worker; Finish cleanup preview; read-only Diff | agent-task unit tests | Explicit Git integrate; denied-scope live journey; independent review round | Independent reviewer quota; live orch worker launch |
+| CHO-06 | Unfinished fence render; clarification waiting; rename/archive/search/export; Diff drawer; draft flush on switch; load-more history | Markdown + panel unit checks | Maintained Markdown file refs; viewport/a11y evidence capture | Rendered scaling evidence on owner display |
+| CHO-07 | CSP; NOTICE; SUPPORT_MATRIX; PRIVACY; SECURITY; CONTRIBUTING; CHANGELOG; desktop config example; Vitest advisory; native CI + release-scan; MSI/NSIS | Local native build + cargo test earlier in session | DevDependency Vitest upgrade PR (documented, not claimed clear) | Clean-machine install; signing; public repo |
 | CHO-08 | Evidence/AC rows maintained | Local suites/artifacts hashed | — | AC-01/13/15 clean machine; live AC-03/05/08 routes |
 
 ## Exact external blockers
