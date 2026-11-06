@@ -312,4 +312,88 @@ describe("native-session-persistence Codex dual-write", () => {
     expect(hydrated?.messages[1]?.text).toBe(text);
     expect(hydrated?.messages[1]?.text.length).toBe(16389);
   });
+
+  it("imports a transcript into large_bodies and hydrates without event-store tip-0 snapshots", () => {
+    const { persistence } = makePersistence();
+    const project = persistence.ensureProject({
+      pathCanonical: "C:/synthetic/import",
+      name: "import",
+    });
+    const imported = persistence.importTranscript({
+      projectId: project.id,
+      source: "test-fixture",
+      sourceKey: "fixture-1",
+      title: "Imported chat",
+      controller: "codex",
+      messages: [
+        { role: "user", text: "hello import" },
+        { role: "assistant", text: "imported reply" },
+      ],
+    });
+    expect(imported.created).toBe(true);
+    expect(imported.conversationId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+    );
+
+    const hydrated = persistence.hydrateConversation({
+      projectId: project.id,
+      conversationId: imported.conversationId,
+    });
+    expect(hydrated?.imported).toBe(true);
+    expect(hydrated?.messages).toEqual([
+      expect.objectContaining({ role: "user", text: "hello import", imported: true }),
+      expect.objectContaining({ role: "assistant", text: "imported reply", imported: true }),
+    ]);
+
+    // Idempotent receipt: same source/key returns the same conversation.
+    const again = persistence.importTranscript({
+      projectId: project.id,
+      source: "test-fixture",
+      sourceKey: "fixture-1",
+      messages: [{ role: "user", text: "ignored" }],
+    });
+    expect(again).toEqual({
+      created: false,
+      conversationId: imported.conversationId,
+      importBatchId: null,
+    });
+  });
+
+  it("reconciles stranded turns for the current host without labeling them prior-owner", () => {
+    const { persistence, evidence } = makePersistence();
+    const project = persistence.ensureProject({
+      pathCanonical: "C:/synthetic/reconcile",
+      name: "reconcile",
+    });
+    const conversationId = randomUUID();
+    const turnId = randomUUID();
+    const operationId = randomUUID();
+    persistence.ensureConversation({
+      projectId: project.id,
+      conversationId,
+      controller: "codex",
+      modelRequested: "gpt-test",
+      effort: "low",
+      role: "implement",
+      evidence,
+    });
+    persistence.beginTurn({
+      conversationId, turnId, operationId, prompt: "stranded", effort: "low", evidence,
+    });
+    persistence.afterThreadStart({ conversationId, nativeThreadId: "thread-r", evidence });
+    persistence.afterTurnWritten({ conversationId, turnId, operationId, evidence });
+    persistence.afterObserved({
+      conversationId, turnId, operationId,
+      nativeIdentity: "thread-r", nativeTurnId: "native-r", evidence,
+    });
+
+    const result = persistence.reconcileStrandedTurns({
+      projectId: project.id,
+      evidence,
+    });
+    expect(result.unresolved).toEqual([]);
+    expect(result.settled).toEqual([
+      expect.objectContaining({ conversationId, turnId, operationId }),
+    ]);
+  });
 });

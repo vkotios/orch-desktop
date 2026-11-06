@@ -270,14 +270,12 @@ export function applyNativeUiEvent(
       !event.turnId || session.activeTurnId !== event.turnId) {
     return session;
   }
-  // Durable catch-up recovers lost poll text by part identity, not by rejecting
-  // every durable delta after any live progress. Ignore durable terminals when
-  // the turn is already finished.
+  // Catch-up recovers lost poll text by stable part identity on both live and
+  // durable delivery. Ignore durable terminals when the turn is already finished.
   if (event.source === "durable" && (event.kind === "turn_complete" || event.kind === "error" || event.nativeOutcome) && !session.busy) {
     return session;
   }
   if (
-    event.source === "durable" &&
     event.kind === "message_delta" &&
     typeof event.partId === "string" &&
     session.appliedDurableParts.includes(event.partId)
@@ -338,27 +336,11 @@ export function applyNativeUiEvent(
   switch (event.kind) {
     case "message_delta": {
       if (!event.text) return session;
-      const assistant = session.messages.find((m) => m.id === turnId && m.role === "assistant");
-      // Live text may already equal this durable part (no partId on the live
-      // path). Record the part without duplicating the characters.
-      if (
-        event.source === "durable" &&
-        typeof event.partId === "string" &&
-        session.liveTurnProgress &&
-        session.appliedDurableParts.length === 0 &&
-        assistant &&
-        assistant.text === event.text
-      ) {
-        return {
-          ...session,
-          appliedDurableParts: [...session.appliedDurableParts, event.partId],
-        };
-      }
       let next = updateAssistant(session, turnId, (m) => ({
         ...m,
         text: m.text + (event.text as string),
       }));
-      if (event.source === "durable" && typeof event.partId === "string") {
+      if (typeof event.partId === "string") {
         next = {
           ...next,
           appliedDurableParts: [...next.appliedDurableParts, event.partId],

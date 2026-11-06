@@ -16,7 +16,7 @@ use tokio::time::{timeout, timeout_at, Instant};
 
 const MAX_HANDSHAKE: Duration = Duration::from_secs(10);
 const STDERR_TAIL_BYTES: usize = 4096;
-const NATIVE_COMMANDS: [&str; 45] = [
+const NATIVE_COMMANDS: [&str; 46] = [
     "ping",
     "discover_harnesses",
     "orch_dashboard",
@@ -29,6 +29,7 @@ const NATIVE_COMMANDS: [&str; 45] = [
     "orch_cancel",
     "orch_scope",
     "orch_review",
+    "orch_review_evidence",
     "orch_review_finish",
     "orch_gate_status",
     "orch_gate_record",

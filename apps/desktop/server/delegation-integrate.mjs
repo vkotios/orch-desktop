@@ -92,7 +92,7 @@ export async function integrateAssociationWorktree(store, args, hooks = {}) {
   }
 
   if (typeof hooks.inspectGate === 'function') {
-    const gate = await hooks.inspectGate(association.wp);
+    const gate = await hooks.inspectGate(association);
     if (!gate?.ok || gate.converged !== true) {
       throw new Error(gate?.text || 'Integrate requires a converged orch gate');
     }
@@ -101,7 +101,7 @@ export async function integrateAssociationWorktree(store, args, hooks = {}) {
   }
 
   if (typeof hooks.inspectReview === 'function') {
-    const review = await hooks.inspectReview(association.wp);
+    const review = await hooks.inspectReview(association);
     if (!review?.ok || review.clean !== true) {
       throw new Error(review?.text || 'Integrate requires clean independent review containment');
     }

@@ -44,17 +44,20 @@ describe("native conversation state", () => {
     expect(s.messages[1]).toMatchObject({ statusText: "stopping", isStreaming: true, tools: [] });
   });
 
-  it("dedupes durable parts against live text and appends later lost parts", () => {
-    let s = applyNativeUiEvent(started(), event("message_delta", { text: "first" }), generation);
-    // Same characters as the live chunk: record partId without duplicating.
-    s = applyNativeUiEvent(s, event("message_delta", { source: "durable", text: "first", partId: "p1" }), generation);
-    expect(s.messages[1].text).toBe("first");
-    // A later durable part that never arrived live must still append.
-    s = applyNativeUiEvent(s, event("message_delta", { source: "durable", text: "second", partId: "p2" }), generation);
-    expect(s.messages[1].text).toBe("firstsecond");
+  it("dedupes by partId across live and durable delivery without text equality", () => {
+    let s = applyNativeUiEvent(started(), event("message_delta", { text: "a", partId: "p1" }), generation);
+    s = applyNativeUiEvent(s, event("message_delta", { text: "b", partId: "p2" }), generation);
+    expect(s.messages[1].text).toBe("ab");
+    // Durable catch-up with the same part ids must not duplicate.
+    s = applyNativeUiEvent(s, event("message_delta", { source: "durable", text: "a", partId: "p1" }), generation);
+    s = applyNativeUiEvent(s, event("message_delta", { source: "durable", text: "b", partId: "p2" }), generation);
+    expect(s.messages[1].text).toBe("ab");
+    // A later durable-only part still appends.
+    s = applyNativeUiEvent(s, event("message_delta", { source: "durable", text: "c", partId: "p3" }), generation);
+    expect(s.messages[1].text).toBe("abc");
     s = applyNativeUiEvent(s, event("turn_complete", { source: "durable", nativeOutcome: "completed" }), generation);
     expect(s.busy).toBe(false);
-    expect(s.messages[1]).toMatchObject({ text: "firstsecond", outcome: "completed" });
+    expect(s.messages[1]).toMatchObject({ text: "abc", outcome: "completed" });
     const finished = s;
     expect(applyNativeUiEvent(finished, event("turn_complete", { source: "durable", nativeOutcome: "failed" }), generation)).toBe(finished);
   });

@@ -5,7 +5,7 @@
 // store; the caller owns close(). Provider I/O never runs inside store
 // transactions. verifyOwnerEvidence is supplied by the host/native-chat owner.
 
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -411,6 +411,7 @@ export function createNativeSessionPersistence(options) {
       controller,
       ownerToken: claim.ownerToken,
       ownerGeneration: claim.generation,
+      hostGeneration,
       expectedSeq: tip?.lastSeq ?? 0,
       boundNative: native != null && (
         (controller === "codex" && typeof native.nativeThreadId === "string")
@@ -774,13 +775,20 @@ export function createNativeSessionPersistence(options) {
         imported: true,
       };
     });
+    // Store imported transcript in large_bodies — never in snapshots.
+    // Event-store integrity forbids any snapshot row when tip is 0.
     const projection = JSON.stringify({
       v: 1,
       kind: "imported_transcript",
       importBatchId,
       importedMessages,
     });
-    // Atomic: conversation + snapshot + import receipt, or nothing.
+    const byteLen = Buffer.byteLength(projection, "utf8");
+    if (byteLen > 1_048_576) {
+      throw new Error("importTranscript refuses payloads over 1MiB UTF-8");
+    }
+    const sha256Hex = createHash("sha256").update(projection, "utf8").digest("hex");
+    // Atomic: conversation + immutable body + import receipt, or nothing.
     store.transaction((tx) => {
       tx.run(
         `INSERT INTO conversations(
@@ -798,8 +806,8 @@ export function createNativeSessionPersistence(options) {
         ],
       );
       tx.run(
-        "INSERT INTO snapshots(conversation_id, last_seq, projection_json, updated_at_ms) VALUES (?, 0, ?, ?)",
-        [conversationId, projection, stamp],
+        "INSERT INTO large_bodies(id, conversation_id, byte_len, sha256_hex, body_text, created_at_ms) VALUES (?, ?, ?, ?, ?, ?)",
+        [importBatchId, conversationId, byteLen, sha256Hex, projection, stamp],
       );
       tx.run(
         "INSERT INTO imports(source, source_key, conversation_id, import_batch_id, created_at_ms) VALUES (?, ?, ?, ?, ?)",
@@ -819,6 +827,69 @@ export function createNativeSessionPersistence(options) {
     requireUuid(conversationId, "conversationId");
     const conversation = records.getConversation({ projectId, conversationId });
     if (!conversation) return null;
+
+    // Imported transcripts live in large_bodies (keyed by import_batch_id),
+    // never in the event-store snapshot table (tip-0 snapshots are illegal).
+    const importRow = store.transaction((tx) =>
+      tx.get(
+        "SELECT import_batch_id AS importBatchId FROM imports WHERE conversation_id = ?",
+        [conversationId],
+      ),
+    );
+    if (importRow?.importBatchId) {
+      const body = store.transaction((tx) =>
+        tx.get(
+          "SELECT body_text AS bodyText FROM large_bodies WHERE id = ? AND conversation_id = ?",
+          [importRow.importBatchId, conversationId],
+        ),
+      );
+      const messages = [];
+      if (body?.bodyText) {
+        try {
+          const projection = JSON.parse(body.bodyText);
+          if (
+            projection?.kind === "imported_transcript" &&
+            Array.isArray(projection.importedMessages)
+          ) {
+            for (const item of projection.importedMessages) {
+              messages.push({
+                id: item.id,
+                role: item.role === "user" ? "user" : "assistant",
+                text: typeof item.text === "string" ? item.text : "",
+                tools: [],
+                isStreaming: false,
+                imported: true,
+              });
+            }
+          }
+        } catch {
+          throw Object.assign(new Error("imported transcript body is unreadable"), {
+            code: "ERR_STORAGE",
+          });
+        }
+      }
+      const native = bindings.getNativeRef({ projectId, conversationId });
+      return {
+        conversationId,
+        projectId,
+        controller: conversation.controller,
+        model: conversation.modelRequested,
+        role: conversation.role,
+        effort: conversation.effort,
+        title: conversation.title || "Chat",
+        nativeThreadId: native?.nativeThreadId ?? null,
+        nativeSessionUuid: native?.nativeSessionUuid ?? null,
+        messages,
+        eventTip: 0,
+        eventCursor: null,
+        hasMoreEvents: false,
+        historicalClarifications: [],
+        historicalApprovals: [],
+        imported: true,
+        importBatchId: importRow.importBatchId,
+      };
+    }
+
     const pageCap = Math.min(512, Math.max(1, Number.isSafeInteger(maxEventPages) ? maxEventPages : 64));
     const turnCap = Math.min(500, Math.max(1, Number.isSafeInteger(turnLimit) ? turnLimit : 100));
     // listTurns strips prompts by design; hydrate each turn via getTurn.
@@ -919,38 +990,6 @@ export function createNativeSessionPersistence(options) {
         isStreaming: !terminal && turn.intentState !== "completed",
         nativeTurnId: turn.nativeTurnId ?? undefined,
       });
-    }
-
-    // Imported transcripts are snapshot projections (no turn journals / no draft).
-    if (messages.length === 0) {
-      const snap = store.transaction((tx) =>
-        tx.get(
-          "SELECT projection_json AS projectionJson FROM snapshots WHERE conversation_id = ?",
-          [conversationId],
-        ),
-      );
-      if (snap?.projectionJson) {
-        try {
-          const projection = JSON.parse(snap.projectionJson);
-          if (
-            projection?.kind === "imported_transcript" &&
-            Array.isArray(projection.importedMessages)
-          ) {
-            for (const item of projection.importedMessages) {
-              messages.push({
-                id: item.id,
-                role: item.role === "user" ? "user" : "assistant",
-                text: typeof item.text === "string" ? item.text : "",
-                tools: [],
-                isStreaming: false,
-                imported: true,
-              });
-            }
-          }
-        } catch {
-          /* ignore malformed import projection */
-        }
-      }
     }
 
     const native = bindings.getNativeRef({ projectId, conversationId });
@@ -1430,10 +1469,15 @@ export function createNativeSessionPersistence(options) {
       );
       for (const row of rows) {
         const meta = conversations.get(conversation.id);
+        // Compare against the persistence module's hostGeneration and the
+        // live claim's ownerGeneration. Cached meta must carry hostGeneration
+        // (set by ensureConversation); fall back to the module constant.
+        const liveHostGeneration =
+          typeof meta?.hostGeneration === "string" ? meta.hostGeneration : hostGeneration;
         if (
           !meta ||
           meta.ownerGeneration !== row.owner_generation ||
-          meta.hostGeneration !== row.host_generation
+          liveHostGeneration !== row.host_generation
         ) {
           unresolved.push({
             conversationId: conversation.id,

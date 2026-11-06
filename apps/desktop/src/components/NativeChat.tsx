@@ -356,6 +356,9 @@ export function NativeChat() {
       }
       if (!mounted.current) { void nativeChatClose(p.generation, p.projectToken).catch(() => {}); return; }
       setChallenge(null); setProject(p); setLost(false);
+      if (typeof p.recoveryNotice === "string" && p.recoveryNotice.length > 0) {
+        setError(p.recoveryNotice);
+      }
       if (!p.models.length) setError(`${labelController(selectedController)} returned no available models. Close the project and try again.`);
       else {
         let opened = createProjectChat(p);

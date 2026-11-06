@@ -541,8 +541,9 @@ export function createNativeChatService(options) {
         terminal = true;
         terminalOutcome = item.nativeOutcome;
       }
+      let partId = null;
       if (item.kind === "message_delta" && persistence && a.operationId && a.observed) {
-        const partId = crypto.randomUUID();
+        partId = crypto.randomUUID();
         durablePersist("message delta", () => {
           persistence.appendDelta({
             conversationId: a.sessionId,
@@ -554,6 +555,9 @@ export function createNativeChatService(options) {
             evidence: ownerEvidence(),
           });
         });
+      } else if (item.kind === "message_delta") {
+        // Live mailbox still needs a stable identity for later durable catch-up.
+        partId = crypto.randomUUID();
       }
       if (
         (item.kind === "tool_call" || item.kind === "tool_result") &&
@@ -566,7 +570,12 @@ export function createNativeChatService(options) {
           persistMappedToolFact(a.sessionId, a.turnId, a.operationId, item);
         });
       }
-      enqueue({ ...item, generation, turnId: a.turnId });
+      enqueue({
+        ...item,
+        generation,
+        turnId: a.turnId,
+        ...(partId ? { partId } : {}),
+      });
     }
     if (terminal) {
       if (terminalOutcome) durableSettle(a, terminalOutcome);
@@ -911,7 +920,17 @@ export function createNativeChatService(options) {
       }
       owned = null; // transferred to prepared project
       const models = state.prepared.models.map((m) => ({ ...m, ...(m.supportedEfforts ? { supportedEfforts: [...m.supportedEfforts] } : {}) }));
-      return { generation, controller: pending.controller, projectToken: pending.projectToken, path: canonical, name: pending.name, models };
+      return {
+        generation,
+        controller: pending.controller,
+        projectToken: pending.projectToken,
+        path: canonical,
+        name: pending.name,
+        models,
+        ...(typeof state.recoveryNotice === "string" && state.recoveryNotice.length > 0
+          ? { recoveryNotice: state.recoveryNotice }
+          : {}),
+      };
     } catch (err) {
       if (owned !== null) {
         try { await closeClient(owned); } catch (cleanupErr) { context.cleanupError = cleanupErr; state.dead = true; throw cleanupErr; }
@@ -966,19 +985,25 @@ export function createNativeChatService(options) {
         handle.nativeSessionId = nativeSessionId;
       }
     }
-    if (event.kind === "message_delta" && handle.observed) {
-      const partId = crypto.randomUUID();
-      durablePersist("claude message delta", () => {
-        persistence.appendDelta({
-          conversationId: handle.sessionId,
-          turnId: handle.turnId,
-          operationId: handle.operationId,
-          partId,
-          nativeMessageId: typeof event.nativeMessageId === "string" ? event.nativeMessageId : partId,
-          text: typeof event.text === "string" ? event.text : "",
-          evidence: ownerEvidence(),
+    if (event.kind === "message_delta") {
+      // Same stable partId for durable journal and live mailbox (B2).
+      if (typeof event.partId !== "string" || event.partId.length === 0) {
+        event.partId = crypto.randomUUID();
+      }
+      if (handle.observed) {
+        const partId = event.partId;
+        durablePersist("claude message delta", () => {
+          persistence.appendDelta({
+            conversationId: handle.sessionId,
+            turnId: handle.turnId,
+            operationId: handle.operationId,
+            partId,
+            nativeMessageId: typeof event.nativeMessageId === "string" ? event.nativeMessageId : partId,
+            text: typeof event.text === "string" ? event.text : "",
+            evidence: ownerEvidence(),
+          });
         });
-      });
+      }
     }
     if (
       (event.kind === "tool_call" || event.kind === "tool_result") &&

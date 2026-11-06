@@ -1,7 +1,7 @@
 # Progress matrix — Cursor completion continuation
 
-Europe/London. Candidate HEAD continues past Codex controller review
-`docs/reviews/CURSOR-TASK-REVIEW-2026-11-06.md` (reviewed `1495d74`).
+Europe/London. Candidate HEAD continues past Codex controller recheck of
+`25b25a4` (`docs/reviews/CURSOR-R1-R10-RECHECK-2026-11-06.md`, B1–B4).
 
 Status vocabulary:
 
@@ -15,25 +15,35 @@ Status vocabulary:
 
 | ID | Status | Notes |
 | --- | --- | --- |
-| R1 | Implemented + locally checked | `SERVER_MODULES` host closure expanded; staged-host import probe outside Vite |
-| R2 | Implemented + locally checked | Exclusive migrate lock; VACUUM INTO backup; no live-DB overwrite on failure; noop skips backup |
-| R3/R4 | Implemented + locally checked | Integrate requires gate/review/run-terminal hooks; preview token binds SHAs; stale apply refuses |
-| R5 | Implemented + locally checked | `reconcileStrandedTurns` returns `{settled, unresolved}`; no auto-adopt of prior host |
-| R6 | Implemented + locally checked | Durable deltas dedupe by partId; append lost parts after live progress |
-| R7 | Implemented + locally checked | Import writes snapshot projection (not editable draft); hydrate reads imported messages |
-| R8 | Implemented + locally checked | Diff uses merge-base…branch committed changes with full patch |
-| R9 | Implemented + locally checked | Upsert strips host-owned resource fields; orch success writes worktree/run on association |
-| R10 | Implemented + locally checked | Draft conflict UI filters `resolution === "open"` |
+| R1 | Implemented + locally checked (partial) | Host module closure + staged-host import probe pass; durable/delegation staged journeys and installer rebuild/rehash remain open |
+| R2 | Implemented + locally checked (partial) | VACUUM INTO backup/rollback + exclusive lock; crash-left lock dead-owner recovery and full concurrent-writer qualification remain |
+| R3 | Implemented + locally checked (partial) | B1: hooks parse real `getOrchRunDetail` status objects, `gate.decision==='converged'` with slice, and read-only `orch_review_evidence` (not launch). Bind to exact commit/qualification still open |
+| R4 | Implemented + locally checked (partial) | Preview token binds source/target SHAs; stale apply refuses. End-to-end host mutation serialization / post-merge receipt recovery still need qualification |
+| R5 | Implemented + locally checked (partial) | B4: `ensureConversation` caches `hostGeneration`; current-host stranded turns settle; `recoveryNotice` returned from prepare and shown in UI. Explicit S5 prior-owner settle API/UI unfinished |
+| R6 | Implemented + locally checked (partial) | B2: live and durable `message_delta` share `partId`; consumer dedupes by id (multi-chunk `ab` not `abab`). RUN-02/04 rendered journeys remain |
+| R7 | Implemented + locally checked (partial) | B3: import stores body in `large_bodies` + import receipt (no tip-0 snapshot); hydrate reads import path before `pollEvents`. Full paging/export/import UI remain open |
+| R8 | Implemented + locally checked (partial) | Committed merge-base…branch patch; dirty/untracked overlay on normal merge-base path incomplete |
+| R9 | Implemented + locally checked (partial) | Renderer worktree/run injection stripped; host writes orch success associations. Prepared-project/conversation/approved-route binding qualification remains |
+| R10 | Implemented + locally checked (partial) | Exact `resolution === "open"` filter; rendered conflict resolution lifecycle still needs consumer tests |
+
+## Recheck defects B1–B4
+
+| ID | Status | Fix |
+| --- | --- | --- |
+| B1 | Implemented + locally checked | `delegation-integrate-evidence.mjs` + host hooks + bridge-shape tests |
+| B2 | Implemented + locally checked | Shared `partId` on Codex/Claude live enqueue; state dedupe by id |
+| B3 | Implemented + locally checked | Import → `large_bodies` + receipt; hydrate short-circuits imports |
+| B4 | Implemented + locally checked | `meta.hostGeneration`; prepare returns/surfaces `recoveryNotice` |
 
 ## Work packages
 
 | Package | Implemented | Locally checked | Unfinished | Externally blocked |
 | --- | --- | --- | --- | --- |
-| CHO-03 | Recovery + migrate safety + import snapshot + stranded unresolved surface + durable part replay | package tests | Explicit S5 prior-owner settle API; turn/event paging beyond window; complete export of full history | Live reopen with real CLIs |
-| CHO-04/05 | Admission harden; Integrate gates + preview binding; baseline Diff; host-owned association resources | integrate + agent-task tests | Live delegated change + independent review round through orch | Reviewer quota; live orch worker |
+| CHO-03 | Recovery + migrate safety + body-backed import + current-host reconcile + partId replay | package + B1–B4 tests | Explicit S5 prior-owner settle API; turn/event paging beyond window; complete export of full history | Live reopen with real CLIs |
+| CHO-04/05 | Admission harden; real bridge integrate evidence; preview binding; baseline Diff; host-owned association resources | integrate + evidence adapter tests | Live delegated change + independent review round through orch | Reviewer quota; live orch worker |
 | CHO-06 | Maintained Markdown/file refs; draft-conflict filter | unit tests | Real rendered viewport/keyboard journeys (CSS string checks are not layout proof) | Owner 125/150% scaling |
-| CHO-07 | Runtime closure; CSP/docs/CI; advisory release-scan | staged-host probe; cargo 12 | Installer rebuild+rehash after closure; remote CI on final head | Clean-machine; signing; public repo |
-| CHO-08 | Evidence matrix maintained against review | local suites | — | AC-01/13/15 clean machine; live AC routes |
+| CHO-07 | Runtime closure; CSP/docs/CI; advisory release-scan | staged-host probe | Installer rebuild+rehash after closure; remote CI on final head | Clean-machine; signing; public repo |
+| CHO-08 | Evidence matrix maintained against recheck | local suites | — | AC-01/13/15 clean machine; live AC routes |
 
 ## Exact external blockers
 

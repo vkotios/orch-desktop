@@ -12,6 +12,11 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { PROTOCOL_VERSION, MAX_FRAME_BYTES, encodeFrame, decodeFrame } from './protocol.mjs';
 import { integrateAssociationWorktree } from './delegation-integrate.mjs';
+import {
+  deriveGateInspection,
+  deriveReviewInspection,
+  deriveRunInspection,
+} from './delegation-integrate-evidence.mjs';
 
 const execFileAsync = promisify(execFile);
 
@@ -195,6 +200,7 @@ const ORCH_COMMANDS = [
   'orch_cancel',
   'orch_scope',
   'orch_review',
+  'orch_review_evidence',
   'orch_review_finish',
   'orch_gate_status',
   'orch_gate_record',
@@ -452,37 +458,29 @@ export async function runHost(options = {}) {
             data = await integrateAssociationWorktree(store, args, {
               inspectRun: async (runId) => {
                 const detail = await dispatchFn('orch_run_detail', { runId, by: 'owner' });
-                const status = detail?.output?.status ?? detail?.output?.state ?? detail?.status;
-                const terminal = ['completed', 'failed', 'cancelled', 'canceled', 'interrupted', 'unknown', 'finished']
-                  .includes(String(status || '').toLowerCase());
-                return {
-                  ok: detail?.ok !== false && !detail?.error,
-                  terminal,
-                  text: detail?.text || detail?.error || '',
-                };
+                return deriveRunInspection(detail);
               },
-              inspectGate: async (wp) => {
-                const gate = await dispatchFn('orch_gate_status', { wp, by: 'owner' });
-                const converged = gate?.output?.converged === true
-                  || gate?.output?.status === 'converged'
-                  || gate?.converged === true;
-                return {
-                  ok: gate?.ok !== false && !gate?.error,
-                  converged,
-                  text: gate?.text || gate?.error || '',
-                };
+              inspectGate: async (association) => {
+                const gate = await dispatchFn('orch_gate_status', {
+                  wp: association.wp,
+                  slice: association.slice,
+                  by: 'owner',
+                });
+                return deriveGateInspection(gate);
               },
-              inspectReview: async (wp) => {
-                const review = await dispatchFn('orch_review', { wp, by: 'owner' });
-                const clean = review?.output?.clean === true
-                  || review?.output?.containment === 'clean'
-                  || review?.clean === true
-                  || review?.output?.status === 'clean';
-                return {
-                  ok: review?.ok !== false && !review?.error,
-                  clean,
-                  text: review?.text || review?.error || '',
-                };
+              inspectReview: async (association) => {
+                // Read-only finished evidence — never orch_review (launch).
+                const evidence = await dispatchFn('orch_review_evidence', {
+                  wp: association.wp,
+                  reviewId: association.reviewId,
+                  runId: association.runId,
+                  by: 'owner',
+                });
+                return deriveReviewInspection(evidence, {
+                  wp: association.wp,
+                  runId: association.runId,
+                  reviewId: association.reviewId,
+                });
               },
             });
           } else if (env.command === 'project_resolve_path') {

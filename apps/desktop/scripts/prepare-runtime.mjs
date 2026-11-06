@@ -31,6 +31,7 @@ export const SERVER_MODULES = [
   'claude-client.mjs',
   'claude-chat-actor.mjs',
   'delegation-integrate.mjs',
+  'delegation-integrate-evidence.mjs',
   'delegation-associations.mjs',
   'native-session-persistence.mjs',
   'session-store.mjs',

@@ -300,6 +300,8 @@ export interface NativePrepareResult {
   path: string;
   name: string;
   models: NativeModelInfo[];
+  /** Surfaced when stranded turns belong to a prior host (no auto-adoption). */
+  recoveryNotice?: string;
 }
 
 interface NativeAckBase {
