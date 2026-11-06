@@ -466,7 +466,7 @@ export function NativeChat() {
       void loadDraftFor(id, project);
       void nativeChatListDraftConflicts(project.generation, project.projectToken, id)
         .then((listed) => {
-          const open = listed.conflicts.filter((c) => !c.resolution);
+          const open = listed.conflicts.filter((c) => c.resolution === "open" || !c.resolution);
           if (open.length > 0 && mounted.current && selectedRef.current === id) {
             setError(`Open draft conflict(s): ${open.length}. Use Resolve draft conflict.`);
           }
@@ -719,7 +719,7 @@ export function NativeChat() {
                 if (!project) return;
                 void nativeChatListDraftConflicts(project.generation, project.projectToken, selected)
                   .then(async (listed) => {
-                    const open = listed.conflicts.filter((c) => !c.resolution);
+                    const open = listed.conflicts.filter((c) => c.resolution === "open" || !c.resolution);
                     if (open.length === 0) {
                       setError("");
                       setLoading("No open draft conflicts.");

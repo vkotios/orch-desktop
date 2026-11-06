@@ -270,20 +270,10 @@ export function applyNativeUiEvent(
       !event.turnId || session.activeTurnId !== event.turnId) {
     return session;
   }
-  // Durable catch-up recovers a lost poll once the live batch is applied first.
-  // While live progress exists for this turn, skip durable text parts (live owns
-  // streaming). Still accept durable tools (upsert) and durable terminal outcomes
-  // so a dropped completion can finish the turn. Ignore durable terminals when
+  // Durable catch-up recovers lost poll text by part identity, not by rejecting
+  // every durable delta after any live progress. Ignore durable terminals when
   // the turn is already finished.
   if (event.source === "durable" && (event.kind === "turn_complete" || event.kind === "error" || event.nativeOutcome) && !session.busy) {
-    return session;
-  }
-  if (
-    event.source === "durable" &&
-    event.kind === "message_delta" &&
-    session.busy &&
-    session.liveTurnProgress
-  ) {
     return session;
   }
   if (
@@ -348,6 +338,22 @@ export function applyNativeUiEvent(
   switch (event.kind) {
     case "message_delta": {
       if (!event.text) return session;
+      const assistant = session.messages.find((m) => m.id === turnId && m.role === "assistant");
+      // Live text may already equal this durable part (no partId on the live
+      // path). Record the part without duplicating the characters.
+      if (
+        event.source === "durable" &&
+        typeof event.partId === "string" &&
+        session.liveTurnProgress &&
+        session.appliedDurableParts.length === 0 &&
+        assistant &&
+        assistant.text === event.text
+      ) {
+        return {
+          ...session,
+          appliedDurableParts: [...session.appliedDurableParts, event.partId],
+        };
+      }
       let next = updateAssistant(session, turnId, (m) => ({
         ...m,
         text: m.text + (event.text as string),

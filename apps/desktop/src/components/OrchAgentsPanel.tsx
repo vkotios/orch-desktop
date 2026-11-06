@@ -278,13 +278,18 @@ export function OrchAgentsPanel({ repoPath, conversationId = null, disabled = fa
     try {
       const preview = await integrateDelegation(callHost, item, { previewOnly: true });
       const confirmed = window.confirm(
-        `Integrate ${item.wp}/${item.slice}?\nThis merges ${preview.sourceBranch} into ${preview.targetBranch} (${preview.commits} commit(s)).\nFinish/cleanup remain separate.\n\n${preview.note}`,
+        `Integrate ${item.wp}/${item.slice}?\nThis merges ${preview.sourceBranch} (${preview.sourceSha?.slice(0, 8)}) into ${preview.targetBranch} (${preview.targetSha?.slice(0, 8)}); ${preview.commits} commit(s).\nFinish/cleanup remain separate.\n\n${preview.note}`,
       );
       if (!confirmed) {
         setStatus("Integrate cancelled.");
         return;
       }
-      const result = await integrateDelegation(callHost, item);
+      if (!preview.previewToken) {
+        throw new Error("Dry-run did not return a preview token.");
+      }
+      const result = await integrateDelegation(callHost, item, {
+        previewToken: preview.previewToken,
+      });
       setStatus(result.note || `Integrated ${item.wp}.`);
       await refresh();
     } catch (err) {

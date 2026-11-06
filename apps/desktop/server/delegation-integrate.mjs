@@ -1,7 +1,8 @@
 // Explicit Git integrate for an accepted association worktree.
 // Accept ≠ integrate ≠ finish/cleanup. Host-owned; never called from renderer
-// Git flags. Dry-run previews without mutating refs.
+// Git flags. Dry-run returns an immutable preview token; apply rechecks it.
 
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
@@ -40,11 +41,32 @@ async function git(cwd, gitArgs) {
   }
 }
 
+function encodePreviewToken(payload) {
+  const json = JSON.stringify(payload);
+  const body = Buffer.from(json, 'utf8').toString('base64url');
+  const sig = crypto.createHash('sha256').update(`cho-integrate-v1:${json}`).digest('base64url');
+  return `${body}.${sig}`;
+}
+
+function decodePreviewToken(token) {
+  if (typeof token !== 'string' || !token.includes('.')) {
+    throw new Error('Integrate apply requires the preview token from dry-run');
+  }
+  const [body, sig] = token.split('.');
+  const json = Buffer.from(body, 'base64url').toString('utf8');
+  const expected = crypto.createHash('sha256').update(`cho-integrate-v1:${json}`).digest('base64url');
+  if (sig !== expected) throw new Error('Integrate preview token is invalid');
+  const payload = JSON.parse(json);
+  if (!payload || typeof payload !== 'object') throw new Error('Integrate preview token is malformed');
+  return payload;
+}
+
 /**
  * @param {{ get: (id: string) => any, setDisposition: (id: string, disposition: string, note?: string|null) => any }} store
- * @param {{ id: string, dryRun?: boolean }} args
+ * @param {{ id: string, dryRun?: boolean, previewToken?: string }} args
+ * @param {{ inspectRun?: (runId: string) => Promise<{ ok: boolean, terminal?: boolean, text?: string }>, inspectGate?: (wp: string) => Promise<{ ok: boolean, converged?: boolean, text?: string }>, inspectReview?: (wp: string) => Promise<{ ok: boolean, clean?: boolean, text?: string }> }} [hooks]
  */
-export async function integrateAssociationWorktree(store, args) {
+export async function integrateAssociationWorktree(store, args, hooks = {}) {
   const associationId = typeof args?.id === 'string' ? args.id : null;
   if (!associationId) throw new Error('delegation_integrate requires id');
   const dryRun = args?.dryRun === true;
@@ -56,6 +78,37 @@ export async function integrateAssociationWorktree(store, args) {
   if (association.stage === 'running' || association.stage === 'launching' || association.stage === 'uncertain') {
     throw new Error(`Refuse integrate while stage is ${association.stage}; stop/settle the worker first`);
   }
+
+  if (association.runId && typeof hooks.inspectRun === 'function') {
+    const run = await hooks.inspectRun(association.runId);
+    if (!run?.ok) {
+      throw new Error(run?.text || 'Could not inspect the recorded run before integrate');
+    }
+    if (run.terminal !== true) {
+      throw new Error('Refuse integrate while the recorded run is not terminal');
+    }
+  } else if (association.runId && !hooks.inspectRun) {
+    throw new Error('Integrate requires host run inspection when a run id is recorded');
+  }
+
+  if (typeof hooks.inspectGate === 'function') {
+    const gate = await hooks.inspectGate(association.wp);
+    if (!gate?.ok || gate.converged !== true) {
+      throw new Error(gate?.text || 'Integrate requires a converged orch gate');
+    }
+  } else {
+    throw new Error('Integrate requires host gate inspection');
+  }
+
+  if (typeof hooks.inspectReview === 'function') {
+    const review = await hooks.inspectReview(association.wp);
+    if (!review?.ok || review.clean !== true) {
+      throw new Error(review?.text || 'Integrate requires clean independent review containment');
+    }
+  } else {
+    throw new Error('Integrate requires host review inspection');
+  }
+
   const worktreePath = association.worktreePath;
   if (typeof worktreePath !== 'string' || worktreePath.length === 0) {
     throw new Error('association has no worktree path');
@@ -91,51 +144,81 @@ export async function integrateAssociationWorktree(store, args) {
     throw new Error('repository is already checked out on the worktree branch; switch to the integration target first');
   }
 
-  // Ignore untracked paths (implementation worktrees live under .worktrees/).
   const repoDirty = await git(repoRoot, ['status', '--porcelain', '-uno']);
   if (repoDirty.trim().length > 0) {
     throw new Error('repository working tree is dirty; commit or stash before integrate');
   }
 
-  const ahead = await git(repoRoot, ['rev-list', '--count', `${targetBranch}..${expectedBranch}`]);
+  const sourceSha = await git(repoRoot, ['rev-parse', expectedBranch]);
+  const targetSha = await git(repoRoot, ['rev-parse', 'HEAD']);
+  const ahead = await git(repoRoot, ['rev-list', '--count', `${targetSha}..${sourceSha}`]);
   const commitCount = Number.parseInt(ahead, 10) || 0;
-  const preview = {
+  const previewPayload = {
+    v: 1,
     associationId,
     repoPath: repoRoot,
     worktreePath: resolvedWt,
     sourceBranch: expectedBranch,
     targetBranch,
+    sourceSha,
+    targetSha,
     commits: commitCount,
-    dryRun,
-    readOnlyPreview: dryRun,
   };
 
   if (dryRun) {
+    const previewToken = encodePreviewToken(previewPayload);
     return {
-      ...preview,
+      ...previewPayload,
+      previewToken,
+      dryRun: true,
       merged: false,
-      note: `Would merge ${expectedBranch} into ${targetBranch} (${commitCount} commit(s)).`,
+      note: `Would merge ${expectedBranch} (${sourceSha.slice(0, 8)}) into ${targetBranch} (${targetSha.slice(0, 8)}); ${commitCount} commit(s).`,
     };
   }
 
-  await git(repoRoot, [
-    'merge',
-    '--no-ff',
-    '-m',
-    `Integrate ${association.wp}/${association.slice} via CHO desktop`,
-    expectedBranch,
-  ]);
+  const expected = decodePreviewToken(args.previewToken);
+  for (const key of ['associationId', 'repoPath', 'worktreePath', 'sourceBranch', 'targetBranch', 'sourceSha', 'targetSha', 'commits']) {
+    if (expected[key] !== previewPayload[key]) {
+      throw new Error(
+        `Integrate preview is stale (${key} changed). Refresh the dry-run preview before applying.`,
+      );
+    }
+  }
 
-  const updated = store.setDisposition(
-    associationId,
-    'integrated',
-    `Merged ${expectedBranch} into ${targetBranch}. Finish/cleanup remain explicit.`,
-  );
+  let mergeOk = false;
+  try {
+    await git(repoRoot, [
+      'merge',
+      '--no-ff',
+      '-m',
+      `Integrate ${association.wp}/${association.slice} via CHO desktop`,
+      sourceSha,
+    ]);
+    mergeOk = true;
+  } catch (err) {
+    throw err;
+  }
 
-  return {
-    ...preview,
-    merged: true,
-    association: updated,
-    note: `Merged ${expectedBranch} into ${targetBranch}.`,
-  };
+  try {
+    const updated = store.setDisposition(
+      associationId,
+      'integrated',
+      `Merged ${expectedBranch} (${sourceSha.slice(0, 12)}) into ${targetBranch}. Finish/cleanup remain explicit.`,
+    );
+    return {
+      ...previewPayload,
+      previewToken: args.previewToken,
+      dryRun: false,
+      merged: true,
+      association: updated,
+      note: `Merged ${expectedBranch} into ${targetBranch}.`,
+    };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(
+      mergeOk
+        ? `Git merge succeeded but association receipt failed: ${message}. Inspect ${repoRoot} at HEAD; do not re-merge until the association is reconciled.`
+        : message,
+    );
+  }
 }

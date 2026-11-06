@@ -391,23 +391,31 @@ export async function cancelDelegationRun(
 export async function integrateDelegation(
   _invoke: OrchInvoke,
   association: DelegationAssociation,
-  options: { previewOnly?: boolean } = {},
+  options: { previewOnly?: boolean; previewToken?: string } = {},
 ) {
   if (association.disposition !== "accepted") {
     throw new Error("Accept the result before Integrate. Finish remains a separate orch closure.");
+  }
+  if (!options.previewOnly && !options.previewToken) {
+    throw new Error("Integrate apply requires the previewToken from dry-run.");
   }
   return callHost<{
     associationId: string;
     sourceBranch: string;
     targetBranch: string;
+    sourceSha: string;
+    targetSha: string;
     commits: number;
     merged: boolean;
     dryRun: boolean;
+    previewToken?: string;
     note: string;
     association?: DelegationAssociation;
   }>("delegation_integrate", {
     id: association.id,
-    ...(options.previewOnly ? { dryRun: true } : {}),
+    ...(options.previewOnly
+      ? { dryRun: true }
+      : { previewToken: options.previewToken }),
   });
 }
 

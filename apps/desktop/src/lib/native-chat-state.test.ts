@@ -44,14 +44,17 @@ describe("native conversation state", () => {
     expect(s.messages[1]).toMatchObject({ statusText: "stopping", isStreaming: true, tools: [] });
   });
 
-  it("keeps live text authoritative and recovers completion from durable after a lost poll", () => {
-    let s = applyNativeUiEvent(started(), event("message_delta", { text: "live" }), generation);
-    s = applyNativeUiEvent(s, event("message_delta", { source: "durable", text: "dup", partId: "p1" }), generation);
-    expect(s.messages[1].text).toBe("live");
-    // After live progress, a later durable-only poll may supply the missing terminal.
+  it("dedupes durable parts against live text and appends later lost parts", () => {
+    let s = applyNativeUiEvent(started(), event("message_delta", { text: "first" }), generation);
+    // Same characters as the live chunk: record partId without duplicating.
+    s = applyNativeUiEvent(s, event("message_delta", { source: "durable", text: "first", partId: "p1" }), generation);
+    expect(s.messages[1].text).toBe("first");
+    // A later durable part that never arrived live must still append.
+    s = applyNativeUiEvent(s, event("message_delta", { source: "durable", text: "second", partId: "p2" }), generation);
+    expect(s.messages[1].text).toBe("firstsecond");
     s = applyNativeUiEvent(s, event("turn_complete", { source: "durable", nativeOutcome: "completed" }), generation);
     expect(s.busy).toBe(false);
-    expect(s.messages[1]).toMatchObject({ text: "live", outcome: "completed" });
+    expect(s.messages[1]).toMatchObject({ text: "firstsecond", outcome: "completed" });
     const finished = s;
     expect(applyNativeUiEvent(finished, event("turn_complete", { source: "durable", nativeOutcome: "failed" }), generation)).toBe(finished);
   });

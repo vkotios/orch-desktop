@@ -16,7 +16,39 @@ const NODE_LIMIT = 150 * 1024 * 1024;
 const LICENSE_LIMIT = 5 * 1024 * 1024;
 const HEX64 = /^[0-9a-f]{64}$/;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-const SERVER_MODULES = ['host.mjs', 'protocol.mjs', 'bridge.mjs', 'native-rpc.mjs', 'codex-client.mjs', 'event-mailbox.mjs', 'native-chat.mjs', 'native-clarification.mjs', 'claude-wire.mjs', 'claude-client.mjs', 'claude-chat-actor.mjs'];
+// Host import closure for the packaged runtime. Keep in sync with
+// apps/desktop/server/*.mjs static and dynamic imports from host.mjs.
+export const SERVER_MODULES = [
+  'host.mjs',
+  'protocol.mjs',
+  'bridge.mjs',
+  'native-rpc.mjs',
+  'codex-client.mjs',
+  'event-mailbox.mjs',
+  'native-chat.mjs',
+  'native-clarification.mjs',
+  'claude-wire.mjs',
+  'claude-client.mjs',
+  'claude-chat-actor.mjs',
+  'delegation-integrate.mjs',
+  'delegation-associations.mjs',
+  'native-session-persistence.mjs',
+  'session-store.mjs',
+  'session-store-schema.mjs',
+  'session-store-migrate.mjs',
+  'session-records.mjs',
+  'session-bindings.mjs',
+  'session-turns.mjs',
+  'session-message-deltas.mjs',
+  'session-tool-facts.mjs',
+  'session-turn-outcomes.mjs',
+  'session-events.mjs',
+  'session-bodies.mjs',
+  'session-approvals.mjs',
+  'session-clarifications.mjs',
+  'session-stops.mjs',
+  'session-producer-transaction.mjs',
+];
 const ACP_TS_MODULES = ['packages/acp-client/src/codex-app-server.ts', 'packages/acp-client/src/claude-stream.ts'];
 const OUTPUT_NAMES = new Set(['.runtime', 'runtime-test-output']);
 const STAGE_PREFIX = '.runtime-stage-';

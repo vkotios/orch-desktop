@@ -202,14 +202,17 @@ describe("agent task preparation", () => {
       associationId: "assoc-1",
       sourceBranch: "orch/wp-ui/s1",
       targetBranch: "main",
+      sourceSha: "a".repeat(40),
+      targetSha: "b".repeat(40),
       commits: 1,
       merged: false,
       dryRun: true,
+      previewToken: "token.sig",
       note: "preview",
     });
     const preview = await integrateDelegation(
       invoke,
-      association({ disposition: "accepted", stage: "worktree" }),
+      association({ disposition: "accepted", stage: "recorded" }),
       { previewOnly: true },
     );
     expect(preview.dryRun).toBe(true);
@@ -217,5 +220,8 @@ describe("agent task preparation", () => {
       "delegation_integrate",
       expect.objectContaining({ id: "assoc-1", dryRun: true }),
     );
+    await expect(
+      integrateDelegation(invoke, association({ disposition: "accepted", stage: "recorded" })),
+    ).rejects.toThrow(/previewToken/);
   });
 });

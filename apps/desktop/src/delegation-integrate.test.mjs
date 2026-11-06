@@ -19,7 +19,6 @@ function makeRepo() {
   fs.writeFileSync(path.join(repo, "README.md"), "base\n");
   git(repo, ["add", "README.md"]);
   git(repo, ["commit", "-m", "base"]);
-  // Ensure a named branch (not detached).
   try {
     git(repo, ["checkout", "-B", "main"]);
   } catch {
@@ -34,8 +33,14 @@ function makeRepo() {
   return { root, repo, wt, target };
 }
 
+const okHooks = {
+  inspectRun: async () => ({ ok: true, terminal: true }),
+  inspectGate: async () => ({ ok: true, converged: true }),
+  inspectReview: async () => ({ ok: true, clean: true }),
+};
+
 describe("delegation integrate", () => {
-  it("dry-runs and then merges an accepted association branch", { timeout: 30_000 }, async () => {
+  it("dry-runs with a preview token and merges only when refs still match", { timeout: 30_000 }, async () => {
     const { repo, wt, target } = makeRepo();
     const association = {
       id: "assoc-1",
@@ -44,7 +49,8 @@ describe("delegation integrate", () => {
       wp: "cho-05",
       slice: "delegate",
       disposition: "accepted",
-      stage: "worktree",
+      stage: "recorded",
+      runId: "run-1",
     };
     let disposition = "accepted";
     const store = {
@@ -54,19 +60,36 @@ describe("delegation integrate", () => {
         return { ...association, id, disposition: next, note };
       },
     };
-    const preview = await integrateAssociationWorktree(store, { id: "assoc-1", dryRun: true });
+    const preview = await integrateAssociationWorktree(store, { id: "assoc-1", dryRun: true }, okHooks);
     expect(preview.merged).toBe(false);
+    expect(preview.previewToken).toMatch(/\./);
     expect(preview.sourceBranch).toBe("orch/cho-05/delegate");
     expect(preview.targetBranch).toBe(target);
+    expect(preview.sourceSha).toMatch(/^[0-9a-f]{40}$/i);
     expect(preview.commits).toBeGreaterThanOrEqual(1);
 
-    const result = await integrateAssociationWorktree(store, { id: "assoc-1" });
+    // A new commit after preview must invalidate apply.
+    fs.writeFileSync(path.join(wt, "extra.txt"), "after preview\n");
+    git(wt, ["add", "extra.txt"]);
+    git(wt, ["commit", "-m", "after preview"]);
+    await expect(
+      integrateAssociationWorktree(store, { id: "assoc-1", previewToken: preview.previewToken }, okHooks),
+    ).rejects.toThrow(/stale|sourceSha/);
+
+    // Refresh preview and apply.
+    const preview2 = await integrateAssociationWorktree(store, { id: "assoc-1", dryRun: true }, okHooks);
+    const result = await integrateAssociationWorktree(
+      store,
+      { id: "assoc-1", previewToken: preview2.previewToken },
+      okHooks,
+    );
     expect(result.merged).toBe(true);
     expect(disposition).toBe("integrated");
     expect(fs.existsSync(path.join(repo, "feature.txt"))).toBe(true);
+    expect(fs.existsSync(path.join(repo, "extra.txt"))).toBe(true);
   });
 
-  it("refuses integrate before Accept", async () => {
+  it("refuses integrate before Accept and without gate/review hooks", async () => {
     const store = {
       get: () => ({
         id: "a",
@@ -81,6 +104,25 @@ describe("delegation integrate", () => {
         throw new Error("should not set");
       },
     };
-    await expect(integrateAssociationWorktree(store, { id: "a" })).rejects.toThrow(/Accept/);
+    await expect(integrateAssociationWorktree(store, { id: "a" }, okHooks)).rejects.toThrow(/Accept/);
+    await expect(
+      integrateAssociationWorktree(
+        {
+          get: () => ({
+            id: "b",
+            disposition: "accepted",
+            stage: "recorded",
+            repoPath: "/x",
+            worktreePath: "/x/wt",
+            wp: "cho-05",
+            slice: "delegate",
+            runId: null,
+          }),
+          setDisposition: () => null,
+        },
+        { id: "b", dryRun: true },
+        {},
+      ),
+    ).rejects.toThrow(/gate inspection/);
   });
 });

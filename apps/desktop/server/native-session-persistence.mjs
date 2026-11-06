@@ -718,6 +718,7 @@ export function createNativeSessionPersistence(options) {
   /**
    * Import a prior export or plain message list as a read-only transcript.
    * Creates a new conversation with NULL native ids and no producer fence.
+   * Messages land in the snapshot projection (not the editable draft).
    */
   function importTranscript({
     projectId,
@@ -739,6 +740,9 @@ export function createNativeSessionPersistence(options) {
       throw new Error("importTranscript controller must be codex or claude");
     }
     if (!Array.isArray(messages)) throw new Error("importTranscript requires messages array");
+    if (messages.length > 500) {
+      throw new Error("importTranscript refuses more than 500 messages (explicit bound)");
+    }
     const existing = store.transaction((tx) =>
       tx.get("SELECT conversation_id AS conversationId FROM imports WHERE source = ? AND source_key = ?", [
         source,
@@ -755,33 +759,51 @@ export function createNativeSessionPersistence(options) {
     const conversationId = randomUUID();
     const importBatchId = randomUUID();
     const stamp = typeof now === "function" ? now() : Date.now();
-    records.createConversation({
-      id: conversationId,
-      projectId,
-      controller,
-      title: typeof title === "string" ? title.slice(0, 256) : "",
+    const importedMessages = messages.map((m, index) => {
+      const role = m && typeof m.role === "string" ? m.role.slice(0, 32) : "assistant";
+      const text = m && typeof m.text === "string" ? m.text : "";
+      if (text.length > 200_000) {
+        throw new Error(`importTranscript message ${index} exceeds 200KiB text bound`);
+      }
+      return {
+        id: `import-${importBatchId}-${index}`,
+        role: role === "user" ? "user" : "assistant",
+        text,
+        tools: [],
+        isStreaming: false,
+        imported: true,
+      };
     });
-    // Persist import receipt + a single transcript body for readers. Native
-    // refs/fences/permissions are intentionally omitted (SESSION_STORAGE §5).
-    const bodyText = JSON.stringify({
+    const projection = JSON.stringify({
       v: 1,
       kind: "imported_transcript",
-      messages: messages.slice(0, 500).map((m) => ({
-        role: m && typeof m.role === "string" ? m.role.slice(0, 32) : "assistant",
-        text: m && typeof m.text === "string" ? m.text.slice(0, 200_000) : "",
-      })),
+      importBatchId,
+      importedMessages,
     });
+    // Atomic: conversation + snapshot + import receipt, or nothing.
     store.transaction((tx) => {
+      tx.run(
+        `INSERT INTO conversations(
+           id, project_id, title, controller, model_requested, model_reported, served_verified,
+           requested_claude_session_uuid, effort, role, parent_conversation_id,
+           created_at_ms, updated_at_ms, archived
+         ) VALUES (?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, 'implement', NULL, ?, ?, 0)`,
+        [
+          conversationId,
+          projectId,
+          typeof title === "string" ? title.slice(0, 256) : "",
+          controller,
+          stamp,
+          stamp,
+        ],
+      );
+      tx.run(
+        "INSERT INTO snapshots(conversation_id, last_seq, projection_json, updated_at_ms) VALUES (?, 0, ?, ?)",
+        [conversationId, projection, stamp],
+      );
       tx.run(
         "INSERT INTO imports(source, source_key, conversation_id, import_batch_id, created_at_ms) VALUES (?, ?, ?, ?, ?)",
         [source, sourceKey, conversationId, importBatchId, stamp],
-      );
-      // bodies table expects content-addressed rows via session-bodies; for the
-      // import receipt path store the transcript JSON as conversation draft text
-      // so history UI can surface it without fabricating turn journals.
-      tx.run(
-        "INSERT INTO drafts(conversation_id, text, version, updated_at_ms) VALUES (?, ?, 1, ?) ON CONFLICT(conversation_id) DO UPDATE SET text=excluded.text, version=drafts.version+1, updated_at_ms=excluded.updated_at_ms",
-        [conversationId, bodyText, stamp],
       );
     });
     return { created: true, conversationId, importBatchId };
@@ -897,6 +919,38 @@ export function createNativeSessionPersistence(options) {
         isStreaming: !terminal && turn.intentState !== "completed",
         nativeTurnId: turn.nativeTurnId ?? undefined,
       });
+    }
+
+    // Imported transcripts are snapshot projections (no turn journals / no draft).
+    if (messages.length === 0) {
+      const snap = store.transaction((tx) =>
+        tx.get(
+          "SELECT projection_json AS projectionJson FROM snapshots WHERE conversation_id = ?",
+          [conversationId],
+        ),
+      );
+      if (snap?.projectionJson) {
+        try {
+          const projection = JSON.parse(snap.projectionJson);
+          if (
+            projection?.kind === "imported_transcript" &&
+            Array.isArray(projection.importedMessages)
+          ) {
+            for (const item of projection.importedMessages) {
+              messages.push({
+                id: item.id,
+                role: item.role === "user" ? "user" : "assistant",
+                text: typeof item.text === "string" ? item.text : "",
+                tools: [],
+                isStreaming: false,
+                imported: true,
+              });
+            }
+          }
+        } catch {
+          /* ignore malformed import projection */
+        }
+      }
     }
 
     const native = bindings.getNativeRef({ projectId, conversationId });
@@ -1344,8 +1398,9 @@ export function createNativeSessionPersistence(options) {
   }
 
   /**
-   * On reopen, settle stranded nonterminal turns as unknown. Never redispatches
-   * execution; ownership must still verify for each conversation fence.
+   * On reopen, attempt to settle stranded nonterminal turns as unknown under
+   * the *current* producer only when provenance still matches. Never adopt or
+   * forge the previous host's ownership; surface unresolved rows explicitly.
    */
   function reconcileStrandedTurns({ projectId, evidence = null } = {}) {
     assertOpen();
@@ -1357,10 +1412,12 @@ export function createNativeSessionPersistence(options) {
       includeArchived: false,
     });
     const settled = [];
+    const unresolved = [];
     for (const conversation of conversationsList) {
       const rows = store.transaction((tx) =>
         tx.all(
-          `SELECT t.id AS turn_id, o.id AS operation_id, o.state AS op_state
+          `SELECT t.id AS turn_id, o.id AS operation_id, o.state AS op_state,
+                  o.owner_generation AS owner_generation, o.host_generation AS host_generation
            FROM turns t
            JOIN operations o ON o.turn_id = t.id AND o.conversation_id = t.conversation_id
            WHERE t.conversation_id = ?
@@ -1372,17 +1429,25 @@ export function createNativeSessionPersistence(options) {
         ),
       );
       for (const row of rows) {
-        try {
-          // Ensure a producer fence exists so settle authorization can succeed.
-          ensureConversation({
-            projectId,
+        const meta = conversations.get(conversation.id);
+        if (
+          !meta ||
+          meta.ownerGeneration !== row.owner_generation ||
+          meta.hostGeneration !== row.host_generation
+        ) {
+          unresolved.push({
             conversationId: conversation.id,
-            controller: conversation.controller,
-            modelRequested: conversation.modelRequested ?? null,
-            effort: conversation.effort ?? null,
-            role: conversation.role ?? "implement",
-            evidence,
+            turnId: row.turn_id,
+            operationId: row.operation_id,
+            priorOpState: row.op_state,
+            priorOwnerGeneration: row.owner_generation,
+            priorHostGeneration: row.host_generation,
+            reason:
+              "ERR_FENCE_CONFLICT: stranded turn belongs to a prior host/producer; explicit recovery required (not auto-adopted)",
           });
+          continue;
+        }
+        try {
           settleTurn({
             conversationId: conversation.id,
             turnId: row.turn_id,
@@ -1396,12 +1461,18 @@ export function createNativeSessionPersistence(options) {
             operationId: row.operation_id,
             priorOpState: row.op_state,
           });
-        } catch {
-          // Leave the turn for a later host that can prove ownership.
+        } catch (err) {
+          unresolved.push({
+            conversationId: conversation.id,
+            turnId: row.turn_id,
+            operationId: row.operation_id,
+            priorOpState: row.op_state,
+            reason: err instanceof Error ? err.message : String(err),
+          });
         }
       }
     }
-    return settled;
+    return { settled, unresolved };
   }
 
   function close() {

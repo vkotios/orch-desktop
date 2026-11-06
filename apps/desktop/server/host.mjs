@@ -63,10 +63,10 @@ async function readAssociationWorktreeDiff(store, args) {
   if (rel.startsWith('..') || path.isAbsolute(rel)) {
     throw new Error('worktree path is outside the associated repository');
   }
-  async function git(gitArgs) {
+  async function git(cwd, gitArgs) {
     try {
       const { stdout } = await execFileAsync('git', gitArgs, {
-        cwd: resolved,
+        cwd,
         encoding: 'utf8',
         maxBuffer: 2 * 1024 * 1024,
         windowsHide: true,
@@ -77,35 +77,74 @@ async function readAssociationWorktreeDiff(store, args) {
       throw new Error(`git ${gitArgs[0]} failed: ${String(stderr || err?.message || err).slice(0, 400)}`);
     }
   }
-  const statusOut = await git(['status', '--porcelain', '--untracked-files=all']);
-  const files = statusOut
-    .split(/\r?\n/)
-    .map((line) => line.trimEnd())
-    .filter((line) => line.length > 0)
-    .map((line) => {
-      const status = line.slice(0, 2);
-      const filePath = line.slice(3).replace(/\\/g, '/');
-      return { status, path: filePath };
-    })
-    .slice(0, 200);
+  // Prefer committed worker changes vs the integration baseline (merge-base with
+  // the current repo HEAD). Fall back to worktree dirty status when needed.
+  const branch = await git(resolved, ['rev-parse', '--abbrev-ref', 'HEAD']);
+  let baseline = null;
+  try {
+    baseline = (await git(repoRoot, ['merge-base', 'HEAD', branch])).trim();
+  } catch {
+    baseline = null;
+  }
+  let files = [];
   let patch = null;
   const focus = typeof args.path === 'string' && args.path.length > 0 && args.path.length <= 1024
     ? args.path.replace(/\\/g, '/')
     : null;
-  if (focus) {
-    if (focus.includes('..') || path.isAbsolute(focus)) {
-      throw new Error('diff path must be repository-relative');
+  if (focus && (focus.includes('..') || path.isAbsolute(focus))) {
+    throw new Error('diff path must be repository-relative');
+  }
+  if (baseline) {
+    const nameStatus = await git(repoRoot, [
+      'diff', '--name-status', '--no-ext-diff', `${baseline}...${branch}`,
+    ]);
+    files = nameStatus
+      .split(/\r?\n/)
+      .map((line) => line.trimEnd())
+      .filter((line) => line.length > 0)
+      .map((line) => {
+        const parts = line.split(/\t/);
+        return { status: parts[0] || 'M', path: (parts[parts.length - 1] || '').replace(/\\/g, '/') };
+      })
+      .filter((entry) => entry.path)
+      .slice(0, 200);
+    if (focus) {
+      const raw = await git(repoRoot, [
+        'diff', '--no-ext-diff', `${baseline}...${branch}`, '--', focus,
+      ]);
+      patch = raw.length > 200_000 ? `${raw.slice(0, 200_000)}\n… truncated` : raw;
+    } else if (files.length > 0) {
+      const raw = await git(repoRoot, [
+        'diff', '--no-ext-diff', `${baseline}...${branch}`,
+      ]);
+      patch = raw.length > 200_000 ? `${raw.slice(0, 200_000)}\n… truncated` : raw;
     }
-    const raw = await git(['diff', '--no-ext-diff', '--', focus]);
-    patch = raw.length > 200_000 ? `${raw.slice(0, 200_000)}\n… truncated` : raw;
-  } else if (files.length > 0) {
-    const raw = await git(['diff', '--no-ext-diff', '--stat']);
-    patch = raw.length > 20_000 ? `${raw.slice(0, 20_000)}\n… truncated` : raw;
+  } else {
+    const statusOut = await git(resolved, ['status', '--porcelain', '--untracked-files=all']);
+    files = statusOut
+      .split(/\r?\n/)
+      .map((line) => line.trimEnd())
+      .filter((line) => line.length > 0)
+      .map((line) => {
+        const status = line.slice(0, 2);
+        const filePath = line.slice(3).replace(/\\/g, '/');
+        return { status, path: filePath };
+      })
+      .slice(0, 200);
+    if (focus) {
+      const raw = await git(resolved, ['diff', '--no-ext-diff', '--', focus]);
+      patch = raw.length > 200_000 ? `${raw.slice(0, 200_000)}\n… truncated` : raw;
+    } else if (files.length > 0) {
+      const raw = await git(resolved, ['diff', '--no-ext-diff']);
+      patch = raw.length > 200_000 ? `${raw.slice(0, 200_000)}\n… truncated` : raw;
+    }
   }
   return {
     associationId,
     worktreePath: resolved,
     repoPath: repoRoot,
+    branch,
+    baseline,
     files,
     path: focus,
     patch,
@@ -385,10 +424,22 @@ export async function runHost(options = {}) {
           if (env.command === 'delegation_list') {
             data = { associations: store.list(args) };
           } else if (env.command === 'delegation_upsert') {
-            // Renderer may not invent terminal dispositions via upsert.
+            // Renderer may not invent terminal dispositions or relocate resources.
             const admitted = { ...args };
             if (admitted.disposition && admitted.disposition !== 'none') {
               delete admitted.disposition;
+            }
+            const prior = typeof admitted.id === 'string' ? store.get(admitted.id) : null;
+            if (prior) {
+              // Existing associations: repo/worktree/run identity are host-owned.
+              delete admitted.repoPath;
+              delete admitted.worktreePath;
+              delete admitted.runId;
+              if (admitted.stage === 'running' || admitted.stage === 'launching') {
+                delete admitted.stage;
+              }
+            } else if (admitted.worktreePath || admitted.runId) {
+              throw new Error('new associations cannot invent worktreePath or runId');
             }
             data = { association: store.upsert(admitted) };
           } else if (env.command === 'delegation_set_disposition') {
@@ -398,7 +449,42 @@ export async function runHost(options = {}) {
           } else if (env.command === 'delegation_worktree_diff') {
             data = await readAssociationWorktreeDiff(store, args);
           } else if (env.command === 'delegation_integrate') {
-            data = await integrateAssociationWorktree(store, args);
+            data = await integrateAssociationWorktree(store, args, {
+              inspectRun: async (runId) => {
+                const detail = await dispatchFn('orch_run_detail', { runId, by: 'owner' });
+                const status = detail?.output?.status ?? detail?.output?.state ?? detail?.status;
+                const terminal = ['completed', 'failed', 'cancelled', 'canceled', 'interrupted', 'unknown', 'finished']
+                  .includes(String(status || '').toLowerCase());
+                return {
+                  ok: detail?.ok !== false && !detail?.error,
+                  terminal,
+                  text: detail?.text || detail?.error || '',
+                };
+              },
+              inspectGate: async (wp) => {
+                const gate = await dispatchFn('orch_gate_status', { wp, by: 'owner' });
+                const converged = gate?.output?.converged === true
+                  || gate?.output?.status === 'converged'
+                  || gate?.converged === true;
+                return {
+                  ok: gate?.ok !== false && !gate?.error,
+                  converged,
+                  text: gate?.text || gate?.error || '',
+                };
+              },
+              inspectReview: async (wp) => {
+                const review = await dispatchFn('orch_review', { wp, by: 'owner' });
+                const clean = review?.output?.clean === true
+                  || review?.output?.containment === 'clean'
+                  || review?.clean === true
+                  || review?.output?.status === 'clean';
+                return {
+                  ok: review?.ok !== false && !review?.error,
+                  clean,
+                  text: review?.text || review?.error || '',
+                };
+              },
+            });
           } else if (env.command === 'project_resolve_path') {
             data = resolveProjectPath(args);
           } else {
@@ -415,6 +501,36 @@ export async function runHost(options = {}) {
       try {
         const admitted = await admitOrchArgs(env.command, env.args);
         data = await dispatchFn(env.command, admitted);
+        // Host-owned association resource updates after successful orch prep/launch.
+        if (data && data.ok !== false) {
+          const associationId = typeof admitted.associationId === 'string' ? admitted.associationId : null;
+          if (associationId && (env.command === 'orch_worktree_create' || env.command === 'orch_run')) {
+            const store = await getDelegationStore();
+            if (env.command === 'orch_worktree_create') {
+              const worktreePath = data.output?.path ?? data.path ?? null;
+              if (typeof worktreePath === 'string' && worktreePath.length > 0) {
+                store.upsert({
+                  id: associationId,
+                  stage: 'worktree',
+                  worktreePath: path.resolve(worktreePath),
+                });
+              }
+            } else if (env.command === 'orch_run') {
+              const runId = typeof data.output?.id === 'string'
+                ? data.output.id
+                : typeof data.output?.run_id === 'string'
+                  ? data.output.run_id
+                  : null;
+              if (runId) {
+                store.upsert({
+                  id: associationId,
+                  stage: 'running',
+                  runId,
+                });
+              }
+            }
+          }
+        }
       }
       catch (err) { await sendError(env.requestId, 'COMMAND_FAILED', err?.message ?? String(err)); return; }
       await sendResult(env.requestId, data);

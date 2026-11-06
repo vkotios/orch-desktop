@@ -870,10 +870,13 @@ export function createNativeChatService(options) {
         if (durable) {
           state.durableProject = durable.ensureProject({ pathCanonical: canonical, name: pending.name });
           try {
-            durable.reconcileStrandedTurns({
+            const reconciled = durable.reconcileStrandedTurns({
               projectId: state.durableProject.id,
               evidence: ownerEvidence(),
             });
+            if (reconciled?.unresolved?.length) {
+              state.recoveryNotice = `${reconciled.unresolved.length} stranded turn(s) need explicit recovery (prior host provenance).`;
+            }
           } catch {
             // Reconciliation is best-effort; prepare must still succeed.
           }
@@ -894,10 +897,13 @@ export function createNativeChatService(options) {
         if (durable) {
           state.durableProject = durable.ensureProject({ pathCanonical: canonical, name: pending.name });
           try {
-            durable.reconcileStrandedTurns({
+            const reconciled = durable.reconcileStrandedTurns({
               projectId: state.durableProject.id,
               evidence: ownerEvidence(),
             });
+            if (reconciled?.unresolved?.length) {
+              state.recoveryNotice = `${reconciled.unresolved.length} stranded turn(s) need explicit recovery (prior host provenance).`;
+            }
           } catch {
             // Reconciliation is best-effort; prepare must still succeed.
           }

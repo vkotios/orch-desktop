@@ -43,14 +43,18 @@ describe("session-store migrate", () => {
     expect(result.noop).toBe(false);
     expect(result.applied).toContain("2026-11-06-schema-migrations-table");
     expect(fs.existsSync(result.backupPath)).toBe(true);
-    expect(fs.readFileSync(result.backupPath).equals(before)).toBe(true);
+    // VACUUM INTO is a consistent logical snapshot, not necessarily byte-identical.
+    const backup = new DatabaseSync(result.backupPath);
+    expect(backup.prepare("PRAGMA user_version").get()?.user_version).toBe(1);
+    backup.close();
+    expect(before.length).toBeGreaterThan(0);
     const store = openSessionStore({ databasePath: file });
     expect(store.instanceId).toBe(instanceId);
     expect(store.schemaVersion).toBe(2);
     store.close();
   });
 
-  it("restores the backup when a migration step fails", () => {
+  it("leaves the live database unchanged when a migration step fails", () => {
     const file = tempDb("migrate-fail.sqlite3");
     craftV1Database(file);
     // Pre-create a conflicting table so the v1→v2 DDL cannot apply.
@@ -58,10 +62,36 @@ describe("session-store migrate", () => {
     poison.exec("CREATE TABLE schema_migrations(version INTEGER)");
     poison.close();
     const before = fs.readFileSync(file);
-    expect(() => migrateSessionStore({ databasePath: file })).toThrow(/restored from backup/);
+    expect(() => migrateSessionStore({ databasePath: file })).toThrow(/left unchanged|already exists|migration/);
     expect(fs.readFileSync(file).equals(before)).toBe(true);
     // Still fail-closed for open: not at current schema.
     expect(() => openSessionStore({ databasePath: file })).toThrow(/migrateSessionStore|schema/);
+  });
+
+  it("does not erase a concurrent committed write after a failed migrate", () => {
+    const file = tempDb("migrate-concurrent.sqlite3");
+    craftV1Database(file);
+    const poison = new DatabaseSync(file);
+    poison.exec("CREATE TABLE schema_migrations(version INTEGER)");
+    poison.close();
+    // Competing writer commits after the file exists (simulates post-backup write).
+    const writer = new DatabaseSync(file);
+    writer.exec(
+      "CREATE TABLE IF NOT EXISTS projects(id TEXT PRIMARY KEY, name TEXT NOT NULL, path_canonical TEXT NOT NULL UNIQUE, created_at_ms INTEGER NOT NULL, archived INTEGER NOT NULL DEFAULT 0)",
+    );
+    writer
+      .prepare(
+        "INSERT OR IGNORE INTO projects(id, name, path_canonical, created_at_ms, archived) VALUES (?, ?, ?, ?, 0)",
+      )
+      .run("11111111-1111-4111-8111-111111111111", "kept", "C:/kept", Date.now());
+    writer.close();
+    expect(() => migrateSessionStore({ databasePath: file })).toThrow();
+    const check = new DatabaseSync(file);
+    const row = check
+      .prepare("SELECT name FROM projects WHERE path_canonical = ?")
+      .get("C:/kept");
+    check.close();
+    expect(row?.name).toBe("kept");
   });
 
   it("is a noop when already at the current schema", () => {
