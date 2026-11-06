@@ -101,6 +101,8 @@ export function createNativeChatService(options) {
     claudeDurable: null,
     // True while close() is settling durable state before marking closed.
     shuttingDown: false,
+    recoveryNotice: null,
+    recoveryUnresolved: [],
   };
 
   function ownerEvidence() {
@@ -885,6 +887,7 @@ export function createNativeChatService(options) {
             });
             if (reconciled?.unresolved?.length) {
               state.recoveryNotice = `${reconciled.unresolved.length} stranded turn(s) need explicit recovery (prior host provenance).`;
+              state.recoveryUnresolved = reconciled.unresolved;
             }
           } catch {
             // Reconciliation is best-effort; prepare must still succeed.
@@ -912,6 +915,7 @@ export function createNativeChatService(options) {
             });
             if (reconciled?.unresolved?.length) {
               state.recoveryNotice = `${reconciled.unresolved.length} stranded turn(s) need explicit recovery (prior host provenance).`;
+              state.recoveryUnresolved = reconciled.unresolved;
             }
           } catch {
             // Reconciliation is best-effort; prepare must still succeed.
@@ -928,7 +932,10 @@ export function createNativeChatService(options) {
         name: pending.name,
         models,
         ...(typeof state.recoveryNotice === "string" && state.recoveryNotice.length > 0
-          ? { recoveryNotice: state.recoveryNotice }
+          ? {
+            recoveryNotice: state.recoveryNotice,
+            recoveryUnresolved: state.recoveryUnresolved,
+          }
           : {}),
       };
     } catch (err) {
@@ -1858,6 +1865,59 @@ export function createNativeChatService(options) {
     return { generation, ...result };
   }
 
+  async function cmdAcknowledgeStranded(args) {
+    requireLive();
+    requireGeneration(args);
+    requireToken(args);
+    if (!isValidId(args.conversationId)) {
+      throw new Error("native_chat_acknowledge_stranded requires conversationId");
+    }
+    if (!isValidId(args.turnId)) {
+      throw new Error("native_chat_acknowledge_stranded requires turnId");
+    }
+    if (!isValidId(args.operationId)) {
+      throw new Error("native_chat_acknowledge_stranded requires operationId");
+    }
+    const durable = await ensurePersistence();
+    if (!durable || !state.durableProject) throw new Error("conversation store unavailable");
+    const listed = durable.listConversations({
+      projectId: state.durableProject.id,
+      limit: 200,
+      includeArchived: true,
+    });
+    const conversation = listed.find((c) => c.id === args.conversationId);
+    if (!conversation) throw new Error("conversation not found");
+    // Claim under the current host before acknowledging (no prior-host adoption).
+    durable.ensureConversation({
+      projectId: state.durableProject.id,
+      conversationId: args.conversationId,
+      controller: conversation.controller === "claude" ? "claude" : "codex",
+      modelRequested: conversation.modelRequested ?? null,
+      effort: conversation.effort ?? null,
+      role: conversation.role === "review" ? "review" : "implement",
+      evidence: ownerEvidence(),
+    });
+    const ack = durable.acknowledgePriorOwnerTurn({
+      conversationId: args.conversationId,
+      turnId: args.turnId,
+      operationId: args.operationId,
+      evidence: ownerEvidence(),
+    });
+    state.recoveryUnresolved = (state.recoveryUnresolved || []).filter(
+      (row) => row.operationId !== args.operationId,
+    );
+    if (state.recoveryUnresolved.length === 0) state.recoveryNotice = null;
+    else {
+      state.recoveryNotice = `${state.recoveryUnresolved.length} stranded turn(s) need explicit recovery (prior host provenance).`;
+    }
+    return {
+      generation,
+      ...ack,
+      recoveryNotice: state.recoveryNotice,
+      recoveryUnresolved: state.recoveryUnresolved,
+    };
+  }
+
   async function cmdHydrateConversation(args) {
     requireLive();
     requireGeneration(args);
@@ -1917,6 +1977,7 @@ export function createNativeChatService(options) {
       case "native_chat_hydrate_conversation": return cmdHydrateConversation(args);
       case "native_chat_export_conversation": return cmdExportConversation(args);
       case "native_chat_import_transcript": return cmdImportTranscript(args);
+      case "native_chat_acknowledge_stranded": return cmdAcknowledgeStranded(args);
       case "native_chat_save_draft": return cmdSaveDraft(args);
       case "native_chat_get_draft": return cmdGetDraft(args);
       case "native_chat_list_draft_conflicts": return cmdListDraftConflicts(args);

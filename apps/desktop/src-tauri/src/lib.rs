@@ -176,6 +176,11 @@ async fn native_chat_import_transcript(app: AppHandle, args: Value) -> Result<Va
 }
 
 #[tauri::command]
+async fn native_chat_acknowledge_stranded(app: AppHandle, args: Value) -> Result<Value, String> {
+    route_with_args(&app, "native_chat_acknowledge_stranded", args).await
+}
+
+#[tauri::command]
 async fn native_pick_project_folder(window: WebviewWindow) -> Result<Option<String>, String> {
     let (tx, rx) = tokio::sync::oneshot::channel();
     window
@@ -266,6 +271,7 @@ pub fn run() {
             native_chat_archive_conversation,
             native_chat_export_conversation,
             native_chat_import_transcript,
+            native_chat_acknowledge_stranded,
             native_pick_project_folder
         ])
         .build(tauri::generate_context!())

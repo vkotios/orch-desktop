@@ -293,6 +293,16 @@ export interface NativeValidateResult {
   projectToken: string;
 }
 
+export interface NativeRecoveryUnresolved {
+  conversationId: string;
+  turnId: string;
+  operationId: string;
+  priorOpState?: string;
+  priorOwnerGeneration?: number;
+  priorHostGeneration?: string;
+  reason?: string;
+}
+
 export interface NativePrepareResult {
   controller?: NativeController;
   generation: string;
@@ -302,6 +312,7 @@ export interface NativePrepareResult {
   models: NativeModelInfo[];
   /** Surfaced when stranded turns belong to a prior host (no auto-adoption). */
   recoveryNotice?: string;
+  recoveryUnresolved?: NativeRecoveryUnresolved[];
 }
 
 interface NativeAckBase {
@@ -577,6 +588,22 @@ export function nativeChatImportTranscript(args: {
   messages?: Array<{ role?: string; text?: string }>;
 }): Promise<{ generation: string; created: boolean; conversationId: string; importBatchId: string | null }> {
   return invokeNative("native_chat_import_transcript", { ...args });
+}
+
+export function nativeChatAcknowledgeStranded(args: {
+  generation: string;
+  projectToken: string;
+  conversationId: string;
+  turnId: string;
+  operationId: string;
+}): Promise<{
+  generation: string;
+  acknowledged?: boolean;
+  alreadyTerminal?: boolean;
+  recoveryNotice?: string | null;
+  recoveryUnresolved?: NativeRecoveryUnresolved[];
+}> {
+  return invokeNative("native_chat_acknowledge_stranded", { ...args });
 }
 
 export function nativeChatHydrateConversation(

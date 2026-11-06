@@ -396,4 +396,64 @@ describe("native-session-persistence Codex dual-write", () => {
       expect.objectContaining({ conversationId, turnId, operationId }),
     ]);
   });
+
+  it("acknowledges prior-host stranded turns without adopting their hostGeneration", () => {
+    const first = makePersistence();
+    const project = first.persistence.ensureProject({
+      pathCanonical: "C:/synthetic/prior-ack",
+      name: "prior-ack",
+    });
+    const conversationId = randomUUID();
+    const turnId = randomUUID();
+    const operationId = randomUUID();
+    first.persistence.ensureConversation({
+      projectId: project.id,
+      conversationId,
+      controller: "codex",
+      modelRequested: "gpt-test",
+      effort: "low",
+      role: "implement",
+      evidence: first.evidence,
+    });
+    first.persistence.beginTurn({
+      conversationId, turnId, operationId, prompt: "prior stranded", effort: "low", evidence: first.evidence,
+    });
+    first.persistence.afterThreadStart({ conversationId, nativeThreadId: "thread-p", evidence: first.evidence });
+    first.persistence.afterTurnWritten({ conversationId, turnId, operationId, evidence: first.evidence });
+    first.persistence.releaseProducer({ conversationId, evidence: first.evidence });
+    first.persistence.close();
+
+    const connectionId = randomUUID();
+    const second = createNativeSessionPersistence({
+      databasePath: join(first.dir, "sessions.sqlite3"),
+      hostGeneration: randomUUID(),
+      livenessPath: join(first.dir, "liveness-2.json"),
+      verifyOwnerEvidence: (facts) => facts?.evidence?.connectionId === connectionId,
+    });
+    owned.push(second);
+    const evidence = { connectionId };
+    second.ensureConversation({
+      projectId: project.id,
+      conversationId,
+      controller: "codex",
+      modelRequested: "gpt-test",
+      effort: "low",
+      role: "implement",
+      evidence,
+    });
+    const reconciled = second.reconcileStrandedTurns({ projectId: project.id, evidence });
+    expect(reconciled.settled).toEqual([]);
+    expect(reconciled.unresolved).toEqual([
+      expect.objectContaining({ conversationId, turnId, operationId }),
+    ]);
+    const ack = second.acknowledgePriorOwnerTurn({
+      conversationId, turnId, operationId, evidence,
+    });
+    expect(ack).toMatchObject({ acknowledged: true, turnId, operationId });
+    const after = second.reconcileStrandedTurns({ projectId: project.id, evidence });
+    expect(after.unresolved).toEqual([]);
+    expect(after.settled).toEqual([]);
+    const hydrated = second.hydrateConversation({ projectId: project.id, conversationId });
+    expect(hydrated?.messages.some((m) => m.role === "assistant" && m.outcome === "unknown")).toBe(true);
+  });
 });

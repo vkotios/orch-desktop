@@ -4,15 +4,15 @@ import { FormattedMarkdown } from "./FormattedMarkdown";
 import { NativeClarificationCard } from "./NativeClarificationCard";
 import { OrchAgentsPanel } from "./OrchAgentsPanel";
 import {
-  nativeChatAnswer, nativeChatArchiveConversation, nativeChatCancel, nativeChatClose,
+  nativeChatAcknowledgeStranded, nativeChatAnswer, nativeChatArchiveConversation, nativeChatCancel, nativeChatClose,
   nativeChatExportConversation, nativeChatGetDraft, nativeChatHydrateConversation,
-  nativeChatListConversations, nativeChatListDraftConflicts, nativeChatPoll,
+  nativeChatImportTranscript, nativeChatListConversations, nativeChatListDraftConflicts, nativeChatPoll,
   nativeChatPrepareProject, nativeChatRenameConversation, nativeChatResolveDraftConflict,
   nativeChatRespond, nativeChatSaveDraft, nativeChatSend, nativeChatValidateProject,
   nativeChatPickProjectFolder,
   type NativeClarificationRequest, type NativeController, type NativeDecision, type NativeEffort,
   type NativeEventCursor, type NativeHydratedConversation, type NativeModelInfo,
-  type NativePrepareResult, type NativeRole, type NativeValidateResult,
+  type NativePrepareResult, type NativeRecoveryUnresolved, type NativeRole, type NativeValidateResult,
 } from "../lib/api";
 import {
   applyNativeAck, applyNativeClarificationAck, applyNativePollBatch, beginNativeTurn, createNativeUiSession,
@@ -88,6 +88,7 @@ export function NativeChat() {
   const [historyTruncated, setHistoryTruncated] = useState(false);
   const [loading, setLoading] = useState("");
   const [error, setError] = useState("");
+  const [recoveryUnresolved, setRecoveryUnresolved] = useState<NativeRecoveryUnresolved[]>([]);
   const [lost, setLost] = useState(false);
   const [sendPending, setSendPending] = useState(false);
   const [pendingDecisions, setPendingDecisions] = useState<string[]>([]);
@@ -356,6 +357,7 @@ export function NativeChat() {
       }
       if (!mounted.current) { void nativeChatClose(p.generation, p.projectToken).catch(() => {}); return; }
       setChallenge(null); setProject(p); setLost(false);
+      setRecoveryUnresolved(Array.isArray(p.recoveryUnresolved) ? p.recoveryUnresolved : []);
       if (typeof p.recoveryNotice === "string" && p.recoveryNotice.length > 0) {
         setError(p.recoveryNotice);
       }
@@ -668,6 +670,60 @@ export function NativeChat() {
             >
               Export
             </button>
+            <label className="native-button" style={{ display: "inline-flex", cursor: busy || loading ? "not-allowed" : "pointer" }}>
+              Import
+              <input
+                type="file"
+                accept="application/json,.json"
+                hidden
+                disabled={busy || Boolean(loading)}
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  e.target.value = "";
+                  if (!file || !project) return;
+                  setLoading("Importing transcript…");
+                  void file.text().then(async (raw) => {
+                    const parsed = JSON.parse(raw) as {
+                      format?: string;
+                      conversation?: { title?: string; controller?: string; messages?: Array<{ role?: string; text?: string }> };
+                      messages?: Array<{ role?: string; text?: string }>;
+                      title?: string;
+                    };
+                    const messages = Array.isArray(parsed.conversation?.messages)
+                      ? parsed.conversation.messages
+                      : Array.isArray(parsed.messages)
+                        ? parsed.messages
+                        : null;
+                    if (!messages) throw new Error("Import file has no messages array");
+                    const imported = await nativeChatImportTranscript({
+                      generation: project.generation,
+                      projectToken: project.projectToken,
+                      source: "file-import",
+                      sourceKey: `${file.name}:${file.size}:${file.lastModified}`,
+                      title: parsed.conversation?.title || parsed.title || file.name.replace(/\.json$/i, ""),
+                      controller: (parsed.conversation?.controller === "claude" ? "claude" : controller),
+                      messages,
+                    });
+                    const hydrated = await nativeChatHydrateConversation(
+                      project.generation,
+                      project.projectToken,
+                      imported.conversationId,
+                    );
+                    if (!hydrated.conversation) throw new Error("Imported conversation could not be hydrated");
+                    const session = sessionFromHydrated(project, hydrated.conversation);
+                    changeSessions((all) => [...all, session].slice(0, NATIVE_MAX_SESSIONS));
+                    setSelected(session.id);
+                    setLoading(imported.created ? "Imported transcript." : "Opened previously imported transcript.");
+                    setTimeout(() => { if (mounted.current) setLoading(""); }, 1500);
+                  }).catch((err) => {
+                    if (mounted.current) {
+                      setLoading("");
+                      setError(errorText(err));
+                    }
+                  });
+                }}
+              />
+            </label>
             <button
               type="button"
               className="native-button"
@@ -760,6 +816,46 @@ export function NativeChat() {
       <header className="native-header"><span>{project?.name || "Open a project"}</span>{current && <span>{controllerName} · {current.role === "review" ? "Read-only" : "Editing"}</span>}</header>
       <div className="native-content">
         {(error || loading) && <div role={error ? "alert" : "status"} className={error ? "native-notice error" : "native-notice"}>{error || loading}</div>}
+        {project && recoveryUnresolved.length > 0 ? (
+          <div className="native-notice" role="status">
+            <p>{recoveryUnresolved.length} prior-host stranded turn(s). Mark unknown explicitly — this host will not adopt them.</p>
+            <div className="native-orch-actions">
+              {recoveryUnresolved.slice(0, 8).map((row) => (
+                <button
+                  key={row.operationId}
+                  type="button"
+                  className="native-button"
+                  disabled={busy || Boolean(loading) || lost}
+                  onClick={() => {
+                    setLoading("Acknowledging stranded turn…");
+                    void nativeChatAcknowledgeStranded({
+                      generation: project.generation,
+                      projectToken: project.projectToken,
+                      conversationId: row.conversationId,
+                      turnId: row.turnId,
+                      operationId: row.operationId,
+                    }).then((result) => {
+                      const remaining = Array.isArray(result.recoveryUnresolved) ? result.recoveryUnresolved : [];
+                      setRecoveryUnresolved(remaining);
+                      setError(typeof result.recoveryNotice === "string" && result.recoveryNotice.length > 0
+                        ? result.recoveryNotice
+                        : remaining.length === 0 ? "" : error);
+                      setLoading(result.acknowledged === false && result.alreadyTerminal
+                        ? "Turn was already terminal."
+                        : "Marked stranded turn unknown.");
+                      setTimeout(() => { if (mounted.current) setLoading(""); }, 1500);
+                    }).catch((err) => {
+                      setLoading("");
+                      setError(errorText(err));
+                    });
+                  }}
+                >
+                  Mark unknown ({row.turnId.slice(0, 8)})
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : null}
         {!project && <section className="native-empty"><h1>Open a project</h1><p>Choose an existing project directory for this conversation.</p><form onSubmit={validate}><label htmlFor="native-controller">Controller</label><select id="native-controller" value={controller} disabled={Boolean(loading) || Boolean(challenge)} onChange={(e) => setController(e.target.value as NativeController)}><option value="codex">Codex</option><option value="claude">Claude</option></select><label htmlFor="native-path">Project path</label><div className="native-path-row"><input id="native-path" value={path} onChange={(e) => { setPath(e.target.value); setChallenge(null); }} placeholder="Path to a project" disabled={Boolean(loading)} /><button type="button" className="native-button" onClick={() => void browseProject()} disabled={Boolean(loading) || Boolean(challenge)}><Icon name="folder" size={15} /> Browse…</button><button className="native-primary" disabled={!path.trim() || Boolean(loading)}>Continue</button></div></form></section>}
         {project && current && <><div className="native-settings"><label>Model <select value={current.model} disabled={current.threadStarted || current.messages.length > 0 || current.busy || sendPending || lost} onChange={(e) => chooseModel(e.target.value)}>{project.models.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}</select></label><label>Access <select value={current.role} disabled={current.threadStarted || current.messages.length > 0 || current.busy || sendPending || lost} onChange={(e) => updateSettings({ role: e.target.value as NativeRole })}><option value="implement">Editing</option><option value="review">Read-only</option></select></label><label>Effort <select value={current.effort ?? ""} disabled={((current.threadStarted || current.messages.length > 0) && current.controller === "claude") || current.busy || sendPending || lost || !availableEfforts.length} onChange={(e) => updateSettings({ effort: e.target.value as NativeEffort })}>{availableEfforts.length ? availableEfforts.map((e) => <option key={e} value={e}>{e === "xhigh" ? "Extra high" : e === "max" ? "Max" : e[0].toUpperCase() + e.slice(1)}</option>) : <option value="">Default</option>}</select></label></div>
           {(current.threadStarted || current.messages.length > 0) && <p className="native-hint">{current.controller === "codex" ? "Start a new chat to change the model or access." : "Start a new chat to change these settings."}</p>}

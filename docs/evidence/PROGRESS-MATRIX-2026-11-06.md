@@ -19,9 +19,9 @@ Status vocabulary:
 | R2 | Implemented + locally checked (partial) | VACUUM INTO backup/rollback + exclusive lock; crash-left lock dead-owner recovery and full concurrent-writer qualification remain |
 | R3 | Implemented + locally checked (partial) | B1: hooks parse real `getOrchRunDetail` status objects, `gate.decision==='converged'` with slice, and read-only `orch_review_evidence` (not launch). Bind to exact commit/qualification still open |
 | R4 | Implemented + locally checked (partial) | Preview token binds source/target SHAs; stale apply refuses. End-to-end host mutation serialization / post-merge receipt recovery still need qualification |
-| R5 | Implemented + locally checked (partial) | B4: `ensureConversation` caches `hostGeneration`; current-host stranded turns settle; `recoveryNotice` returned from prepare and shown in UI. Explicit S5 prior-owner settle API/UI unfinished |
+| R5 | Implemented + locally checked (partial) | B4 + S5 ack: `hostGeneration` on meta; current-host reconcile settles; `acknowledgePriorOwnerTurn` / `native_chat_acknowledge_stranded` marks prior-host turns unknown without adoption; prepare returns `recoveryUnresolved` and UI offers Mark unknown |
 | R6 | Implemented + locally checked (partial) | B2: live and durable `message_delta` share `partId`; consumer dedupes by id (multi-chunk `ab` not `abab`). RUN-02/04 rendered journeys remain |
-| R7 | Implemented + locally checked (partial) | B3: import stores body in `large_bodies` + import receipt (no tip-0 snapshot); hydrate reads import path before `pollEvents`. Full paging/export/import UI remain open |
+| R7 | Implemented + locally checked (partial) | B3: import in `large_bodies` + receipt; hydrate import path; Export + file Import UI wired. Full event paging beyond hydrate window / complete export of large histories still open |
 | R8 | Implemented + locally checked (partial) | Committed merge-base…branch patch; dirty/untracked overlay on normal merge-base path incomplete |
 | R9 | Implemented + locally checked (partial) | Renderer worktree/run injection stripped; host writes orch success associations. Prepared-project/conversation/approved-route binding qualification remains |
 | R10 | Implemented + locally checked (partial) | Exact `resolution === "open"` filter; rendered conflict resolution lifecycle still needs consumer tests |
@@ -39,7 +39,7 @@ Status vocabulary:
 
 | Package | Implemented | Locally checked | Unfinished | Externally blocked |
 | --- | --- | --- | --- | --- |
-| CHO-03 | Recovery + migrate safety + body-backed import + current-host reconcile + partId replay | package + B1–B4 tests | Explicit S5 prior-owner settle API; turn/event paging beyond window; complete export of full history | Live reopen with real CLIs |
+| CHO-03 | Recovery + migrate safety + body-backed import + current-host reconcile + prior-owner ack + partId replay + import/export UI | package + B1–B4 + prior-ack tests | Turn/event paging beyond hydrate window; complete export of very large histories; restore/clone identity rotation | Live reopen with real CLIs |
 | CHO-04/05 | Admission harden; real bridge integrate evidence; preview binding; baseline Diff; host-owned association resources | integrate + evidence adapter tests | Live delegated change + independent review round through orch | Reviewer quota; live orch worker |
 | CHO-06 | Maintained Markdown/file refs; draft-conflict filter | unit tests | Real rendered viewport/keyboard journeys (CSS string checks are not layout proof) | Owner 125/150% scaling |
 | CHO-07 | Runtime closure; CSP/docs/CI; advisory release-scan | staged-host probe | Installer rebuild+rehash after closure; remote CI on final head | Clean-machine; signing; public repo |

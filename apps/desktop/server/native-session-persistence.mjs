@@ -1436,6 +1436,131 @@ export function createNativeSessionPersistence(options) {
     return events.getSnapshot({ projectId, conversationId });
   }
 
+  function listStrandedTurnRows(conversationId) {
+    return store.transaction((tx) =>
+      tx.all(
+        `SELECT t.id AS turn_id, o.id AS operation_id, o.state AS op_state,
+                o.owner_generation AS owner_generation, o.host_generation AS host_generation
+         FROM turns t
+         JOIN operations o ON o.turn_id = t.id AND o.conversation_id = t.conversation_id
+         WHERE t.conversation_id = ?
+           AND t.outcome IS NULL
+           AND o.kind = 'handoff'
+           AND o.state IN ('queued', 'dispatching', 'written', 'observed')
+         ORDER BY t.seq ASC
+         LIMIT 32`,
+        conversationId,
+      ),
+    );
+  }
+
+  /**
+   * Explicit S5 recovery for a stranded prior-host turn. Requires a live claim
+   * on the conversation. Marks the turn unknown without rewriting the prior
+   * operation's hostGeneration (no adoption).
+   */
+  function acknowledgePriorOwnerTurn({
+    conversationId,
+    turnId,
+    operationId,
+    evidence = null,
+  }) {
+    assertOpen();
+    const meta = conversations.get(conversationId);
+    if (!meta) throw new Error(`unknown conversation ${conversationId}`);
+    requireUuid(turnId, "turnId");
+    requireUuid(operationId, "operationId");
+    if (!evidence || typeof evidence !== "object") {
+      throw new Error("acknowledgePriorOwnerTurn requires owner evidence");
+    }
+    const stamp = typeof now === "function" ? now() : Date.now();
+    const result = store.transaction((tx) => {
+      const op = tx.get(
+        `SELECT id, conversation_id, turn_id, kind, owner_generation, host_generation,
+                state, history_json, payload_hash, settled_at_ms
+         FROM operations WHERE id = ?`,
+        [operationId],
+      );
+      if (!op || op.conversation_id !== conversationId || op.turn_id !== turnId) {
+        throw new Error("stranded operation not found for conversation/turn");
+      }
+      if (op.kind !== "handoff") {
+        throw new Error("acknowledgePriorOwnerTurn applies only to handoff operations");
+      }
+      if (op.host_generation === hostGeneration && op.owner_generation === meta.ownerGeneration) {
+        throw new Error(
+          "operation belongs to the current host; use reconcileStrandedTurns instead of prior-owner ack",
+        );
+      }
+      if (!["queued", "dispatching", "written", "observed"].includes(op.state)) {
+        throw new Error(`operation state ${op.state} is not stranded`);
+      }
+      const turn = tx.get(
+        "SELECT id, outcome FROM turns WHERE conversation_id = ? AND id = ?",
+        [conversationId, turnId],
+      );
+      if (!turn) throw new Error("stranded turn not found");
+      if (turn.outcome != null) {
+        return { acknowledged: false, alreadyTerminal: true, outcome: turn.outcome };
+      }
+      // Receipt/history must satisfy session-turns parse rules (terminal kind only).
+      // Prior-host provenance is preserved on the operation row itself.
+      const receipt = JSON.stringify({
+        v: 1,
+        kind: "terminal",
+        outcome: "unknown",
+        hash: op.payload_hash,
+        nativeIdentity: null,
+        nativeTurnId: null,
+        claudeInputUuid: null,
+      });
+      let history = [];
+      try {
+        history = JSON.parse(op.history_json || "[]");
+        if (!Array.isArray(history)) history = [];
+      } catch {
+        history = [];
+      }
+      if (history.some((entry) => entry && entry.kind === "terminal")) {
+        throw new Error("stranded operation already has a terminal history fact");
+      }
+      history.push({
+        kind: "terminal",
+        atMs: stamp,
+        outcome: "unknown",
+        nativeIdentity: null,
+        nativeTurnId: null,
+        claudeInputUuid: null,
+      });
+      const movedTurn = tx.run(
+        `UPDATE turns SET intent_state = 'unknown', outcome = 'unknown'
+         WHERE conversation_id = ? AND id = ? AND outcome IS NULL`,
+        [conversationId, turnId],
+      );
+      if (Number(movedTurn.changes) !== 1) {
+        throw new Error("could not mark stranded turn unknown");
+      }
+      // Keep prior host_generation / owner_generation unchanged — never adopt.
+      const movedOp = tx.run(
+        `UPDATE operations SET state = 'unknown', history_json = ?, result_json = ?, settled_at_ms = ?
+         WHERE id = ? AND state IN ('queued', 'dispatching', 'written', 'observed')`,
+        [JSON.stringify(history), receipt, stamp, operationId],
+      );
+      if (Number(movedOp.changes) !== 1) {
+        throw new Error("could not settle stranded prior-owner operation");
+      }
+      return {
+        acknowledged: true,
+        conversationId,
+        turnId,
+        operationId,
+        priorHostGeneration: op.host_generation,
+        priorOwnerGeneration: op.owner_generation,
+      };
+    });
+    return result;
+  }
+
   /**
    * On reopen, attempt to settle stranded nonterminal turns as unknown under
    * the *current* producer only when provenance still matches. Never adopt or
@@ -1453,20 +1578,7 @@ export function createNativeSessionPersistence(options) {
     const settled = [];
     const unresolved = [];
     for (const conversation of conversationsList) {
-      const rows = store.transaction((tx) =>
-        tx.all(
-          `SELECT t.id AS turn_id, o.id AS operation_id, o.state AS op_state,
-                  o.owner_generation AS owner_generation, o.host_generation AS host_generation
-           FROM turns t
-           JOIN operations o ON o.turn_id = t.id AND o.conversation_id = t.conversation_id
-           WHERE t.conversation_id = ?
-             AND t.outcome IS NULL
-             AND o.state IN ('queued', 'dispatching', 'written', 'observed')
-           ORDER BY t.seq ASC
-           LIMIT 32`,
-          conversation.id,
-        ),
-      );
+      const rows = listStrandedTurnRows(conversation.id);
       for (const row of rows) {
         const meta = conversations.get(conversation.id);
         // Compare against the persistence module's hostGeneration and the
@@ -1563,6 +1675,7 @@ export function createNativeSessionPersistence(options) {
     beginClarificationAnswerDispatch,
     settleClarificationAnswer,
     retireClarification,
+    acknowledgePriorOwnerTurn,
     reconcileStrandedTurns,
     releaseProducer,
     releaseAllProducers,

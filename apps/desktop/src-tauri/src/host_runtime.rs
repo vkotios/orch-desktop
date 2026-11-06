@@ -16,7 +16,7 @@ use tokio::time::{timeout, timeout_at, Instant};
 
 const MAX_HANDSHAKE: Duration = Duration::from_secs(10);
 const STDERR_TAIL_BYTES: usize = 4096;
-const NATIVE_COMMANDS: [&str; 46] = [
+const NATIVE_COMMANDS: [&str; 47] = [
     "ping",
     "discover_harnesses",
     "orch_dashboard",
@@ -63,6 +63,7 @@ const NATIVE_COMMANDS: [&str; 46] = [
     "native_chat_archive_conversation",
     "native_chat_export_conversation",
     "native_chat_import_transcript",
+    "native_chat_acknowledge_stranded",
 ];
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;

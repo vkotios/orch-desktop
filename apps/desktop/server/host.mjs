@@ -188,6 +188,7 @@ const NATIVE_COMMANDS = new Set([
   'native_chat_archive_conversation',
   'native_chat_export_conversation',
   'native_chat_import_transcript',
+  'native_chat_acknowledge_stranded',
 ]);
 const ORCH_COMMANDS = [
   'orch_dashboard',
