@@ -17,23 +17,27 @@ Status vocabulary:
 | --- | --- | --- |
 | R1 | Implemented + locally checked (partial) | Host module closure + staged-host import probe pass; durable/delegation staged journeys and installer rebuild/rehash remain open |
 | R2 | Implemented + locally checked (partial) | VACUUM INTO backup/rollback + exclusive lock; crash-left lock dead-owner recovery and full concurrent-writer qualification remain |
-| R3 | Implemented + locally checked (partial) | B1: hooks parse real `getOrchRunDetail` status objects, `gate.decision==='converged'` with slice, and read-only `orch_review_evidence` (not launch). Bind to exact commit/qualification still open |
+| R3 | Implemented + locally checked (partial) | B1 + D1: exact run/review binding; require `outcome==='reviewed'` and `containment==='clean'`; no WP-wide clean-containment fallback; bridge exports `commit` and filters strictly by runId |
 | R4 | Implemented + locally checked (partial) | Preview token binds source/target SHAs; stale apply refuses. End-to-end host mutation serialization / post-merge receipt recovery still need qualification |
-| R5 | Implemented + locally checked (partial) | B4 + S5 ack: `hostGeneration` on meta; current-host reconcile settles; `acknowledgePriorOwnerTurn` / `native_chat_acknowledge_stranded` marks prior-host turns unknown without adoption; prepare returns `recoveryUnresolved` and UI offers Mark unknown |
-| R6 | Implemented + locally checked (partial) | B2: live and durable `message_delta` share `partId`; consumer dedupes by id (multi-chunk `ab` not `abab`). RUN-02/04 rendered journeys remain |
-| R7 | Implemented + locally checked (partial) | B3: import in `large_bodies` + receipt; hydrate import path; Export + file Import UI wired. Full event paging beyond hydrate window / complete export of large histories still open |
+| R5 | Implemented + locally checked (partial) | B4 + S5 + D2: prior-owner ack authorizes current fence/`verifyOwnerEvidence` in the writer tx (denied proof refuses); no adoption of prior `hostGeneration` |
+| R6 | Implemented + locally checked (partial) | B2 + D4: ordered `appliedParts` rebuild by durable `seq` so missing middle recovers as `abc` not `acb`. RUN-02/04 rendered journeys remain |
+| R7 | Implemented + locally checked (partial) | B3 + D3: import body prefixes hydrate; later native turns compose into hydrate/export. Full event paging beyond window still open |
 | R8 | Implemented + locally checked (partial) | Committed merge-base…branch patch; dirty/untracked overlay on normal merge-base path incomplete |
 | R9 | Implemented + locally checked (partial) | Renderer worktree/run injection stripped; host writes orch success associations. Prepared-project/conversation/approved-route binding qualification remains |
 | R10 | Implemented + locally checked (partial) | Exact `resolution === "open"` filter; rendered conflict resolution lifecycle still needs consumer tests |
 
-## Recheck defects B1–B4
+## Recheck defects B1–B4 / D1–D4
 
 | ID | Status | Fix |
 | --- | --- | --- |
-| B1 | Implemented + locally checked | `delegation-integrate-evidence.mjs` + host hooks + bridge-shape tests |
-| B2 | Implemented + locally checked | Shared `partId` on Codex/Claude live enqueue; state dedupe by id |
-| B3 | Implemented + locally checked | Import → `large_bodies` + receipt; hydrate short-circuits imports |
-| B4 | Implemented + locally checked | `meta.hostGeneration`; prepare returns/surfaces `recoveryNotice` |
+| B1 | Implemented + locally checked | Real bridge run/gate/review adapters |
+| B2 | Implemented + locally checked | Shared `partId` on live+durable deltas |
+| B3 | Implemented + locally checked | Import → `large_bodies` (no tip-0 snapshot) |
+| B4 | Implemented + locally checked | `meta.hostGeneration` + `recoveryNotice` |
+| D1 | Implemented + locally checked | Exact run + `reviewed` + clean; no unrelated fallback |
+| D2 | Implemented + locally checked | Fence + `verifyOwnerEvidence` in prior-owner ack tx |
+| D3 | Implemented + locally checked | Compose import prefix with later native turns |
+| D4 | Implemented + locally checked | Rebuild assistant text by durable seq order |
 
 ## Work packages
 

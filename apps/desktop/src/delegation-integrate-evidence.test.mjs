@@ -42,24 +42,51 @@ describe("delegation integrate evidence adapters (real bridge shapes)", () => {
     expect(deriveGateInspection({ ok: true, output: { decision: "open" } }).converged).toBe(false);
   });
 
-  it("matches finished clean review evidence by run/wp", () => {
+  it("requires exact run match with outcome reviewed and clean containment", () => {
     const evidence = {
       ok: true,
       reviews: [
         {
+          id: "rev-other",
+          wp: "cho-05",
+          implementer_run: "other-run",
+          containment: "clean",
+          outcome: "not-reviewed",
+          finished_at: "2026-11-06T10:00:00Z",
+        },
+        {
           id: "rev-1",
           wp: "cho-05",
-          implementer_run: "run-1",
+          slice: "delegate",
+          implementer_run: "required-run",
           containment: "clean",
+          outcome: "reviewed",
           finished_at: "2026-11-06T10:00:00Z",
+          commit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         },
       ],
     };
+    // Unrelated clean containment must not satisfy another run.
     expect(
-      deriveReviewInspection(evidence, { wp: "cho-05", runId: "run-1" }),
+      deriveReviewInspection(evidence, { wp: "cho-05", runId: "required-run" }),
     ).toMatchObject({ ok: true, clean: true, reviewId: "rev-1" });
     expect(
-      deriveReviewInspection({ ok: true, reviews: [] }, { wp: "cho-05" }),
+      deriveReviewInspection(
+        { ok: true, reviews: [evidence.reviews[0]] },
+        { wp: "cho-05", runId: "required-run" },
+      ),
+    ).toMatchObject({ ok: true, clean: false });
+    expect(
+      deriveReviewInspection(
+        { ok: true, reviews: [{ ...evidence.reviews[1], outcome: "not-reviewed" }] },
+        { wp: "cho-05", runId: "required-run" },
+      ),
+    ).toMatchObject({ ok: true, clean: false });
+    expect(
+      deriveReviewInspection({ ok: true, reviews: [] }, { wp: "cho-05", runId: "required-run" }),
+    ).toMatchObject({ ok: true, clean: false });
+    expect(
+      deriveReviewInspection(evidence, { wp: "cho-05" }),
     ).toMatchObject({ ok: true, clean: false });
   });
 
@@ -100,13 +127,15 @@ describe("delegation integrate evidence adapters (real bridge shapes)", () => {
               {
                 id: "rev-1",
                 wp: assoc.wp,
+                slice: assoc.slice,
                 implementer_run: assoc.runId,
                 containment: "clean",
+                outcome: "reviewed",
                 finished_at: "2026-11-06T10:00:00Z",
               },
             ],
           },
-          { wp: assoc.wp, runId: assoc.runId, reviewId: assoc.reviewId },
+          { wp: assoc.wp, runId: assoc.runId, reviewId: assoc.reviewId, slice: assoc.slice },
         );
       },
     };

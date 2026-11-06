@@ -22,6 +22,7 @@ import { createSessionEvents } from "./session-events.mjs";
 import { createSessionBodies } from "./session-bodies.mjs";
 import { createSessionApprovals } from "./session-approvals.mjs";
 import { createSessionClarifications } from "./session-clarifications.mjs";
+import { createProducerAuthorizer } from "./session-producer-transaction.mjs";
 
 function defaultLivenessPath() {
   if (typeof process.env.CHO_PRODUCER_LIVENESS === "string" && process.env.CHO_PRODUCER_LIVENESS.trim()) {
@@ -227,6 +228,7 @@ export function createNativeSessionPersistence(options) {
     verifyPendingQuestion,
     now,
   });
+  const authorizer = createProducerAuthorizer({ verifyOwnerEvidence });
 
   /** @type {Map<string, { id: string, pathCanonical: string, name: string }>} */
   const projectsByPath = new Map();
@@ -830,12 +832,15 @@ export function createNativeSessionPersistence(options) {
 
     // Imported transcripts live in large_bodies (keyed by import_batch_id),
     // never in the event-store snapshot table (tip-0 snapshots are illegal).
+    // Later native turns append after the import prefix — do not always short-circuit.
     const importRow = store.transaction((tx) =>
       tx.get(
-        "SELECT import_batch_id AS importBatchId FROM imports WHERE conversation_id = ?",
+        "SELECT import_batch_id AS importBatchId from imports WHERE conversation_id = ?",
         [conversationId],
       ),
     );
+    /** @type {Array<{ id: string, role: string, text: string, tools: unknown[], isStreaming: boolean, imported: boolean }>} */
+    const importedMessages = [];
     if (importRow?.importBatchId) {
       const body = store.transaction((tx) =>
         tx.get(
@@ -843,7 +848,6 @@ export function createNativeSessionPersistence(options) {
           [importRow.importBatchId, conversationId],
         ),
       );
-      const messages = [];
       if (body?.bodyText) {
         try {
           const projection = JSON.parse(body.bodyText);
@@ -852,7 +856,7 @@ export function createNativeSessionPersistence(options) {
             Array.isArray(projection.importedMessages)
           ) {
             for (const item of projection.importedMessages) {
-              messages.push({
+              importedMessages.push({
                 id: item.id,
                 role: item.role === "user" ? "user" : "assistant",
                 text: typeof item.text === "string" ? item.text : "",
@@ -868,6 +872,15 @@ export function createNativeSessionPersistence(options) {
           });
         }
       }
+    }
+
+    const pageCap = Math.min(512, Math.max(1, Number.isSafeInteger(maxEventPages) ? maxEventPages : 64));
+    const turnCap = Math.min(500, Math.max(1, Number.isSafeInteger(turnLimit) ? turnLimit : 100));
+    // listTurns strips prompts by design; hydrate each turn via getTurn.
+    const turnSummaries = turns.listTurns({ projectId, conversationId, limit: turnCap, offset: 0 });
+
+    // Import-only conversations have no event tip/snapshot; return the body.
+    if (importedMessages.length > 0 && turnSummaries.length === 0) {
       const native = bindings.getNativeRef({ projectId, conversationId });
       return {
         conversationId,
@@ -879,7 +892,7 @@ export function createNativeSessionPersistence(options) {
         title: conversation.title || "Chat",
         nativeThreadId: native?.nativeThreadId ?? null,
         nativeSessionUuid: native?.nativeSessionUuid ?? null,
-        messages,
+        messages: importedMessages,
         eventTip: 0,
         eventCursor: null,
         hasMoreEvents: false,
@@ -890,10 +903,6 @@ export function createNativeSessionPersistence(options) {
       };
     }
 
-    const pageCap = Math.min(512, Math.max(1, Number.isSafeInteger(maxEventPages) ? maxEventPages : 64));
-    const turnCap = Math.min(500, Math.max(1, Number.isSafeInteger(turnLimit) ? turnLimit : 100));
-    // listTurns strips prompts by design; hydrate each turn via getTurn.
-    const turnSummaries = turns.listTurns({ projectId, conversationId, limit: turnCap, offset: 0 });
     /** @type {Map<string, string[]>} */
     const deltaTexts = new Map();
     /** @type {Map<string, Array<{ id: string, title: string, status: string }>>} */
@@ -957,7 +966,7 @@ export function createNativeSessionPersistence(options) {
       hasMoreEvents = true;
     }
 
-    const messages = [];
+    const messages = [...importedMessages];
     for (const summary of turnSummaries) {
       const turn = turns.getTurn({
         projectId,
@@ -1036,6 +1045,9 @@ export function createNativeSessionPersistence(options) {
       hasMoreEvents,
       historicalClarifications: historical.clarifications,
       historicalApprovals: historical.approvals,
+      ...(importedMessages.length > 0
+        ? { imported: true, importBatchId: importRow.importBatchId }
+        : {}),
     };
   }
 
@@ -1475,6 +1487,17 @@ export function createNativeSessionPersistence(options) {
     }
     const stamp = typeof now === "function" ? now() : Date.now();
     const result = store.transaction((tx) => {
+      // Current live owner must pass fence + verifyOwnerEvidence inside this
+      // writer transaction. Prior-op hostGeneration is preserved (no adoption),
+      // but the new writer is still the checked current producer.
+      authorizer.authorizeLiveWrite(tx, {
+        projectId: meta.projectId,
+        conversationId,
+        ownerToken: meta.ownerToken,
+        ownerGeneration: meta.ownerGeneration,
+        hostGeneration,
+        evidence,
+      });
       const op = tx.get(
         `SELECT id, conversation_id, turn_id, kind, owner_generation, host_generation,
                 state, history_json, payload_hash, settled_at_ms

@@ -481,6 +481,8 @@ export async function runHost(options = {}) {
                   wp: association.wp,
                   runId: association.runId,
                   reviewId: association.reviewId,
+                  slice: association.slice,
+                  sourceSha: association.sourceSha ?? association.reviewedCommit ?? null,
                 });
               },
             });

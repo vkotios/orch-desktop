@@ -1336,6 +1336,7 @@ export async function getOrchReviewEvidence({ wp, reviewId = null, runId = null 
       outcome: r.outcome ?? null,
       finished_at: r.finished_at ?? null,
       ref: r.ref ?? null,
+      commit: r.commit ?? null,
     }));
   } catch (err) {
     return {
@@ -1349,11 +1350,12 @@ export async function getOrchReviewEvidence({ wp, reviewId = null, runId = null 
   if (reviewId) {
     reviews = reviews.filter((r) => r.id === reviewId || r.review_id === reviewId);
   }
+  // Exact run binding only — never keep an unrelated WP review when the
+  // requested implementer run has no match.
   if (runId) {
-    const matched = reviews.filter(
+    reviews = reviews.filter(
       (r) => r.implementer_run === runId || r.run_id === runId || r.review_of === runId,
     );
-    if (matched.length > 0) reviews = matched;
   }
   return { ok: true, wp, reviews };
 }

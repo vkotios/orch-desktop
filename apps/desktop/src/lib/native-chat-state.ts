@@ -83,8 +83,12 @@ export interface NativeUiSession {
   unavailable: boolean;
   /** True once any live (non-durable) event has advanced the active turn. */
   liveTurnProgress: boolean;
-  /** Durable part ids already applied for the active turn (dedupe). */
-  appliedDurableParts: string[];
+  /**
+   * Ordered assistant parts for the active turn. Rebuild text by durable seq
+   * when present, otherwise by live arrival order — never append recovered
+   * middle chunks to the end.
+   */
+  appliedParts: Array<{ partId: string; text: string; seq: number | null; order: number }>;
 }
 
 export function defaultNativeModel(models: NativeModelInfo[]): string {
@@ -118,8 +122,20 @@ export function createNativeUiSession(
     threadStarted: false,
     unavailable: false,
     liveTurnProgress: false,
-    appliedDurableParts: [],
+    appliedParts: [],
   };
+}
+
+function rebuildAssistantText(
+  parts: Array<{ partId: string; text: string; seq: number | null; order: number }>,
+): string {
+  const sorted = [...parts].sort((a, b) => {
+    const aSeq = typeof a.seq === "number" ? a.seq : Number.POSITIVE_INFINITY;
+    const bSeq = typeof b.seq === "number" ? b.seq : Number.POSITIVE_INFINITY;
+    if (aSeq !== bSeq) return aSeq - bSeq;
+    return a.order - b.order;
+  });
+  return sorted.map((p) => p.text).join("");
 }
 
 /** Records the user prompt plus an assistant placeholder for a fresh UI turn. */
@@ -146,7 +162,7 @@ export function beginNativeTurn(
     cancelling: false,
     nativeTurnId: null,
     liveTurnProgress: false,
-    appliedDurableParts: [],
+    appliedParts: [],
   };
 }
 
@@ -194,7 +210,7 @@ function finishTurn(
     cancelling: false,
     nativeTurnId: null,
     liveTurnProgress: false,
-    appliedDurableParts: [],
+    appliedParts: [],
   };
 }
 
@@ -275,13 +291,8 @@ export function applyNativeUiEvent(
   if (event.source === "durable" && (event.kind === "turn_complete" || event.kind === "error" || event.nativeOutcome) && !session.busy) {
     return session;
   }
-  if (
-    event.kind === "message_delta" &&
-    typeof event.partId === "string" &&
-    session.appliedDurableParts.includes(event.partId)
-  ) {
-    return session;
-  }
+  // Part identity is checked inside message_delta so durable catch-up can
+  // still attach seq and rebuild order for already-seen live parts.
   const turnId = event.turnId;
   const message = session.messages.find((m) => m.id === turnId && m.role === "assistant");
   if (!message) return session;
@@ -336,16 +347,44 @@ export function applyNativeUiEvent(
   switch (event.kind) {
     case "message_delta": {
       if (!event.text) return session;
-      let next = updateAssistant(session, turnId, (m) => ({
-        ...m,
-        text: m.text + (event.text as string),
-      }));
-      if (typeof event.partId === "string") {
-        next = {
-          ...next,
-          appliedDurableParts: [...next.appliedDurableParts, event.partId],
-        };
+      const partId = typeof event.partId === "string" && event.partId.length > 0
+        ? event.partId
+        : null;
+      const seq = typeof event.seq === "number" && Number.isSafeInteger(event.seq)
+        ? event.seq
+        : null;
+      let parts = session.appliedParts;
+      if (partId) {
+        const existing = parts.findIndex((p) => p.partId === partId);
+        if (existing >= 0) {
+          // Same identity: optionally learn durable seq, never duplicate text.
+          const prior = parts[existing];
+          if (seq != null && prior.seq == null) {
+            parts = parts.map((p, i) => (i === existing ? { ...p, seq } : p));
+          } else {
+            return session;
+          }
+        } else {
+          parts = [
+            ...parts,
+            { partId, text: event.text as string, seq, order: parts.length },
+          ];
+        }
+      } else {
+        // No part identity: append once in arrival order (legacy path).
+        parts = [
+          ...parts,
+          {
+            partId: `anon-${parts.length}`,
+            text: event.text as string,
+            seq,
+            order: parts.length,
+          },
+        ];
       }
+      const text = rebuildAssistantText(parts);
+      let next = updateAssistant(session, turnId, (m) => ({ ...m, text }));
+      next = { ...next, appliedParts: parts };
       return next;
     }
     case "tool_call": {
