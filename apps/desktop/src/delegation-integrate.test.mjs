@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { integrateAssociationWorktree } from "../server/delegation-integrate.mjs";
+import { deriveReviewInspection } from "../server/delegation-integrate-evidence.mjs";
 
 function git(cwd, args) {
   return execFileSync("git", args, { cwd, encoding: "utf8", windowsHide: true }).trim();
@@ -105,6 +106,7 @@ describe("delegation integrate", () => {
       },
     };
     await expect(integrateAssociationWorktree(store, { id: "a" }, okHooks)).rejects.toThrow(/Accept/);
+    const { repo, wt } = makeRepo();
     await expect(
       integrateAssociationWorktree(
         {
@@ -112,8 +114,8 @@ describe("delegation integrate", () => {
             id: "b",
             disposition: "accepted",
             stage: "recorded",
-            repoPath: "/x",
-            worktreePath: "/x/wt",
+            repoPath: repo,
+            worktreePath: wt,
             wp: "cho-05",
             slice: "delegate",
             runId: null,
@@ -124,5 +126,69 @@ describe("delegation integrate", () => {
         {},
       ),
     ).rejects.toThrow(/gate inspection/);
+  });
+
+  it("binds review inspection to the Git-resolved source SHA, not association fields", { timeout: 30_000 }, async () => {
+    const { repo, wt } = makeRepo();
+    const reviewedSha = git(repo, ["rev-parse", "orch/cho-05/delegate"]);
+    // Extra commit after the successful review of reviewedSha.
+    fs.writeFileSync(path.join(wt, "later.txt"), "unreviewed\n");
+    git(wt, ["add", "later.txt"]);
+    git(wt, ["commit", "-m", "after review"]);
+    const currentSha = git(repo, ["rev-parse", "orch/cho-05/delegate"]);
+    expect(currentSha).not.toBe(reviewedSha);
+
+    const association = {
+      id: "assoc-sha",
+      repoPath: repo,
+      worktreePath: wt,
+      wp: "cho-05",
+      slice: "delegate",
+      disposition: "accepted",
+      stage: "recorded",
+      runId: "run-1",
+      // Renderer/stale fields must be ignored even if somehow present.
+      sourceSha: reviewedSha,
+      reviewedCommit: reviewedSha,
+    };
+    const seen = [];
+    const hooks = {
+      inspectRun: async () => ({ ok: true, terminal: true }),
+      inspectGate: async () => ({ ok: true, converged: true }),
+      inspectReview: async (assoc, ctx) => {
+        seen.push(ctx?.sourceSha);
+        return deriveReviewInspection(
+          {
+            ok: true,
+            reviews: [
+              {
+                id: "rev-old",
+                wp: assoc.wp,
+                slice: assoc.slice,
+                implementer_run: assoc.runId,
+                containment: "clean",
+                outcome: "reviewed",
+                finished_at: "2026-11-06T10:00:00Z",
+                commit: reviewedSha,
+              },
+            ],
+          },
+          {
+            wp: assoc.wp,
+            runId: assoc.runId,
+            slice: assoc.slice,
+            sourceSha: ctx?.sourceSha,
+          },
+        );
+      },
+    };
+    await expect(
+      integrateAssociationWorktree(
+        { get: () => association, setDisposition: () => association },
+        { id: "assoc-sha", dryRun: true },
+        hooks,
+      ),
+    ).rejects.toThrow(/not a successful clean review|No exact review|source SHA|review/i);
+    expect(seen).toEqual([currentSha]);
   });
 });

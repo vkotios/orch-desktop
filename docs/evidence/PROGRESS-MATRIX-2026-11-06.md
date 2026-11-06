@@ -17,10 +17,10 @@ Status vocabulary:
 | --- | --- | --- |
 | R1 | Implemented + locally checked (partial) | Host module closure + staged-host import probe pass; durable/delegation staged journeys and installer rebuild/rehash remain open |
 | R2 | Implemented + locally checked (partial) | VACUUM INTO backup/rollback + exclusive lock; crash-left lock dead-owner recovery and full concurrent-writer qualification remain |
-| R3 | Implemented + locally checked (partial) | B1 + D1: exact run/review binding; require `outcome==='reviewed'` and `containment==='clean'`; no WP-wide clean-containment fallback; bridge exports `commit` and filters strictly by runId |
+| R3 | Implemented + locally checked (partial) | B1 + D1 + E1: exact run/review + `reviewed`/`clean`; Git-resolved source SHA required before review; no association-field SHA |
 | R4 | Implemented + locally checked (partial) | Preview token binds source/target SHAs; stale apply refuses. End-to-end host mutation serialization / post-merge receipt recovery still need qualification |
 | R5 | Implemented + locally checked (partial) | B4 + S5 + D2: prior-owner ack authorizes current fence/`verifyOwnerEvidence` in the writer tx (denied proof refuses); no adoption of prior `hostGeneration` |
-| R6 | Implemented + locally checked (partial) | B2 + D4: ordered `appliedParts` rebuild by durable `seq` so missing middle recovers as `abc` not `acb`. RUN-02/04 rendered journeys remain |
+| R6 | Implemented + locally checked (partial) | B2 + D4 + E2: parts retained on completed messages; durable catch-up after live completion yields `abc`. RUN-02/04 rendered journeys remain |
 | R7 | Implemented + locally checked (partial) | B3 + D3: import body prefixes hydrate; later native turns compose into hydrate/export. Full event paging beyond window still open |
 | R8 | Implemented + locally checked (partial) | Committed merge-base…branch patch; dirty/untracked overlay on normal merge-base path incomplete |
 | R9 | Implemented + locally checked (partial) | Renderer worktree/run injection stripped; host writes orch success associations. Prepared-project/conversation/approved-route binding qualification remains |
@@ -34,10 +34,12 @@ Status vocabulary:
 | B2 | Implemented + locally checked | Shared `partId` on live+durable deltas |
 | B3 | Implemented + locally checked | Import → `large_bodies` (no tip-0 snapshot) |
 | B4 | Implemented + locally checked | `meta.hostGeneration` + `recoveryNotice` |
-| D1 | Implemented + locally checked | Exact run + `reviewed` + clean; no unrelated fallback |
+| D1 | Implemented + locally checked | Exact run + `reviewed` + clean; E1 binds Git-resolved source SHA before review |
 | D2 | Implemented + locally checked | Fence + `verifyOwnerEvidence` in prior-owner ack tx |
 | D3 | Implemented + locally checked | Compose import prefix with later native turns |
-| D4 | Implemented + locally checked | Rebuild assistant text by durable seq order |
+| D4 | Implemented + locally checked | Ordered parts; E2 retains parts after live completion for durable catch-up |
+| E1 | Implemented + locally checked | Integrate resolves branch tip SHA before `inspectReview`; association SHA fields ignored |
+| E2 | Implemented + locally checked | Finished-turn durable `message_delta` rebuilds text from retained message parts |
 
 ## Work packages
 

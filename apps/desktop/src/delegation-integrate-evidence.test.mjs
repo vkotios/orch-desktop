@@ -4,8 +4,6 @@ import {
   deriveReviewInspection,
   deriveRunInspection,
 } from "../server/delegation-integrate-evidence.mjs";
-import { integrateAssociationWorktree } from "../server/delegation-integrate.mjs";
-
 describe("delegation integrate evidence adapters (real bridge shapes)", () => {
   it("treats a completed status object as terminal", () => {
     // getOrchRunDetail returns status as an object, not a string.
@@ -67,120 +65,78 @@ describe("delegation integrate evidence adapters (real bridge shapes)", () => {
       ],
     };
     // Unrelated clean containment must not satisfy another run.
+    const sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    expect(
+      deriveReviewInspection(evidence, { wp: "cho-05", runId: "required-run", sourceSha: sha }),
+    ).toMatchObject({ ok: true, clean: true, reviewId: "rev-1" });
+    // Earlier reviewed commit must not authorize a later unreviewed source SHA.
+    expect(
+      deriveReviewInspection(evidence, {
+        wp: "cho-05",
+        runId: "required-run",
+        sourceSha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      }),
+    ).toMatchObject({ ok: true, clean: false });
     expect(
       deriveReviewInspection(evidence, { wp: "cho-05", runId: "required-run" }),
-    ).toMatchObject({ ok: true, clean: true, reviewId: "rev-1" });
+    ).toMatchObject({ ok: true, clean: false });
     expect(
       deriveReviewInspection(
         { ok: true, reviews: [evidence.reviews[0]] },
-        { wp: "cho-05", runId: "required-run" },
+        { wp: "cho-05", runId: "required-run", sourceSha: sha },
       ),
     ).toMatchObject({ ok: true, clean: false });
     expect(
       deriveReviewInspection(
         { ok: true, reviews: [{ ...evidence.reviews[1], outcome: "not-reviewed" }] },
-        { wp: "cho-05", runId: "required-run" },
+        { wp: "cho-05", runId: "required-run", sourceSha: sha },
       ),
     ).toMatchObject({ ok: true, clean: false });
     expect(
-      deriveReviewInspection({ ok: true, reviews: [] }, { wp: "cho-05", runId: "required-run" }),
+      deriveReviewInspection({ ok: true, reviews: [] }, { wp: "cho-05", runId: "required-run", sourceSha: sha }),
     ).toMatchObject({ ok: true, clean: false });
     expect(
       deriveReviewInspection(evidence, { wp: "cho-05" }),
     ).toMatchObject({ ok: true, clean: false });
   });
 
-  it("host-shaped hooks accept real bridge payloads end-to-end", async () => {
-    const association = {
-      id: "assoc-bridge",
-      disposition: "accepted",
-      stage: "recorded",
-      repoPath: "/x",
-      worktreePath: "/x/wt",
-      wp: "cho-05",
-      slice: "delegate",
-      runId: "run-1",
-      reviewId: "rev-1",
+  it("host-shaped review adapter requires Git-resolved sourceSha", () => {
+    const evidence = {
+      ok: true,
+      reviews: [
+        {
+          id: "rev-1",
+          wp: "cho-05",
+          slice: "delegate",
+          implementer_run: "run-1",
+          containment: "clean",
+          outcome: "reviewed",
+          finished_at: "2026-11-06T10:00:00Z",
+          commit: "cccccccccccccccccccccccccccccccccccccccc",
+        },
+      ],
     };
-    const calls = [];
-    const hooks = {
-      inspectRun: async (runId) => {
-        calls.push(["run", runId]);
-        return deriveRunInspection({
-          ok: true,
-          status: { status: "completed", derived_status: "completed" },
-        });
-      },
-      inspectGate: async (assoc) => {
-        calls.push(["gate", assoc.wp, assoc.slice]);
-        return deriveGateInspection({
-          ok: true,
-          output: { decision: "converged", wp: assoc.wp, slice: assoc.slice },
-        });
-      },
-      inspectReview: async (assoc) => {
-        calls.push(["review", assoc.wp, assoc.runId]);
-        return deriveReviewInspection(
-          {
-            ok: true,
-            reviews: [
-              {
-                id: "rev-1",
-                wp: assoc.wp,
-                slice: assoc.slice,
-                implementer_run: assoc.runId,
-                containment: "clean",
-                outcome: "reviewed",
-                finished_at: "2026-11-06T10:00:00Z",
-              },
-            ],
-          },
-          { wp: assoc.wp, runId: assoc.runId, reviewId: assoc.reviewId, slice: assoc.slice },
-        );
-      },
-    };
-    // Fail before git so we only exercise adapter wiring.
-    await expect(
-      integrateAssociationWorktree(
-        { get: () => association, setDisposition: () => association },
-        { id: "assoc-bridge", dryRun: true },
-        hooks,
-      ),
-    ).rejects.toThrow(/worktree path does not exist|does not exist/);
-    expect(calls).toEqual([
-      ["run", "run-1"],
-      ["gate", "cho-05", "delegate"],
-      ["review", "cho-05", "run-1"],
-    ]);
+    expect(
+      deriveReviewInspection(evidence, {
+        wp: "cho-05",
+        runId: "run-1",
+        sourceSha: "cccccccccccccccccccccccccccccccccccccccc",
+      }),
+    ).toMatchObject({ ok: true, clean: true });
+    // Association-field absence (null) must not accept the review.
+    expect(
+      deriveReviewInspection(evidence, { wp: "cho-05", runId: "run-1", sourceSha: null }),
+    ).toMatchObject({ ok: true, clean: false });
   });
 
-  it("refuses integrate when completed status is mis-read as nonterminal", async () => {
-    // Reproduce B1: treating status object as nonterminal via String().
-    const association = {
-      id: "assoc-bad",
-      disposition: "accepted",
-      stage: "recorded",
-      repoPath: "/x",
-      worktreePath: "/x/wt",
-      wp: "cho-05",
-      slice: "delegate",
-      runId: "run-1",
+  it("does not treat a stringified status object as terminal (broken host path)", () => {
+    const detail = { ok: true, status: { status: "completed" } };
+    const broken = {
+      ok: true,
+      terminal: String(detail.status) === "completed",
+      text: String(detail.status),
     };
-    await expect(
-      integrateAssociationWorktree(
-        { get: () => association, setDisposition: () => association },
-        { id: "assoc-bad", dryRun: true },
-        {
-          inspectRun: async () => {
-            const detail = { ok: true, status: { status: "completed" } };
-            // Broken host: stringify the object.
-            const status = String(detail.status);
-            return { ok: true, terminal: status === "completed", text: status };
-          },
-          inspectGate: async () => ({ ok: true, converged: true }),
-          inspectReview: async () => ({ ok: true, clean: true }),
-        },
-      ),
-    ).rejects.toThrow(/recorded run is not terminal/);
+    expect(broken.terminal).toBe(false);
+    expect(deriveRunInspection(detail).terminal).toBe(true);
   });
 });

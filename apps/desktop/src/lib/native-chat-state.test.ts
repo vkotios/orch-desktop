@@ -74,6 +74,26 @@ describe("native conversation state", () => {
     expect(s.messages[1]).toMatchObject({ text: "abc", outcome: "completed" });
   });
 
+  it("recovers a missing middle part after live completion without resurrecting the turn", () => {
+    let s = applyNativeUiEvent(started(), event("message_delta", { text: "a", partId: "p1" }), generation);
+    s = applyNativeUiEvent(s, event("message_delta", { text: "c", partId: "p3" }), generation);
+    s = applyNativeUiEvent(s, event("turn_complete", { nativeOutcome: "completed" }), generation);
+    expect(s.busy).toBe(false);
+    expect(s.activeTurnId).toBeNull();
+    expect(s.messages[1]).toMatchObject({ text: "ac", outcome: "completed" });
+    // Durable catch-up arrives after live completion (allowed transport sequence).
+    s = applyNativeUiEvent(s, event("message_delta", { source: "durable", text: "a", partId: "p1", seq: 1 }), generation);
+    s = applyNativeUiEvent(s, event("message_delta", { source: "durable", text: "b", partId: "p2", seq: 2 }), generation);
+    s = applyNativeUiEvent(s, event("message_delta", { source: "durable", text: "c", partId: "p3", seq: 3 }), generation);
+    expect(s.busy).toBe(false);
+    expect(s.activeTurnId).toBeNull();
+    expect(s.approvals).toEqual([]);
+    expect(s.messages[1]).toMatchObject({ text: "abc", outcome: "completed", isStreaming: false });
+    // Durable terminal after finish must not change outcome.
+    const finished = s;
+    expect(applyNativeUiEvent(finished, event("turn_complete", { source: "durable", nativeOutcome: "failed" }), generation)).toBe(finished);
+  });
+
   it("recovers text and completion from durable events when live progress was lost", () => {
     let s = started();
     s = applyNativeUiEvent(s, event("message_delta", { source: "durable", text: "recovered", partId: "p1" }), generation);

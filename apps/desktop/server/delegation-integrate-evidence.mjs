@@ -109,6 +109,13 @@ export function deriveReviewInspection(
       text: 'Integrate requires review evidence bound to a specific run or review id',
     };
   }
+  if (typeof sourceSha !== 'string' || sourceSha.length === 0) {
+    return {
+      ok: true,
+      clean: false,
+      text: 'Integrate requires the Git-resolved candidate source SHA for review binding',
+    };
+  }
 
   const forWp = list.filter((r) => !wp || r?.wp === wp);
   let candidates = forWp;

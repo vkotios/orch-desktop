@@ -469,8 +469,17 @@ export async function runHost(options = {}) {
                 });
                 return deriveGateInspection(gate);
               },
-              inspectReview: async (association) => {
+                            inspectReview: async (association, ctx = {}) => {
                 // Read-only finished evidence — never orch_review (launch).
+                // sourceSha must be the Git-resolved candidate from integrate.
+                const sourceSha = typeof ctx.sourceSha === 'string' ? ctx.sourceSha : null;
+                if (!sourceSha) {
+                  return {
+                    ok: false,
+                    clean: false,
+                    text: 'Integrate review requires the Git-resolved source SHA',
+                  };
+                }
                 const evidence = await dispatchFn('orch_review_evidence', {
                   wp: association.wp,
                   reviewId: association.reviewId,
@@ -482,9 +491,10 @@ export async function runHost(options = {}) {
                   runId: association.runId,
                   reviewId: association.reviewId,
                   slice: association.slice,
-                  sourceSha: association.sourceSha ?? association.reviewedCommit ?? null,
+                  sourceSha,
                 });
               },
+
             });
           } else if (env.command === 'project_resolve_path') {
             data = resolveProjectPath(args);

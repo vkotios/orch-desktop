@@ -50,6 +50,8 @@ export interface NativeChatMessage {
   nativeMessageId?: string;
   requestedNativeSessionId?: string;
   requestedNativeUserMessageId?: string;
+  /** Retained after turn completion so durable catch-up can fill missing parts. */
+  parts?: Array<{ partId: string; text: string; seq: number | null; order: number }>;
 }
 
 export interface NativeApprovalRequest {
@@ -185,6 +187,7 @@ function finishTurn(
   isError: boolean,
 ): NativeUiSession {
   const { index } = assistantByTurn(session, turnId);
+  const retainedParts = session.appliedParts;
   const messages =
     index === -1
       ? session.messages
@@ -197,6 +200,9 @@ function finishTurn(
                 outcome,
                 outcomeNote: note || undefined,
                 isError: m.isError || isError,
+                // Keep ordered parts so durable catch-up can recover missing text
+                // after live completion without resurrecting the turn.
+                parts: retainedParts.length > 0 ? retainedParts : m.parts,
               }
             : m,
         );
@@ -282,21 +288,29 @@ export function applyNativeUiEvent(
   event: NativePollEvent,
   generation: string,
 ): NativeUiSession {
-  if (event.generation !== generation || event.sessionId !== session.id ||
-      !event.turnId || session.activeTurnId !== event.turnId) {
+  if (event.generation !== generation || event.sessionId !== session.id || !event.turnId) {
     return session;
   }
-  // Catch-up recovers lost poll text by stable part identity on both live and
-  // durable delivery. Ignore durable terminals when the turn is already finished.
+  const turnId = event.turnId;
+  const message = session.messages.find((m) => m.id === turnId && m.role === "assistant");
+  const isActiveTurn = session.activeTurnId === event.turnId;
+  // Durable text catch-up may arrive after live completion. Allow only
+  // message_delta for an existing assistant message — never resurrect
+  // approvals/clarifications or change terminal outcome.
+  const durableTextCatchup =
+    !isActiveTurn &&
+    event.source === "durable" &&
+    event.kind === "message_delta" &&
+    Boolean(message);
+  if (!isActiveTurn && !durableTextCatchup) {
+    return session;
+  }
+  // Ignore durable terminals when the turn is already finished.
   if (event.source === "durable" && (event.kind === "turn_complete" || event.kind === "error" || event.nativeOutcome) && !session.busy) {
     return session;
   }
-  // Part identity is checked inside message_delta so durable catch-up can
-  // still attach seq and rebuild order for already-seen live parts.
-  const turnId = event.turnId;
-  const message = session.messages.find((m) => m.id === turnId && m.role === "assistant");
   if (!message) return session;
-  if (event.source !== "durable") {
+  if (event.source !== "durable" && isActiveTurn) {
     session = { ...session, liveTurnProgress: true };
   }
   const controller = event.controller ?? "codex";
@@ -353,7 +367,10 @@ export function applyNativeUiEvent(
       const seq = typeof event.seq === "number" && Number.isSafeInteger(event.seq)
         ? event.seq
         : null;
-      let parts = session.appliedParts;
+      const isActive = session.activeTurnId === turnId;
+      let parts = isActive
+        ? session.appliedParts
+        : (message.parts ? [...message.parts] : []);
       if (partId) {
         const existing = parts.findIndex((p) => p.partId === partId);
         if (existing >= 0) {
@@ -370,8 +387,8 @@ export function applyNativeUiEvent(
             { partId, text: event.text as string, seq, order: parts.length },
           ];
         }
-      } else {
-        // No part identity: append once in arrival order (legacy path).
+      } else if (isActive) {
+        // No part identity: append once in arrival order (legacy live path).
         parts = [
           ...parts,
           {
@@ -381,10 +398,12 @@ export function applyNativeUiEvent(
             order: parts.length,
           },
         ];
+      } else {
+        return session;
       }
       const text = rebuildAssistantText(parts);
-      let next = updateAssistant(session, turnId, (m) => ({ ...m, text }));
-      next = { ...next, appliedParts: parts };
+      let next = updateAssistant(session, turnId, (m) => ({ ...m, text, parts }));
+      if (isActive) next = { ...next, appliedParts: parts };
       return next;
     }
     case "tool_call": {

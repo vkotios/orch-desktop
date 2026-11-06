@@ -64,7 +64,7 @@ function decodePreviewToken(token) {
 /**
  * @param {{ get: (id: string) => any, setDisposition: (id: string, disposition: string, note?: string|null) => any }} store
  * @param {{ id: string, dryRun?: boolean, previewToken?: string }} args
- * @param {{ inspectRun?: (runId: string) => Promise<{ ok: boolean, terminal?: boolean, text?: string }>, inspectGate?: (wp: string) => Promise<{ ok: boolean, converged?: boolean, text?: string }>, inspectReview?: (wp: string) => Promise<{ ok: boolean, clean?: boolean, text?: string }> }} [hooks]
+ * @param {{ inspectRun?: (runId: string) => Promise<{ ok: boolean, terminal?: boolean, text?: string }>, inspectGate?: (wp: string) => Promise<{ ok: boolean, converged?: boolean, text?: string }>, inspectReview?: (association: object, ctx: { sourceSha: string }) => Promise<{ ok: boolean, clean?: boolean, text?: string }> }} [hooks]
  */
 export async function integrateAssociationWorktree(store, args, hooks = {}) {
   const associationId = typeof args?.id === 'string' ? args.id : null;
@@ -77,36 +77,6 @@ export async function integrateAssociationWorktree(store, args, hooks = {}) {
   }
   if (association.stage === 'running' || association.stage === 'launching' || association.stage === 'uncertain') {
     throw new Error(`Refuse integrate while stage is ${association.stage}; stop/settle the worker first`);
-  }
-
-  if (association.runId && typeof hooks.inspectRun === 'function') {
-    const run = await hooks.inspectRun(association.runId);
-    if (!run?.ok) {
-      throw new Error(run?.text || 'Could not inspect the recorded run before integrate');
-    }
-    if (run.terminal !== true) {
-      throw new Error('Refuse integrate while the recorded run is not terminal');
-    }
-  } else if (association.runId && !hooks.inspectRun) {
-    throw new Error('Integrate requires host run inspection when a run id is recorded');
-  }
-
-  if (typeof hooks.inspectGate === 'function') {
-    const gate = await hooks.inspectGate(association);
-    if (!gate?.ok || gate.converged !== true) {
-      throw new Error(gate?.text || 'Integrate requires a converged orch gate');
-    }
-  } else {
-    throw new Error('Integrate requires host gate inspection');
-  }
-
-  if (typeof hooks.inspectReview === 'function') {
-    const review = await hooks.inspectReview(association);
-    if (!review?.ok || review.clean !== true) {
-      throw new Error(review?.text || 'Integrate requires clean independent review containment');
-    }
-  } else {
-    throw new Error('Integrate requires host review inspection');
   }
 
   const worktreePath = association.worktreePath;
@@ -149,8 +119,41 @@ export async function integrateAssociationWorktree(store, args, hooks = {}) {
     throw new Error('repository working tree is dirty; commit or stash before integrate');
   }
 
+  // Resolve the actual candidate SHA from Git before review evidence checks.
+  // Do not trust renderer/association sourceSha fields (they are not stored).
   const sourceSha = await git(repoRoot, ['rev-parse', expectedBranch]);
   const targetSha = await git(repoRoot, ['rev-parse', 'HEAD']);
+
+  if (association.runId && typeof hooks.inspectRun === 'function') {
+    const run = await hooks.inspectRun(association.runId);
+    if (!run?.ok) {
+      throw new Error(run?.text || 'Could not inspect the recorded run before integrate');
+    }
+    if (run.terminal !== true) {
+      throw new Error('Refuse integrate while the recorded run is not terminal');
+    }
+  } else if (association.runId && !hooks.inspectRun) {
+    throw new Error('Integrate requires host run inspection when a run id is recorded');
+  }
+
+  if (typeof hooks.inspectGate === 'function') {
+    const gate = await hooks.inspectGate(association);
+    if (!gate?.ok || gate.converged !== true) {
+      throw new Error(gate?.text || 'Integrate requires a converged orch gate');
+    }
+  } else {
+    throw new Error('Integrate requires host gate inspection');
+  }
+
+  if (typeof hooks.inspectReview === 'function') {
+    const review = await hooks.inspectReview(association, { sourceSha });
+    if (!review?.ok || review.clean !== true) {
+      throw new Error(review?.text || 'Integrate requires clean independent review containment');
+    }
+  } else {
+    throw new Error('Integrate requires host review inspection');
+  }
+
   const ahead = await git(repoRoot, ['rev-list', '--count', `${targetSha}..${sourceSha}`]);
   const commitCount = Number.parseInt(ahead, 10) || 0;
   const previewPayload = {
