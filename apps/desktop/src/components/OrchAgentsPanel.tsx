@@ -7,6 +7,7 @@ import {
   cancelDelegationRun,
   discardDelegation,
   finishDelegation,
+  integrateDelegation,
   listDelegations,
   readDelegationDiff,
   startAgentTask,
@@ -271,6 +272,28 @@ export function OrchAgentsPanel({ repoPath, conversationId = null, disabled = fa
     }
   }
 
+  async function onIntegrate(item: DelegationAssociation) {
+    setBusy(true);
+    setError("");
+    try {
+      const preview = await integrateDelegation(callHost, item, { previewOnly: true });
+      const confirmed = window.confirm(
+        `Integrate ${item.wp}/${item.slice}?\nThis merges ${preview.sourceBranch} into ${preview.targetBranch} (${preview.commits} commit(s)).\nFinish/cleanup remain separate.\n\n${preview.note}`,
+      );
+      if (!confirmed) {
+        setStatus("Integrate cancelled.");
+        return;
+      }
+      const result = await integrateDelegation(callHost, item);
+      setStatus(result.note || `Integrated ${item.wp}.`);
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   if (!open) {
     return (
       <button
@@ -299,7 +322,7 @@ export function OrchAgentsPanel({ repoPath, conversationId = null, disabled = fa
         </button>
       </header>
       <p className="native-muted">
-        Claim, worktree, and run are recoverable. Accept records a decision only. Finish closes the orch claim and may remove the worktree; it does not merge Git. Integrate remains unavailable until an explicit Git path exists. Uncertain stages need inspect/adopt before relaunch.
+        Claim, worktree, and run are recoverable. Accept records a decision only. Integrate merges the worktree branch after Accept (with dry-run confirm). Finish closes the orch claim and may remove the worktree; it does not merge Git. Uncertain stages need inspect/adopt before relaunch.
       </p>
       {(error || status) && (
         <div role={error ? "alert" : "status"} className={error ? "native-notice error" : "native-notice"}>
@@ -450,8 +473,9 @@ export function OrchAgentsPanel({ repoPath, conversationId = null, disabled = fa
                   <button
                     type="button"
                     className="native-button"
-                    disabled
-                    title="Explicit Git merge/cherry-pick is not implemented. Finish is coordinator closure only."
+                    disabled={busy || item.disposition !== "accepted" || item.stage === "uncertain"}
+                    title="Merge the accepted worktree branch into the repository HEAD after a dry-run preview. Not Finish/cleanup."
+                    onClick={() => void onIntegrate(item)}
                   >
                     Integrate
                   </button>

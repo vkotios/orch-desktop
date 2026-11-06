@@ -11,8 +11,37 @@ import { pathToFileURL } from 'node:url';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { PROTOCOL_VERSION, MAX_FRAME_BYTES, encodeFrame, decodeFrame } from './protocol.mjs';
+import { integrateAssociationWorktree } from './delegation-integrate.mjs';
 
 const execFileAsync = promisify(execFile);
+
+/**
+ * Resolve a repository-relative file reference under an owned project root.
+ * Read-only — never opens an editor or mutates Git.
+ */
+function resolveProjectPath(args) {
+  const repoPath = typeof args?.repoPath === 'string' ? args.repoPath : null;
+  const relPath = typeof args?.path === 'string' ? args.path : null;
+  if (!repoPath || !relPath) throw new Error('project_resolve_path requires repoPath and path');
+  if (relPath.includes('\0') || relPath.length > 1024) throw new Error('path is invalid');
+  const normalized = relPath.replace(/\\/g, '/');
+  if (normalized.startsWith('/') || /^[A-Za-z]:/.test(normalized) || normalized.split('/').includes('..')) {
+    throw new Error('path must be repository-relative without .. segments');
+  }
+  const repoRoot = path.resolve(repoPath);
+  const resolved = path.resolve(repoRoot, normalized);
+  const rel = path.relative(repoRoot, resolved);
+  if (rel.startsWith('..') || path.isAbsolute(rel)) {
+    throw new Error('resolved path is outside the repository');
+  }
+  return {
+    repoPath: repoRoot,
+    path: rel.replace(/\\/g, '/'),
+    absolutePath: resolved,
+    exists: fs.existsSync(resolved),
+    readOnly: true,
+  };
+}
 
 /**
  * Read-only changed-file / unified-diff surface for an owned association.
@@ -142,6 +171,8 @@ const DELEGATION_COMMANDS = new Set([
   'delegation_upsert',
   'delegation_set_disposition',
   'delegation_worktree_diff',
+  'delegation_integrate',
+  'project_resolve_path',
 ]);
 const ALLOWED_COMMANDS = new Set([
   'ping',
@@ -366,6 +397,10 @@ export async function runHost(options = {}) {
             };
           } else if (env.command === 'delegation_worktree_diff') {
             data = await readAssociationWorktreeDiff(store, args);
+          } else if (env.command === 'delegation_integrate') {
+            data = await integrateAssociationWorktree(store, args);
+          } else if (env.command === 'project_resolve_path') {
+            data = resolveProjectPath(args);
           } else {
             throw new Error(`unknown delegation command ${env.command}`);
           }

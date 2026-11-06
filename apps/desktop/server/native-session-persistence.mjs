@@ -11,6 +11,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { openSessionStore } from "./session-store.mjs";
+import { migrateSessionStore } from "./session-store-migrate.mjs";
 import { createSessionRecords } from "./session-records.mjs";
 import { createSessionBindings } from "./session-bindings.mjs";
 import { createSessionTurns } from "./session-turns.mjs";
@@ -201,6 +202,10 @@ export function createNativeSessionPersistence(options) {
     ? options.livenessPath
     : defaultLivenessPath();
 
+  if (fs.existsSync(databasePath)) {
+    // Fail-closed open still requires an explicit migrate for older schemas.
+    migrateSessionStore({ databasePath });
+  }
   const store = openSessionStore({ databasePath });
   const records = createSessionRecords({ store, now });
   const bindings = createSessionBindings({ store, verifyOwnerEvidence, now });
@@ -895,6 +900,33 @@ export function createNativeSessionPersistence(options) {
     }
 
     const native = bindings.getNativeRef({ projectId, conversationId });
+    // Historical journals only — never actionable authority to replay decisions.
+    const historical = store.transaction((tx) => {
+      const clarRows = tx.all(
+        `SELECT id, turn_id AS turnId, status, native_question_id AS nativeQuestionId,
+                answered_at_ms AS answeredAtMs
+         FROM clarifications WHERE conversation_id = ? ORDER BY rowid DESC LIMIT 50`,
+        [conversationId],
+      ) || [];
+      const approvalRows = tx.all(
+        `SELECT id, turn_id AS turnId, state, decision, settled_at_ms AS settledAtMs, created_at_ms AS createdAtMs
+         FROM operations WHERE conversation_id = ? AND kind = 'approval'
+         ORDER BY created_at_ms DESC LIMIT 50`,
+        [conversationId],
+      ) || [];
+      return {
+        clarifications: clarRows.map((row) => ({
+          ...row,
+          actionable: false,
+          historical: true,
+        })),
+        approvals: approvalRows.map((row) => ({
+          ...row,
+          actionable: false,
+          historical: true,
+        })),
+      };
+    });
     return {
       conversationId,
       projectId,
@@ -909,6 +941,8 @@ export function createNativeSessionPersistence(options) {
       eventTip: tip,
       eventCursor,
       hasMoreEvents,
+      historicalClarifications: historical.clarifications,
+      historicalApprovals: historical.approvals,
     };
   }
 

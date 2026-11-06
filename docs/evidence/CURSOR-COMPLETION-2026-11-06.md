@@ -45,7 +45,7 @@ exe hash after the combined bundle step is the NSIS-patched binary.
 | F-07 | Fixed (partial) | Restore multiple conversations; search/export/import host APIs; truncation notices |
 | F-04 | Fixed (partial) | Intent-before-effect; uncertain adopt/abandon UI; no silent relaunch |
 | F-01 | Fixed (partial) | Host `admitOrchArgs` strips `ownerApprovedModel`/`allow`, derives `orch_run` dir from association |
-| F-09 | Fixed (partial) | Finish/Discard evidence; read-only Diff drawer; Integrate remains disabled (no fake Git path) |
+| F-09 | Fixed (partial) | Finish/Discard evidence; Diff drawer; explicit Git Integrate with dry-run + rechecks (`delegation-integrate`) |
 | F-10 | Fixed | Status/progress docs use implemented/verified/unfinished/blocked vocabulary |
 | F-11 | Fixed | Installed Codex 0.156.1 schema evidence + `excludeTurns: true` on resume + contract test |
 
@@ -61,11 +61,11 @@ exe hash after the combined bundle step is the NSIS-patched binary.
 | AC-06 | partial | Association intent + host-admitted run dir; end-to-end orch launch not re-qualified |
 | AC-07 | partial | Uncertain adopt/abandon UI; live interrupt/reconcile journey open |
 | AC-08 | blocked | Independent review unavailable; read-only Diff drawer implemented locally |
-| AC-09 | partial | Accept/Finish/Discard wording fixed; Integrate disabled pending explicit Git path |
+| AC-09 | partial | Accept/Finish/Discard/Integrate separated; Integrate merges after Accept with dry-run confirm; live journey not re-qualified |
 | AC-10 | partial | orch process identity reused; owned cancel path exists |
 | AC-11 | partial | Host allowlist + admission; bridge security tests pass |
-| AC-12 | blocked | Needs rendered 1360×880 / 960×720 / scaling keyboard evidence |
-| AC-13 | blocked | Needs upgrade/migration fixture on clean environment |
+| AC-12 | partial | Automated CSS/layout contract for 960/1360 ([VIEWPORT-LAYOUT-2026-11-06](VIEWPORT-LAYOUT-2026-11-06.md)); owner scaling/WebView2 keyboard still blocked |
+| AC-13 | partial | In-tree backup→migrate→verify v1→v2 with restore-on-failure tests; clean-machine upgrade fixture still blocked |
 | AC-14 | partial | Local suites green; remote CI on final head not claimed here |
 | AC-15 | blocked | Support matrix vs clean receipts not complete |
 

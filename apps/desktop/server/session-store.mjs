@@ -102,7 +102,9 @@ function validateIdentity(rows, userVersion) {
   if (!Number.isInteger(meta.schema_version)) throw errSchemaMismatch("meta schema version is not an integer");
   if (meta.schema_version > SESSION_STORE_SCHEMA_VERSION) throw errFutureVersion();
   if (meta.schema_version !== SESSION_STORE_SCHEMA_VERSION) {
-    throw errSchemaMismatch("meta schema version does not match this code (no auto-migration)");
+    throw errSchemaMismatch(
+      "meta schema version does not match this code (run migrateSessionStore before open)",
+    );
   }
   if (userVersion !== meta.schema_version) {
     throw errSchemaMismatch("user_version does not mirror meta schema version");
@@ -386,6 +388,11 @@ export function openSessionStore(options) {
       db.prepare(
         "INSERT INTO meta(application_id, instance_uuid, schema_version, created_at_ms) VALUES (?, ?, ?, ?)"
       ).run(SESSION_STORE_APPLICATION_ID, created, SESSION_STORE_SCHEMA_VERSION, Date.now());
+      if (SESSION_STORE_SCHEMA_VERSION >= 2) {
+        db.prepare(
+          "INSERT INTO schema_migrations(version, migration_id, applied_at_ms) VALUES (?, ?, ?)",
+        ).run(2, "2026-11-06-schema-migrations-table", Date.now());
+      }
       db.exec(`PRAGMA user_version = ${SESSION_STORE_SCHEMA_VERSION}`);
       try {
         db.exec("COMMIT");

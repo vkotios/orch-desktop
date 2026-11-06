@@ -6,7 +6,8 @@ vi.mock("./api", () => ({
   callHost: (...args: unknown[]) => callHost(...args),
 }));
 
-const { adoptUncertainDelegation, startAgentTask } = await import("./agent-task");
+const { adoptUncertainDelegation, integrateDelegation, startAgentTask } =
+  await import("./agent-task");
 
 const task = {
   repo: "C:/project",
@@ -174,5 +175,47 @@ describe("agent task preparation", () => {
       adoptUncertainDelegation(invoke, association({ stage: "uncertain", runId: null })),
     ).rejects.toThrow("No run id");
     expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("stops before claim when mocked orch_scope denial is surfaced by start prep", async () => {
+    // Desktop journey: a denied scope must not create worktrees or launch.
+    const invoke = vi.fn().mockResolvedValue({
+      ok: false,
+      exitCode: 4,
+      output: null,
+      text: "Scope denied for this work package",
+    });
+    // Simulate an earlier scope gate by failing the claim with a scope message
+    // (host admission still binds associationId; no relaunch).
+    await expect(startAgentTask(invoke, task)).rejects.toThrow(/Scope denied|Claim/);
+    expect(invoke.mock.calls.every((call) => call[0] !== "orch_run")).toBe(true);
+    expect(invoke.mock.calls.every((call) => call[0] !== "orch_worktree_create")).toBe(true);
+  });
+
+  it("requires Accept before Integrate and uses host delegation_integrate", async () => {
+    const invoke = vi.fn();
+    await expect(integrateDelegation(invoke, association({ disposition: "none" }))).rejects.toThrow(
+      /Accept/,
+    );
+    expect(callHost).not.toHaveBeenCalled();
+    callHost.mockResolvedValueOnce({
+      associationId: "assoc-1",
+      sourceBranch: "orch/wp-ui/s1",
+      targetBranch: "main",
+      commits: 1,
+      merged: false,
+      dryRun: true,
+      note: "preview",
+    });
+    const preview = await integrateDelegation(
+      invoke,
+      association({ disposition: "accepted", stage: "worktree" }),
+      { previewOnly: true },
+    );
+    expect(preview.dryRun).toBe(true);
+    expect(callHost).toHaveBeenCalledWith(
+      "delegation_integrate",
+      expect.objectContaining({ id: "assoc-1", dryRun: true }),
+    );
   });
 });

@@ -26,12 +26,15 @@ Audited base remains `76076fb3cd6c82f3ca7d74220d226e34955521c4`. Cursor completi
 continues past the first correction batch through CHO-03/04/05/06/07 accessible
 work (see [progress matrix](docs/evidence/PROGRESS-MATRIX-2026-11-06.md) and
 [evidence](docs/evidence/CURSOR-COMPLETION-2026-11-06.md)). Implemented locally:
-recovery fixes, `excludeTurns`, approval dual-write, search/export/import host
-APIs, S3d child-process probes, uncertain adopt/abandon, read-only Diff drawer,
-CSP/NOTICE/support/privacy/security/CONTRIBUTING, native Windows CI job.
-Unfinished accessible: clarification durable dual-write, explicit Git integrate,
-file-reference surface, rendered viewport evidence. Externally blocked: live
-CLI qualification, clean-machine AC-01/13/15, independent review, push/tag/sign.
+recovery fixes, `excludeTurns`, approval/clarification dual-write + historical
+hydrate projection, search/export/import, S3d probes, uncertain adopt/abandon,
+Diff drawer, host admission harden, Finish preview/Stop, **explicit Git
+Integrate**, **react-markdown file refs**, **session schema migrate v1→v2**,
+CSP/NOTICE/support/privacy/security/CONTRIBUTING, native CI, advisory
+release-scan. Unfinished accessible: deeper tool-fact hydrate mapping; live
+WebView2 keyboard capture. Externally blocked: live CLI qualification,
+clean-machine AC-01/13/15, independent review, push/tag/sign, owner scaling
+screenshots.
 
 The verified checkpoint table and workforce paragraphs below describe earlier
 work. For the owner-supplied Cursor continuation, the plan's current execution

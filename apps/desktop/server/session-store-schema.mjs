@@ -2,7 +2,7 @@
 // Exports constants for application ID, schema version, and the exact DDL.
 
 export const SESSION_STORE_APPLICATION_ID = 'cho.sessions.v1';
-export const SESSION_STORE_SCHEMA_VERSION = 1;
+export const SESSION_STORE_SCHEMA_VERSION = 2;
 
 export const SESSION_STORE_SCHEMA_SQL = `CREATE TABLE meta(application_id TEXT PRIMARY KEY, instance_uuid TEXT NOT NULL,
   schema_version INTEGER NOT NULL, created_at_ms INTEGER NOT NULL);
@@ -81,4 +81,8 @@ CREATE TABLE imports(source TEXT NOT NULL, source_key TEXT NOT NULL,
 CREATE TABLE producer_fences(conversation_id TEXT PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE,
   owner_token TEXT NOT NULL, generation INTEGER NOT NULL, state TEXT NOT NULL
   CHECK(state IN ('held','released','dead')) DEFAULT 'held', updated_ms INTEGER NOT NULL);
+CREATE TABLE schema_migrations(
+  version INTEGER PRIMARY KEY,
+  migration_id TEXT NOT NULL UNIQUE,
+  applied_at_ms INTEGER NOT NULL);
 `;

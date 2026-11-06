@@ -384,12 +384,31 @@ export async function cancelDelegationRun(
   });
 }
 
-/** @deprecated Use finishDelegation — orch_finish is not Git integration. */
+/**
+ * Explicit Git merge of the association worktree branch into the repo HEAD.
+ * Requires prior Accept. Dry-run when previewOnly. Not Finish/cleanup.
+ */
 export async function integrateDelegation(
-  invoke: OrchInvoke,
+  _invoke: OrchInvoke,
   association: DelegationAssociation,
+  options: { previewOnly?: boolean } = {},
 ) {
-  return finishDelegation(invoke, association);
+  if (association.disposition !== "accepted") {
+    throw new Error("Accept the result before Integrate. Finish remains a separate orch closure.");
+  }
+  return callHost<{
+    associationId: string;
+    sourceBranch: string;
+    targetBranch: string;
+    commits: number;
+    merged: boolean;
+    dryRun: boolean;
+    note: string;
+    association?: DelegationAssociation;
+  }>("delegation_integrate", {
+    id: association.id,
+    ...(options.previewOnly ? { dryRun: true } : {}),
+  });
 }
 
 /** Explicit discard — cleanup + release; not implied by acceptance. */

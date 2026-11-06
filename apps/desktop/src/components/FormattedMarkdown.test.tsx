@@ -21,4 +21,18 @@ describe("FormattedMarkdown", () => {
     expect(html).toContain("function hi()");
     expect(html).not.toContain("```js");
   });
+
+  it("renders repository-relative file references as buttons and blocks unsafe links", () => {
+    const html = renderToStaticMarkup(
+      <FormattedMarkdown
+        text={"See `apps/desktop/src/App.tsx` and [docs](javascript:alert(1)) plus [safe](https://example.com)."}
+        repoPath="C:/project"
+      />,
+    );
+    expect(html).toContain("md-file-ref");
+    expect(html).toContain("apps/desktop/src/App.tsx");
+    expect(html).toContain("md-link-blocked");
+    expect(html).toContain('href="https://example.com"');
+    expect(html).not.toContain("javascript:alert");
+  });
 });

@@ -1,7 +1,7 @@
 # Progress matrix — Cursor completion continuation
 
-Europe/London. Candidate work continues on `codex/cho-v01-foundation` above
-`8c3b5d0` (uncommitted until committed in this pass).
+Europe/London. Candidate on `codex/cho-v01-foundation` continuing past
+admission/hydrate follow-up (`160f144`) with integrate/Markdown/migration work.
 
 Status vocabulary:
 
@@ -16,8 +16,8 @@ Status vocabulary:
 | --- | --- | --- |
 | F-12 / F-03 / F-08 / C-01 | Implemented + independently verified | Close/unknown, cleanup order, stranded settle, UTF-8 body decode |
 | F-05 / F-02 / F-13 | Implemented + independently verified | Liveness lock/createdAt; durable recovery; stable factId; S3d installed-Node child-process reopen + race probes |
-| F-06 / F-07 | Implemented + independently verified (partial) | Draft/history; rename/archive/conflict; search/export UI; import host API |
-| F-01 / F-04 / F-09 | Implemented + independently verified (partial) | Host admission; intent/uncertain; adopt/abandon uncertain UI; read-only worktree Diff drawer; Integrate remains honestly disabled |
+| F-06 / F-07 | Implemented + independently verified (partial) | Draft/history; rename/archive/conflict; search/export/import; hydrate load-more; historical approval/clarification projection |
+| F-01 / F-04 / F-09 | Implemented + independently verified (partial) | Host admission; intent/uncertain; adopt/abandon; Diff; Finish preview; Stop worker; **explicit Git Integrate** with dry-run + branch/dirty/stage rechecks |
 | F-10 | Implemented | Status/progress docs updated with disposition vocabulary |
 | F-11 | Implemented + independently verified | Installed Codex 0.156.1 schema evidence + `excludeTurns: true` on resume + contract test |
 
@@ -25,10 +25,10 @@ Status vocabulary:
 
 | Package | Implemented | Independently verified | Unfinished | Externally blocked |
 | --- | --- | --- | --- | --- |
-| CHO-03 | Recovery batch; approval + clarification dual-write journals; search/export/import host APIs; S3d probes | Local package tests; S3d child probes; excludeTurns schema test | Full schema migration path; deeper producer→hydrate consumer mapping for tool facts | Live reopen with real CLIs |
-| CHO-04/05 | Host admission hardened (worktree under repo; association-bound claim/worktree/finish/cleanup); adopt/abandon; Stop worker; Finish cleanup preview; read-only Diff | agent-task unit tests | Explicit Git integrate; denied-scope live journey; independent review round | Independent reviewer quota; live orch worker launch |
-| CHO-06 | Unfinished fence render; clarification waiting; rename/archive/search/export; Diff drawer; draft flush on switch; load-more history | Markdown + panel unit checks | Maintained Markdown file refs; viewport/a11y evidence capture | Rendered scaling evidence on owner display |
-| CHO-07 | CSP; NOTICE; SUPPORT_MATRIX; PRIVACY; SECURITY; CONTRIBUTING; CHANGELOG; desktop config example; Vitest advisory; native CI + release-scan; MSI/NSIS | Local native build + cargo test earlier in session | DevDependency Vitest upgrade PR (documented, not claimed clear) | Clean-machine install; signing; public repo |
+| CHO-03 | Recovery batch; approval + clarification dual-write; historical hydrate projection; search/export/import; S3d probes; **backup→migrate→verify (v1→v2)** | Local package tests; migrate restore-on-failure; S3d probes; excludeTurns | Deeper producer→hydrate tool-fact consumer mapping beyond collapse-by-toolCallId | Live reopen with real CLIs |
+| CHO-04/05 | Host admission; adopt/abandon; Stop; Finish preview; Diff; **Integrate merge path**; mocked denied-scope/claim refusal | agent-task + delegation-integrate tests | Denied-scope live orch journey; independent review round | Independent reviewer quota; live orch worker launch |
+| CHO-06 | Unfinished fence; clarification waiting; rename/archive/search/export; Diff; draft flush; load-more; **react-markdown + GFM file refs** | Markdown + viewport contract tests | Live WebView2 keyboard/focus capture | Owner-display 125/150% scaling screenshots |
+| CHO-07 | CSP; NOTICE; SUPPORT/PRIVACY/SECURITY/CONTRIBUTING; CHANGELOG; desktop config; Vitest pin `^3.2.7`; native CI + advisory release-scan; MSI/NSIS | Local native build + cargo test earlier; typecheck | Remaining unexpected release-scan fixture/doc hits (advisory in CI) | Clean-machine install; signing; public repo |
 | CHO-08 | Evidence/AC rows maintained | Local suites/artifacts hashed | — | AC-01/13/15 clean machine; live AC-03/05/08 routes |
 
 ## Exact external blockers
