@@ -79,7 +79,7 @@ async fn host_invoke(app: AppHandle, command: String, args: Option<Value>) -> Re
 // name, takes the real UI args payload (never an empty object), and rejects
 // a non-object at the route before anything is written to the host.
 async fn route_with_args(app: &AppHandle, command: &str, args: Value) -> Result<Value, String> {
-    if (!args.is_object()) {
+    if !args.is_object() {
         return Err(format!("native command {command} requires an object args payload"));
     }
     host(app).await?.request(command, args).await

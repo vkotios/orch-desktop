@@ -331,6 +331,10 @@ export interface NativePollEvent {
   generation: string;
   /** Durable catch-up events are tagged so the UI can avoid double-appending live streams. */
   source?: "durable" | "live";
+  /** Durable event sequence for cursor recovery / dedupe. */
+  seq?: number;
+  /** Durable message-delta part identity for exactly-once apply. */
+  partId?: string;
   kind:
     | "message_delta"
     | "tool_call"

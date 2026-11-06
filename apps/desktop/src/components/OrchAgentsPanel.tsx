@@ -174,7 +174,7 @@ export function OrchAgentsPanel({ repoPath, conversationId = null, disabled = fa
         </button>
       </header>
       <p className="native-muted">
-        Claim, worktree, and run are recoverable. Accept records a decision only. Finish closes the orch claim; it does not merge Git. Integrate remains unavailable until an explicit Git path exists.
+        Claim, worktree, and run are recoverable. Accept records a decision only. Finish closes the orch claim and may remove the worktree; it does not merge Git. Integrate remains unavailable until an explicit Git path exists. Uncertain stages need inspect/adopt before relaunch.
       </p>
       {(error || status) && (
         <div role={error ? "alert" : "status"} className={error ? "native-notice error" : "native-notice"}>
@@ -239,6 +239,7 @@ export function OrchAgentsPanel({ repoPath, conversationId = null, disabled = fa
               <li key={item.id}>
                 <strong>{item.wp}/{item.slice}</strong> · {item.stage} · {item.disposition}
                 {item.runId ? ` · ${item.runId}` : ""}
+                {item.note ? <small className="native-muted">{item.note}</small> : null}
                 {item.worktreePath ? (
                   <small className="native-muted" title={item.worktreePath}>
                     Worktree: {item.worktreePath}
@@ -259,7 +260,7 @@ export function OrchAgentsPanel({ repoPath, conversationId = null, disabled = fa
                   >
                     Use for resume
                   </button>
-                  {item.disposition === "none" ? (
+                  {item.disposition === "none" && item.stage !== "uncertain" ? (
                     <button type="button" className="native-button" disabled={busy} onClick={() => void onAccept(item)}>
                       Accept
                     </button>
@@ -267,8 +268,8 @@ export function OrchAgentsPanel({ repoPath, conversationId = null, disabled = fa
                   <button
                     type="button"
                     className="native-button"
-                    disabled={busy}
-                    title="Closes the orch work package. Does not merge or cherry-pick."
+                    disabled={busy || item.stage === "uncertain"}
+                    title="Closes the orch work package and may delete the worktree. Does not merge or cherry-pick."
                     onClick={() => void onFinish(item)}
                   >
                     Finish

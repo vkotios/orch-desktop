@@ -162,12 +162,25 @@ export function NativeChat() {
     try {
       const result = await nativeChatGetDraft(p.generation, p.projectToken, conversationId);
       if (!mounted.current || selectedRef.current !== conversationId) return;
+      const prior = draftMetaRef.current.get(conversationId) ?? { version: 0 };
+      // Keep in-flight save chain/timers and any newer local edit across load.
+      if (typeof prior.pendingText === "string" && prior.pendingText.length > 0) {
+        setDraft(prior.pendingText);
+        draftMetaRef.current.set(conversationId, {
+          ...prior,
+          version: result.draft && typeof result.draft.version === "number" ? result.draft.version : prior.version,
+        });
+        return;
+      }
       if (result.draft && typeof result.draft.text === "string") {
         setDraft(result.draft.text);
-        draftMetaRef.current.set(conversationId, { version: result.draft.version });
+        draftMetaRef.current.set(conversationId, {
+          ...prior,
+          version: result.draft.version,
+        });
       } else {
         setDraft("");
-        draftMetaRef.current.set(conversationId, { version: 0 });
+        draftMetaRef.current.set(conversationId, { ...prior, version: 0 });
       }
     } catch {
       if (mounted.current && selectedRef.current === conversationId) setDraft("");
@@ -221,6 +234,9 @@ export function NativeChat() {
                   version: result.receipt.version,
                   inflight: false,
                 });
+                if (mounted.current && selectedRef.current === conversationId) {
+                  setError("Draft conflict: another copy of this chat changed the draft. Resolve or re-edit before sending.");
+                }
                 break;
               }
               draftMetaRef.current.set(conversationId, {
@@ -278,6 +294,13 @@ export function NativeChat() {
     mounted.current = true;
     return () => {
       mounted.current = false;
+      for (const [conversationId, meta] of draftMetaRef.current) {
+        if (meta.saveTimer) clearTimeout(meta.saveTimer);
+        draftMetaRef.current.set(conversationId, {
+          ...meta,
+          saveTimer: undefined,
+        });
+      }
       const owner = ownerRef.current;
       if (owner) {
         stopPolling(owner);
@@ -329,22 +352,43 @@ export function NativeChat() {
       if (!p.models.length) setError(`${labelController(selectedController)} returned no available models. Close the project and try again.`);
       else {
         let opened = createProjectChat(p);
+        let hydrateNotice = "";
         try {
           const listed = await nativeChatListConversations(p.generation, p.projectToken);
-          const latest = [...listed.conversations]
+          const matching = [...listed.conversations]
             .filter((c) => (c.controller ?? "codex") === selectedController)
-            .sort((a, b) => b.updatedAtMs - a.updatedAtMs)[0];
-          if (latest) {
-            const hydrated = await nativeChatHydrateConversation(p.generation, p.projectToken, latest.id);
-            if (hydrated.conversation) {
-              opened = sessionFromHydrated(p, hydrated.conversation);
-              if (hydrated.conversation.eventCursor) {
-                cursorRef.current.set(opened.id, hydrated.conversation.eventCursor);
+            .sort((a, b) => b.updatedAtMs - a.updatedAtMs);
+          const restored: NativeUiSession[] = [];
+          for (const entry of matching.slice(0, NATIVE_MAX_SESSIONS)) {
+            try {
+              const hydrated = await nativeChatHydrateConversation(p.generation, p.projectToken, entry.id);
+              if (!hydrated.conversation) continue;
+              const session = sessionFromHydrated(p, hydrated.conversation);
+              if (hydrated.conversation.hasMoreEvents) {
+                hydrateNotice = "Earlier transcript pages exist for one or more chats; only the recent window was loaded.";
               }
+              if (!hydrated.conversation.nativeThreadId && !hydrated.conversation.nativeSessionUuid && session.messages.length > 0) {
+                hydrateNotice = hydrateNotice || "A prior native session is unbound; continuing may start a new provider context. Prefer an explicit new chat if unsure.";
+              }
+              if (hydrated.conversation.eventCursor) {
+                cursorRef.current.set(session.id, hydrated.conversation.eventCursor);
+              }
+              restored.push(session);
+            } catch (err) {
+              hydrateNotice = `Could not restore chat ${entry.id}: ${errorText(err)}`;
             }
           }
-        } catch {
-          // Fresh chat if durable history is unavailable; dual-write still proceeds on send.
+          if (restored.length > 0) {
+            opened = restored[0];
+            changeSessions(() => restored);
+            setSelected(opened.id);
+            if (hydrateNotice) setError(hydrateNotice);
+            void loadDraftFor(opened.id, p);
+            startPolling(p);
+            return;
+          }
+        } catch (err) {
+          setError(`Could not load conversation history: ${errorText(err)}. Starting a fresh chat.`);
         }
         changeSessions(() => [opened]); setSelected(opened.id);
         void loadDraftFor(opened.id, p);
@@ -366,6 +410,8 @@ export function NativeChat() {
 
   function selectChat(id: string) {
     if (id === selected) return;
+    const previous = selected;
+    if (previous) cancelDraftTimer(previous);
     setSelected(id);
     if (project) void loadDraftFor(id, project);
     else setDraft("");
@@ -396,6 +442,7 @@ export function NativeChat() {
         sessionsRef.current.some((s) => s.busy) || session.unavailable || !session.model) return;
     sendRef.current = true; setSendPending(true);
     const turnId = crypto.randomUUID();
+    const retainedPrompt = prompt;
     changeSessions((all) => all.map((s) => s.id === session.id ? beginNativeTurn(s, turnId, prompt) : s));
     setDraft(""); setError("");
     void flushDraftClear(session.id, session, owner);
@@ -412,6 +459,11 @@ export function NativeChat() {
       if (!owner.stopped && ownerRef.current === owner) {
         const note = `Send outcome could not be confirmed: ${errorText(e)}`;
         changeSessions((all) => all.map((s) => s.id === session.id ? failNativeTurn(s, turnId, note, "unknown") : s));
+        // Restore the prompt when acknowledgement never arrived.
+        if (mounted.current && selectedRef.current === session.id) {
+          setDraft(retainedPrompt);
+          queueDraftSave(session.id, retainedPrompt);
+        }
         hostLost(owner, note);
       }
     } finally { sendRef.current = false; if (mounted.current) setSendPending(false); }

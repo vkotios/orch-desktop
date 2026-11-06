@@ -7,10 +7,12 @@ import os from "node:os";
 import crypto from "node:crypto";
 
 const STAGES = new Set([
+  "intent_claim",
   "claimed",
   "preparing_worktree",
   "worktree",
   "launching",
+  "uncertain",
   "running",
   "review",
   "recorded",

@@ -318,7 +318,7 @@ mod tests {
             .await
             .unwrap();
         let split = buf.iter().position(|&b| b == 0xC3).unwrap() + 1; // mid-`é`
-        let (mut w, mut r) = duplex(65536);
+        let (mut w, r) = duplex(65536);
         w.write_all(&buf[..split]).await.unwrap();
         w.write_all(&buf[split..]).await.unwrap();
         let mut br = BufReader::new(r);

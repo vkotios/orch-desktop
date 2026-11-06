@@ -44,19 +44,27 @@ describe("native conversation state", () => {
     expect(s.messages[1]).toMatchObject({ statusText: "stopping", isStreaming: true, tools: [] });
   });
 
-  it("ignores all durable events for the active turn while busy so live text is not dropped", () => {
+  it("keeps live text authoritative and recovers completion from durable after a lost poll", () => {
     let s = applyNativeUiEvent(started(), event("message_delta", { text: "live" }), generation);
-    s = applyNativeUiEvent(s, event("message_delta", { source: "durable", text: "dup" }), generation);
+    s = applyNativeUiEvent(s, event("message_delta", { source: "durable", text: "dup", partId: "p1" }), generation);
     expect(s.messages[1].text).toBe("live");
-    // Durable completion must not clear the turn while live text may still arrive.
-    expect(applyNativeUiEvent(s, event("turn_complete", { source: "durable", nativeOutcome: "completed" }), generation)).toBe(s);
-    expect(s.busy).toBe(true);
-    s = applyNativeUiEvent(s, event("message_delta", { text: " more" }), generation);
-    expect(s.messages[1].text).toBe("live more");
-    s = applyNativeUiEvent(s, event("turn_complete", { nativeOutcome: "completed" }), generation);
+    // After live progress, a later durable-only poll may supply the missing terminal.
+    s = applyNativeUiEvent(s, event("turn_complete", { source: "durable", nativeOutcome: "completed" }), generation);
     expect(s.busy).toBe(false);
+    expect(s.messages[1]).toMatchObject({ text: "live", outcome: "completed" });
     const finished = s;
     expect(applyNativeUiEvent(finished, event("turn_complete", { source: "durable", nativeOutcome: "failed" }), generation)).toBe(finished);
+  });
+
+  it("recovers text and completion from durable events when live progress was lost", () => {
+    let s = started();
+    s = applyNativeUiEvent(s, event("message_delta", { source: "durable", text: "recovered", partId: "p1" }), generation);
+    expect(s.messages[1].text).toBe("recovered");
+    s = applyNativeUiEvent(s, event("message_delta", { source: "durable", text: " again", partId: "p1" }), generation);
+    expect(s.messages[1].text).toBe("recovered");
+    s = applyNativeUiEvent(s, event("turn_complete", { source: "durable", nativeOutcome: "completed" }), generation);
+    expect(s.busy).toBe(false);
+    expect(s.messages[1].outcome).toBe("completed");
   });
 
   it("binds an early delta and rejects a conflicting acknowledgement", () => {

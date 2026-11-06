@@ -81,6 +81,10 @@ export interface NativeUiSession {
   /** Model/role lock once the native thread exists (first send). */
   threadStarted: boolean;
   unavailable: boolean;
+  /** True once any live (non-durable) event has advanced the active turn. */
+  liveTurnProgress: boolean;
+  /** Durable part ids already applied for the active turn (dedupe). */
+  appliedDurableParts: string[];
 }
 
 export function defaultNativeModel(models: NativeModelInfo[]): string {
@@ -113,6 +117,8 @@ export function createNativeUiSession(
     requestedNativeSessionId: null,
     threadStarted: false,
     unavailable: false,
+    liveTurnProgress: false,
+    appliedDurableParts: [],
   };
 }
 
@@ -139,6 +145,8 @@ export function beginNativeTurn(
     busy: true,
     cancelling: false,
     nativeTurnId: null,
+    liveTurnProgress: false,
+    appliedDurableParts: [],
   };
 }
 
@@ -185,6 +193,8 @@ function finishTurn(
     busy: false,
     cancelling: false,
     nativeTurnId: null,
+    liveTurnProgress: false,
+    appliedDurableParts: [],
   };
 }
 
@@ -260,18 +270,36 @@ export function applyNativeUiEvent(
       !event.turnId || session.activeTurnId !== event.turnId) {
     return session;
   }
-  // Durable catch-up is recovery-only for the active turn. While busy, the live
-  // mailbox owns the whole turn (text, tools, and completion). Applying durable
-  // completion first would clear activeTurnId and drop later live text.
-  if (event.source === "durable" && session.busy && session.activeTurnId === event.turnId) {
+  // Durable catch-up recovers a lost poll once the live batch is applied first.
+  // While live progress exists for this turn, skip durable text parts (live owns
+  // streaming). Still accept durable tools (upsert) and durable terminal outcomes
+  // so a dropped completion can finish the turn. Ignore durable terminals when
+  // the turn is already finished.
+  if (event.source === "durable" && (event.kind === "turn_complete" || event.kind === "error" || event.nativeOutcome) && !session.busy) {
     return session;
   }
-  if (event.source === "durable" && (event.kind === "turn_complete" || event.kind === "error" || event.nativeOutcome) && !session.busy) {
+  if (
+    event.source === "durable" &&
+    event.kind === "message_delta" &&
+    session.busy &&
+    session.liveTurnProgress
+  ) {
+    return session;
+  }
+  if (
+    event.source === "durable" &&
+    event.kind === "message_delta" &&
+    typeof event.partId === "string" &&
+    session.appliedDurableParts.includes(event.partId)
+  ) {
     return session;
   }
   const turnId = event.turnId;
   const message = session.messages.find((m) => m.id === turnId && m.role === "assistant");
   if (!message) return session;
+  if (event.source !== "durable") {
+    session = { ...session, liveTurnProgress: true };
+  }
   const controller = event.controller ?? "codex";
   if (controller !== session.controller) return markNativeUnavailable(session, "Conflicting native controller.");
   if (controller === "claude") {
@@ -320,10 +348,17 @@ export function applyNativeUiEvent(
   switch (event.kind) {
     case "message_delta": {
       if (!event.text) return session;
-      return updateAssistant(session, turnId, (m) => ({
+      let next = updateAssistant(session, turnId, (m) => ({
         ...m,
         text: m.text + (event.text as string),
       }));
+      if (event.source === "durable" && typeof event.partId === "string") {
+        next = {
+          ...next,
+          appliedDurableParts: [...next.appliedDurableParts, event.partId],
+        };
+      }
+      return next;
     }
     case "tool_call": {
       if (!event.toolCallId) return session;

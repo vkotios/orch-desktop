@@ -59,6 +59,46 @@ beforeEach(() => {
 });
 
 describe("agent task preparation", () => {
+  it("filters open associations by conversation and refuses cross-chat adoption", async () => {
+    callHost.mockImplementation(async (command: string, args: Record<string, unknown> = {}) => {
+      if (command === "delegation_list") {
+        return {
+          associations: [
+            association({
+              id: "other-chat",
+              conversationId: "conv-b",
+              stage: "running",
+              runId: "run-other",
+            }),
+          ],
+        };
+      }
+      if (command === "delegation_upsert") {
+        return { association: association(args) };
+      }
+      throw new Error(`unexpected callHost ${command}`);
+    });
+    const invoke = vi.fn();
+    await expect(
+      startAgentTask(invoke, { ...task, conversationId: "conv-a", associationId: "other-chat" }),
+    ).rejects.toThrow(/another conversation/);
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("marks launch without run id as uncertain instead of running", async () => {
+    const invoke = vi
+      .fn()
+      .mockResolvedValueOnce(ok())
+      .mockResolvedValueOnce(ok({ path: "C:/project/.worktrees/wp-ui-s1" }))
+      .mockResolvedValueOnce(ok({}));
+    await expect(startAgentTask(invoke, task)).rejects.toThrow(/run id/);
+    const stages = callHost.mock.calls
+      .filter((call) => call[0] === "delegation_upsert")
+      .map((call) => (call[1] as { stage?: string }).stage);
+    expect(stages).toContain("uncertain");
+    expect(stages).not.toContain("running");
+  });
+
   it("launches only after claiming and creating a worktree, using the returned path", async () => {
     const invoke = vi
       .fn()
@@ -72,11 +112,13 @@ describe("agent task preparation", () => {
       "orch_run",
     ]);
     expect(invoke.mock.calls[2][1]).toMatchObject({
+      associationId: "assoc-1",
       dir: "C:/project/.worktrees/wp-ui-s1",
-      by: "owner",
       wp: "WP-UI",
       handoffText: task.handoffText,
     });
+    expect(invoke.mock.calls[2][1].by).toBeUndefined();
+    expect(invoke.mock.calls[2][1].ownerApprovedModel).toBeUndefined();
     expect(callHost.mock.calls.some((call) => call[0] === "delegation_upsert")).toBe(true);
   });
 

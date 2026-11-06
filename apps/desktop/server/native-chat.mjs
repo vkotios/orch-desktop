@@ -145,12 +145,31 @@ export function createNativeChatService(options) {
     const priorPid = evidence.priorPid;
     if (!Number.isSafeInteger(priorPid) || priorPid <= 0) return false;
     if (priorPid === process.pid) return false;
+    let signalError = null;
     try {
       process.kill(priorPid, 0);
-      return false; // still alive
-    } catch {
-      return true; // ESRCH / access — treat as not a live owner we must defer to
+      // Signalable process: only treat as dead when recorded creation time proves PID reuse.
+      if (typeof evidence.priorCreatedAt === "string" && evidence.priorCreatedAt.length > 0) {
+        try {
+          // Lazy sync identity check via orch helper when available on evidence.
+          if (evidence.identityVerdict === "mismatch" || evidence.identityVerdict === "gone") {
+            return evidence.identityVerdict === "gone" || evidence.identityVerdict === "mismatch";
+          }
+        } catch {
+          /* fall through */
+        }
+      }
+      return false;
+    } catch (err) {
+      signalError = err;
     }
+    const code = signalError && typeof signalError === "object" ? signalError.code : null;
+    // ESRCH / missing process → dead. EPERM/EACCES → uncertain, not proof of death.
+    if (code === "EPERM" || code === "EACCES") return false;
+    if (code === "ESRCH") return true;
+    // Unknown access failure is uncertain; do not steal the fence.
+    if (signalError) return false;
+    return false;
   }
 
   // Optional CHO-03 dual-write. Unit tests omit databasePath; the host passes
@@ -202,8 +221,29 @@ export function createNativeChatService(options) {
   function fatalize(raw) {
     const error = raw instanceof Error ? raw : new Error(String(raw));
     if (state.dead || state.closed) return;
-    state.dead = true;
     const a = state.active;
+    // Settle stranded dispatched turns as unknown while ownership still verifies.
+    try {
+      if (a !== null) durableSettle(a, "unknown");
+      if (state.claudeDurable?.operationId) {
+        durablePersist("claude fatal settle", () => {
+          persistence.settleTurn({
+            conversationId: state.claudeDurable.sessionId,
+            turnId: state.claudeDurable.turnId,
+            operationId: state.claudeDurable.operationId,
+            outcome: "unknown",
+            nativeIdentity: state.claudeDurable.nativeSessionId ?? null,
+            nativeTurnId: null,
+            claudeInputUuid: state.claudeDurable.claudeInputUuid ?? null,
+            evidence: ownerEvidence(),
+          });
+        });
+        state.claudeDurable = null;
+      }
+    } catch (settleErr) {
+      notifyOwner(settleErr instanceof Error ? settleErr : new Error(String(settleErr)));
+    }
+    state.dead = true;
     state.active = null;
     clearTimer(a);
     clearLease(a);
@@ -301,6 +341,9 @@ export function createNativeChatService(options) {
   }
   // Only a known not-admitted failure may release the turn locally.
   function failActiveTurn(a, text) {
+    // Pre-observation / not-sent failures settle as unknown (not failed/not_sent).
+    try { durableSettle(a, "unknown"); }
+    catch (err) { notifyOwner(err instanceof Error ? err : new Error(String(err))); }
     if (state.active === a) state.active = null;
     clearTimer(a);
     clearLease(a);
@@ -319,7 +362,10 @@ export function createNativeChatService(options) {
     clearClarifications();
   }
   function durableSettle(a, outcome) {
-    if (!persistence || !a.operationId || !a.observed) return;
+    if (!persistence || !a.operationId) return;
+    // completed/interrupted require an observed native fact path elsewhere.
+    // Factless unknown is legal from any nonterminal dispatched state.
+    if (outcome !== "unknown" && !a.observed) return;
     durablePersist("settle", () => {
       persistence.settleTurn({
         conversationId: a.sessionId,
@@ -331,6 +377,17 @@ export function createNativeChatService(options) {
         evidence: ownerEvidence(),
       });
     });
+  }
+  // Stable factId per (toolCallId, phase) so exact retries hit store idempotency.
+  const toolFactIds = new Map();
+  function toolFactIdFor(toolCallId, phase) {
+    const key = `${toolCallId}\0${phase}`;
+    let id = toolFactIds.get(key);
+    if (id === undefined) {
+      id = crypto.randomUUID();
+      toolFactIds.set(key, id);
+    }
+    return id;
   }
   function normalizeToolStatus(raw) {
     if (raw === "inProgress" || raw === "in_progress" || raw === "running") return "inProgress";
@@ -353,7 +410,7 @@ export function createNativeChatService(options) {
       conversationId,
       turnId,
       operationId,
-      factId: crypto.randomUUID(),
+      factId: toolFactIdFor(toolCallId, phase),
       toolCallId,
       phase,
       toolTitle,
@@ -361,8 +418,8 @@ export function createNativeChatService(options) {
       evidence: ownerEvidence(),
     };
     if (typeof item.text === "string") args.summaryText = item.text;
+    // Claude message ids only; Codex item ids must not fill nativeMessageId.
     if (typeof item.nativeMessageId === "string") args.nativeMessageId = item.nativeMessageId;
-    else if (typeof item.nativeItemId === "string") args.nativeMessageId = item.nativeItemId;
     persistence.appendToolFact(args);
   }
   function deliverMapped(a, mapped) {
@@ -650,6 +707,14 @@ export function createNativeChatService(options) {
         const durable = await ensurePersistence();
         if (durable) {
           state.durableProject = durable.ensureProject({ pathCanonical: canonical, name: pending.name });
+          try {
+            durable.reconcileStrandedTurns({
+              projectId: state.durableProject.id,
+              evidence: ownerEvidence(),
+            });
+          } catch {
+            // Reconciliation is best-effort; prepare must still succeed.
+          }
         }
       } else {
         owned = await openClient({
@@ -666,6 +731,14 @@ export function createNativeChatService(options) {
         const durable = await ensurePersistence();
         if (durable) {
           state.durableProject = durable.ensureProject({ pathCanonical: canonical, name: pending.name });
+          try {
+            durable.reconcileStrandedTurns({
+              projectId: state.durableProject.id,
+              evidence: ownerEvidence(),
+            });
+          } catch {
+            // Reconciliation is best-effort; prepare must still succeed.
+          }
         }
       }
       owned = null; // transferred to prepared project
@@ -867,7 +940,23 @@ export function createNativeChatService(options) {
       }
       return ack;
     } catch (err) {
-      if (state.claudeDurable?.operationId === operationId) state.claudeDurable = null;
+      if (state.claudeDurable?.operationId === operationId) {
+        // Not-sent / pre-observation failures settle as unknown while ownership verifies.
+        try {
+          durablePersist("claude send failure settle", () => {
+            persistence.settleTurn({
+              conversationId: state.claudeDurable.sessionId,
+              turnId: state.claudeDurable.turnId,
+              operationId: state.claudeDurable.operationId,
+              outcome: "unknown",
+              evidence: ownerEvidence(),
+            });
+          });
+        } catch (settleErr) {
+          notifyOwner(settleErr instanceof Error ? settleErr : new Error(String(settleErr)));
+        }
+        state.claudeDurable = null;
+      }
       throw err;
     }
   }
@@ -1069,12 +1158,16 @@ export function createNativeChatService(options) {
       const durableOnly = catchup.events.filter(
         (event) => typeof event.turnId !== "string" || !liveTurnIds.has(event.turnId),
       );
+      // Do not advance the durable cursor past events withheld because live
+      // events for the same turn were present; a later empty live poll must
+      // still be able to recover those durable facts (RUN-04).
+      const withheld = catchup.events.length - durableOnly.length;
       return {
         generation,
         events: [...live, ...durableOnly],
-        cursor: catchup.cursor,
+        cursor: withheld > 0 ? (args.cursor ?? null) : catchup.cursor,
         tip: catchup.tip,
-        hasMore: catchup.hasMore,
+        hasMore: catchup.hasMore === true || withheld > 0,
         conversationId: args.conversationId,
       };
     }
@@ -1264,25 +1357,23 @@ export function createNativeChatService(options) {
   }
 
   function settleDurableForShutdown() {
-    const context = state.context;
-    const claudeAlreadyCancelling = context?.cancelled === true;
+    // Close is not proof of interruption. Only a previously persisted native
+    // interrupted outcome may use that name; otherwise settle unknown.
     if (state.active !== null) {
       const a = state.active;
-      const outcome = a.cancelPending || a.interruptSent ? "interrupted" : "unknown";
-      durableSettle(a, outcome);
+      durableSettle(a, "unknown");
       state.active = null;
       clearTimer(a);
       clearLease(a);
     }
-    if (state.claudeDurable && state.claudeDurable.operationId && state.claudeDurable.observed) {
+    if (state.claudeDurable && state.claudeDurable.operationId) {
       const handle = state.claudeDurable;
-      const outcome = claudeAlreadyCancelling ? "interrupted" : "unknown";
       durablePersist("claude close settle", () => {
         persistence.settleTurn({
           conversationId: handle.sessionId,
           turnId: handle.turnId,
           operationId: handle.operationId,
-          outcome,
+          outcome: "unknown",
           nativeIdentity: handle.nativeSessionId,
           nativeTurnId: null,
           claudeInputUuid: handle.claudeInputUuid,
@@ -1304,8 +1395,13 @@ export function createNativeChatService(options) {
     if (state.closing) return state.closing;
     const context = state.context;
     if (context) context.cancelled = true;
-    // Settle while ownership still verifies (caller may set shuttingDown).
-    settleDurableForShutdown();
+    // Settle while ownership still verifies; never skip native client close if settle fails.
+    let settleError = null;
+    try {
+      settleDurableForShutdown();
+    } catch (err) {
+      settleError = err instanceof Error ? err : new Error(String(err));
+    }
     clearClarifications(false);
     state.approvals.clear();
     state.sessions.clear();
@@ -1318,6 +1414,7 @@ export function createNativeChatService(options) {
         if (context?.cleanupError) throw context.cleanupError;
         try { await closeClient(owned); } catch (err) { state.dead = true; throw err; }
         while (mailbox.size) mailbox.drain();
+        if (settleError) throw settleError;
       } finally {
         if (state.context === context) state.context = null;
         state.closing = null;

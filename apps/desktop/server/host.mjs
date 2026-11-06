@@ -289,9 +289,69 @@ export async function runHost(options = {}) {
         return;
       }
       let data;
-      try { data = await dispatchFn(env.command, env.args); }
+      try {
+        const admitted = await admitOrchArgs(env.command, env.args);
+        data = await dispatchFn(env.command, admitted);
+      }
       catch (err) { await sendError(env.requestId, 'COMMAND_FAILED', err?.message ?? String(err)); return; }
       await sendResult(env.requestId, data);
+    }
+
+    /**
+     * Host-owned admission for orch mutations (ORCH-09). Renderer flags never
+     * self-authorize models, force release, or choose execution directories.
+     */
+    async function admitOrchArgs(command, rawArgs) {
+      const args = rawArgs && typeof rawArgs === 'object' && !Array.isArray(rawArgs)
+        ? { ...rawArgs }
+        : {};
+      delete args.ownerApprovedModel;
+      delete args.allow;
+      // Claimant is always the host-backed owner principal for desktop mutations.
+      if ('by' in args) args.by = 'owner';
+      if (command === 'orch_run') {
+        delete args.force;
+        const associationId = typeof args.associationId === 'string' ? args.associationId : null;
+        if (!associationId) {
+          throw new Error('orch_run requires a host associationId so dir/claimant can be derived');
+        }
+        const store = await getDelegationStore();
+        const association = store.get(associationId);
+        if (!association) throw new Error('orch_run association not found');
+        if (!association.worktreePath) {
+          throw new Error('orch_run association has no worktree path yet');
+        }
+        if (association.disposition !== 'none') {
+          throw new Error('orch_run association is no longer open');
+        }
+        args.dir = association.worktreePath;
+        args.wp = association.wp;
+        args.slice = association.slice;
+        args.by = 'owner';
+        return args;
+      }
+      if (command === 'orch_worktree_create') {
+        delete args.force;
+        args.by = 'owner';
+        return args;
+      }
+      if (command === 'orch_release') {
+        if (args.force === true) {
+          const reason = typeof args.reason === 'string' ? args.reason : '';
+          if (!reason.startsWith('discarded from CHO')) {
+            throw new Error('forced release is only admitted for CHO discard flows');
+          }
+        }
+        args.by = 'owner';
+        return args;
+      }
+      if (command === 'orch_cleanup' || command === 'orch_finish' || command === 'orch_claim') {
+        delete args.force;
+        args.by = 'owner';
+        return args;
+      }
+      delete args.force;
+      return args;
     }
 
     // Handles exactly one complete frame (including its LF) from parse to

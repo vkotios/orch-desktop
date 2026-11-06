@@ -268,4 +268,48 @@ describe("native-session-persistence Codex dual-write", () => {
       expect.objectContaining({ role: "assistant", text: "pong", outcome: "completed" }),
     ]);
   });
+
+  it("preserves a multibyte character split across the 16 KiB body chunk boundary", () => {
+    const { persistence, evidence } = makePersistence();
+    const project = persistence.ensureProject({
+      pathCanonical: "C:/synthetic/unicode-boundary",
+      name: "unicode-boundary",
+    });
+    const conversationId = randomUUID();
+    const turnId = randomUUID();
+    const operationId = randomUUID();
+    persistence.ensureConversation({
+      projectId: project.id,
+      conversationId,
+      controller: "codex",
+      modelRequested: "gpt-test",
+      effort: "low",
+      role: "implement",
+      evidence,
+    });
+    persistence.beginTurn({
+      conversationId, turnId, operationId, prompt: "unicode", effort: "low", evidence,
+    });
+    persistence.afterThreadStart({ conversationId, nativeThreadId: "thread-u", evidence });
+    persistence.afterTurnWritten({ conversationId, turnId, operationId, evidence });
+    persistence.afterObserved({
+      conversationId, turnId, operationId,
+      nativeIdentity: "thread-u", nativeTurnId: "native-u", evidence,
+    });
+    const text = `${"a".repeat(16383)}€ tail`;
+    persistence.appendDelta({
+      conversationId, turnId, operationId, partId: randomUUID(),
+      nativeMessageId: "i-u", text, evidence,
+    });
+    persistence.settleTurn({
+      conversationId, turnId, operationId, outcome: "completed",
+      nativeIdentity: "thread-u", nativeTurnId: "native-u", evidence,
+    });
+    const hydrated = persistence.hydrateConversation({
+      projectId: project.id,
+      conversationId,
+    });
+    expect(hydrated?.messages[1]?.text).toBe(text);
+    expect(hydrated?.messages[1]?.text.length).toBe(16389);
+  });
 });

@@ -6,6 +6,7 @@
 // transactions. verifyOwnerEvidence is supplied by the host/native-chat owner.
 
 import { randomUUID } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -26,13 +27,95 @@ function defaultLivenessPath() {
   return path.join(os.homedir(), ".cho-desktop", "producer-liveness.json");
 }
 
-function processIsAlive(pid) {
-  if (!Number.isSafeInteger(pid) || pid <= 0) return false;
+function processSignalState(pid) {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return "invalid";
   try {
     process.kill(pid, 0);
-    return true;
+    return "alive";
+  } catch (err) {
+    const code = err && typeof err === "object" ? err.code : null;
+    if (code === "ESRCH") return "gone";
+    // EPERM/EACCES mean the process may still exist; treat as uncertain.
+    if (code === "EPERM" || code === "EACCES") return "uncertain";
+    return "uncertain";
+  }
+}
+
+function processIsAlive(pid) {
+  return processSignalState(pid) === "alive";
+}
+
+function sleepMs(ms) {
+  const end = Date.now() + Math.max(0, ms);
+  while (Date.now() < end) {
+    /* spin briefly while waiting for the liveness lock */
+  }
+}
+
+function readOwnProcessCreatedAt() {
+  try {
+    if (process.platform === "win32") {
+      const raw = execFileSync(
+        "powershell.exe",
+        [
+          "-NoProfile",
+          "-Command",
+          `(Get-CimInstance Win32_Process -Filter "ProcessId=${process.pid}").CreationDate`,
+        ],
+        { encoding: "utf8", timeout: 3000, windowsHide: true },
+      );
+      const text = String(raw || "").trim();
+      return text.length > 0 ? text : null;
+    }
+    if (process.platform === "linux") {
+      const stat = fs.readFileSync(`/proc/${process.pid}/stat`, "utf8");
+      const open = stat.indexOf("(");
+      const close = stat.lastIndexOf(")");
+      if (open < 0 || close <= open) return null;
+      const fields = stat.slice(close + 1).trim().split(/\s+/);
+      const startTicks = fields[19];
+      return startTicks ? `linux:${startTicks}` : null;
+    }
   } catch {
-    return false;
+    return null;
+  }
+  return null;
+}
+
+function withLivenessLock(filePath, fn) {
+  const dir = path.dirname(filePath);
+  fs.mkdirSync(dir, { recursive: true });
+  const lockPath = `${filePath}.lock`;
+  const deadline = Date.now() + 2000;
+  let fd = null;
+  for (;;) {
+    try {
+      fd = fs.openSync(lockPath, "wx");
+      break;
+    } catch (err) {
+      if (!err || err.code !== "EEXIST") throw err;
+      if (Date.now() >= deadline) {
+        // Stale lock recovery: only steal when the locker pid is gone.
+        try {
+          const locker = Number(fs.readFileSync(lockPath, "utf8"));
+          if (Number.isSafeInteger(locker) && processSignalState(locker) === "gone") {
+            fs.unlinkSync(lockPath);
+            continue;
+          }
+        } catch {
+          /* retry or throw below */
+        }
+        throw new Error("producer liveness map is locked by another host");
+      }
+      sleepMs(25);
+    }
+  }
+  try {
+    fs.writeFileSync(fd, String(process.pid));
+    return fn();
+  } finally {
+    try { fs.closeSync(fd); } catch { /* ignore */ }
+    try { fs.unlinkSync(lockPath); } catch { /* ignore */ }
   }
 }
 
@@ -52,9 +135,22 @@ function readLivenessMap(filePath) {
 function writeLivenessMap(filePath, entries) {
   const dir = path.dirname(filePath);
   fs.mkdirSync(dir, { recursive: true });
-  const tmp = `${filePath}.${process.pid}.tmp`;
+  const tmp = `${filePath}.${process.pid}.${cryptoRandomSuffix()}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify({ v: 1, entries }, null, 2), "utf8");
   fs.renameSync(tmp, filePath);
+}
+
+function cryptoRandomSuffix() {
+  return randomUUID().slice(0, 8);
+}
+
+function updateLivenessMap(filePath, mutator) {
+  return withLivenessLock(filePath, () => {
+    const entries = readLivenessMap(filePath);
+    const next = mutator(entries) ?? entries;
+    writeLivenessMap(filePath, next);
+    return next;
+  });
 }
 
 const UUID_RE =
@@ -187,60 +283,71 @@ export function createNativeSessionPersistence(options) {
     // or release+reclaim when this same host process lost its in-memory meta.
     let fence = bindings.getProducer({ projectId, conversationId });
     if (fence?.state === "held") {
-      const entries = readLivenessMap(livenessPath);
-      const prior = entries[conversationId];
-      const priorPid = prior && Number.isSafeInteger(prior.pid) ? prior.pid : null;
-      const priorHost = prior && typeof prior.hostGeneration === "string" ? prior.hostGeneration : null;
-      const sameOwnerRecord =
-        prior
-        && prior.ownerToken === fence.ownerToken
-        && prior.generation === fence.generation;
-      if (
-        sameOwnerRecord
-        && priorHost === hostGeneration
-        && priorPid === process.pid
-      ) {
-        bindings.settleProducer({
-          projectId,
-          conversationId,
-          ownerToken: fence.ownerToken,
-          generation: fence.generation,
-          state: "released",
-          evidence,
-        });
-        delete entries[conversationId];
-        writeLivenessMap(livenessPath, entries);
-        fence = bindings.getProducer({ projectId, conversationId });
-      } else if (
-        sameOwnerRecord
-        && priorPid != null
-        && priorHost != null
-        && priorHost !== hostGeneration
-        && !processIsAlive(priorPid)
-      ) {
-        bindings.settleProducer({
-          projectId,
-          conversationId,
-          ownerToken: fence.ownerToken,
-          generation: fence.generation,
-          state: "dead",
-          evidence: {
-            ...(evidence && typeof evidence === "object" ? evidence : {}),
-            reason: "host-reclaim",
-            priorPid,
-            priorHostGeneration: priorHost,
-          },
-        });
-        delete entries[conversationId];
-        writeLivenessMap(livenessPath, entries);
-        fence = bindings.getProducer({ projectId, conversationId });
-      } else if (processIsAlive(priorPid) && priorHost !== hostGeneration) {
-        throw new Error("session producer fence is held by another live host");
-      } else if (fence.state === "held") {
-        throw new Error(
-          "session producer fence is still held and prior owner liveness cannot be proven; close the other CHO host or start a new chat",
-        );
-      }
+      updateLivenessMap(livenessPath, (entries) => {
+        const prior = entries[conversationId];
+        const priorPid = prior && Number.isSafeInteger(prior.pid) ? prior.pid : null;
+        const priorHost = prior && typeof prior.hostGeneration === "string" ? prior.hostGeneration : null;
+        const priorCreatedAt = prior && typeof prior.createdAt === "string" ? prior.createdAt : null;
+        const sameOwnerRecord =
+          prior
+          && prior.ownerToken === fence.ownerToken
+          && prior.generation === fence.generation;
+        const signal = priorPid != null ? processSignalState(priorPid) : "invalid";
+        if (
+          sameOwnerRecord
+          && priorHost === hostGeneration
+          && priorPid === process.pid
+        ) {
+          bindings.settleProducer({
+            projectId,
+            conversationId,
+            ownerToken: fence.ownerToken,
+            generation: fence.generation,
+            state: "released",
+            evidence,
+          });
+          delete entries[conversationId];
+          return entries;
+        }
+        if (
+          sameOwnerRecord
+          && priorPid != null
+          && priorHost != null
+          && priorHost !== hostGeneration
+          && signal === "gone"
+        ) {
+          bindings.settleProducer({
+            projectId,
+            conversationId,
+            ownerToken: fence.ownerToken,
+            generation: fence.generation,
+            state: "dead",
+            evidence: {
+              ...(evidence && typeof evidence === "object" ? evidence : {}),
+              reason: "host-reclaim",
+              priorPid,
+              priorHostGeneration: priorHost,
+              ...(priorCreatedAt ? { priorCreatedAt, identityVerdict: "gone" } : { identityVerdict: "gone" }),
+            },
+          });
+          delete entries[conversationId];
+          return entries;
+        }
+        if ((signal === "alive" || signal === "uncertain") && priorHost !== hostGeneration) {
+          throw new Error(
+            signal === "uncertain"
+              ? "session producer fence owner liveness is uncertain; close the other CHO host or start a new chat"
+              : "session producer fence is held by another live host",
+          );
+        }
+        if (fence.state === "held") {
+          throw new Error(
+            "session producer fence is still held and prior owner liveness cannot be proven; close the other CHO host or start a new chat",
+          );
+        }
+        return entries;
+      });
+      fence = bindings.getProducer({ projectId, conversationId });
     }
 
     const ownerToken = randomUUID();
@@ -253,16 +360,19 @@ export function createNativeSessionPersistence(options) {
       evidence,
     });
 
-    const entries = readLivenessMap(livenessPath);
-    entries[conversationId] = {
-      pid: process.pid,
-      hostGeneration,
-      ownerToken: claim.ownerToken,
-      generation: claim.generation,
-      projectId,
-      claimedAtMs: typeof now === "function" ? now() : Date.now(),
-    };
-    writeLivenessMap(livenessPath, entries);
+    const createdAt = readOwnProcessCreatedAt();
+    updateLivenessMap(livenessPath, (entries) => {
+      entries[conversationId] = {
+        pid: process.pid,
+        hostGeneration,
+        ownerToken: claim.ownerToken,
+        generation: claim.generation,
+        projectId,
+        claimedAtMs: typeof now === "function" ? now() : Date.now(),
+        ...(createdAt ? { createdAt } : {}),
+      };
+      return entries;
+    });
 
     const tip = events.getSnapshot({ projectId, conversationId });
     const native = bindings.getNativeRef({ projectId, conversationId });
@@ -294,11 +404,10 @@ export function createNativeSessionPersistence(options) {
       state: "released",
       evidence,
     });
-    const entries = readLivenessMap(livenessPath);
-    if (entries[conversationId]) {
-      delete entries[conversationId];
-      writeLivenessMap(livenessPath, entries);
-    }
+    updateLivenessMap(livenessPath, (entries) => {
+      if (entries[conversationId]) delete entries[conversationId];
+      return entries;
+    });
     conversations.delete(conversationId);
     return result;
   }
@@ -319,7 +428,7 @@ export function createNativeSessionPersistence(options) {
     const meta = bodies.getBody({ projectId, conversationId, bodyId });
     if (!meta || meta.byteLength === 0) return "";
     let offset = 0;
-    const parts = [];
+    const chunks = [];
     while (offset < meta.byteLength) {
       const chunk = bodies.readBodyChunk({
         projectId,
@@ -329,12 +438,14 @@ export function createNativeSessionPersistence(options) {
         lengthBytes: 16384,
       });
       if (chunk.lengthBytes > 0) {
-        parts.push(Buffer.from(chunk.dataBase64, "base64").toString("utf8"));
+        chunks.push(Buffer.from(chunk.dataBase64, "base64"));
       }
       if (chunk.eof) break;
       offset = chunk.nextOffsetBytes;
     }
-    return parts.join("");
+    // Decode once across chunk boundaries so a multibyte character split at
+    // 16 KiB is preserved (SESSION message-delta Unicode requirement).
+    return Buffer.concat(chunks).toString("utf8");
   }
 
   function listConversations({ projectId, limit = 50 }) {
@@ -748,11 +859,16 @@ export function createNativeSessionPersistence(options) {
       if (event.kind === "message_delta") {
         const turnId = event.payload?.turnId;
         const bodyId = event.payload?.bodyRef?.id ?? event.payload?.partId;
+        const partId = typeof event.payload?.partId === "string"
+          ? event.payload.partId
+          : (typeof bodyId === "string" ? bodyId : null);
         const nativeMessageId = event.payload?.nativeMessageId;
         if (typeof turnId !== "string" || typeof bodyId !== "string") continue;
         uiEvents.push({
           kind: "message_delta",
           source: "durable",
+          seq: event.seq,
+          ...(partId ? { partId } : {}),
           generation,
           harness,
           controller: harness,
@@ -768,6 +884,7 @@ export function createNativeSessionPersistence(options) {
         uiEvents.push({
           kind: outcome === "failed" || outcome === "unknown" ? "error" : "turn_complete",
           source: "durable",
+          seq: event.seq,
           generation,
           harness,
           controller: harness,
@@ -794,6 +911,7 @@ export function createNativeSessionPersistence(options) {
         uiEvents.push({
           kind: "tool_call",
           source: "durable",
+          seq: event.seq,
           generation,
           harness,
           controller: harness,
@@ -841,6 +959,67 @@ export function createNativeSessionPersistence(options) {
     return events.getSnapshot({ projectId, conversationId });
   }
 
+  /**
+   * On reopen, settle stranded nonterminal turns as unknown. Never redispatches
+   * execution; ownership must still verify for each conversation fence.
+   */
+  function reconcileStrandedTurns({ projectId, evidence = null } = {}) {
+    assertOpen();
+    requireUuid(projectId, "projectId");
+    const conversationsList = records.listConversations({
+      projectId,
+      limit: 100,
+      offset: 0,
+      includeArchived: false,
+    });
+    const settled = [];
+    for (const conversation of conversationsList) {
+      const rows = store.transaction((tx) =>
+        tx.all(
+          `SELECT t.id AS turn_id, o.id AS operation_id, o.state AS op_state
+           FROM turns t
+           JOIN operations o ON o.turn_id = t.id AND o.conversation_id = t.conversation_id
+           WHERE t.conversation_id = ?
+             AND t.outcome IS NULL
+             AND o.state IN ('queued', 'dispatching', 'written', 'observed')
+           ORDER BY t.seq ASC
+           LIMIT 32`,
+          conversation.id,
+        ),
+      );
+      for (const row of rows) {
+        try {
+          // Ensure a producer fence exists so settle authorization can succeed.
+          ensureConversation({
+            projectId,
+            conversationId: conversation.id,
+            controller: conversation.controller,
+            modelRequested: conversation.modelRequested ?? null,
+            effort: conversation.effort ?? null,
+            role: conversation.role ?? "implement",
+            evidence,
+          });
+          settleTurn({
+            conversationId: conversation.id,
+            turnId: row.turn_id,
+            operationId: row.operation_id,
+            outcome: "unknown",
+            evidence,
+          });
+          settled.push({
+            conversationId: conversation.id,
+            turnId: row.turn_id,
+            operationId: row.operation_id,
+            priorOpState: row.op_state,
+          });
+        } catch {
+          // Leave the turn for a later host that can prove ownership.
+        }
+      }
+    }
+    return settled;
+  }
+
   function close() {
     if (closed) return;
     closed = true;
@@ -869,6 +1048,7 @@ export function createNativeSessionPersistence(options) {
     getSnapshot,
     listConversations,
     hydrateConversation,
+    reconcileStrandedTurns,
     releaseProducer,
     releaseAllProducers,
     close,

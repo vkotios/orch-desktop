@@ -1,8 +1,22 @@
 # CHO Desktop implementation status
 
-Updated: 2026-11-05. Integration branch: `codex/cho-v01-foundation`. Native Codex/Claude conversations and the clarification source milestone are accepted locally; source checkpoint `926110a` is verified by controller checks and independent GLM review.
+Updated: 2026-11-06. Integration branch: `codex/cho-v01-foundation`. Native Codex/Claude conversations and the clarification source milestone are accepted locally; source checkpoint `926110a` is verified by controller checks and independent GLM review.
 
 Product contract: [specification](PRODUCT_SPEC.md). Sequence: [plan](IMPLEMENTATION_PLAN.md). Sonnet findings: [validated dispositions](reviews/FINDINGS_DISPOSITION.md). Current package: [CHO-03 durable sessions](work-packages/CHO-03.md). Native Codex and Claude runtime and focused rendered conversation checks pass; broader [CHO-04 qualification](work-packages/CHO-04.md) remains open.
+
+## Current integrated-candidate assessment — 2026-11-06
+
+Historical milestones below are not acceptance of the current release candidate.
+Audited base `76076fb` plus Cursor completion repairs: close/unknown settlement,
+native cleanup on settle failure, stranded-turn reconcile, UTF-8 body decode,
+durable catch-up recovery, tool-fact id stability, draft/history notices, and
+host-admitted orch_run/association intent stages. Local verification: **767**
+package tests, typecheck, web build, 61 coordinator tests, staged `.runtime`,
+12 Rust host tests ([evidence](evidence/CURSOR-COMPLETION-2026-11-06.md)).
+ORCH-09 is partially implemented via host argument admission; Integrate remains
+disabled. Live CLI reopen, clean-machine installer, and AC-01–15 release rows
+remain open. Follow [Cursor completion instructions](CURSOR_COMPLETION_INSTRUCTIONS.md)
+and the [audit](reviews/CURSOR-DELIVERY-REVIEW-2026-11-05.md).
 
 ## Durable storage foundation
 

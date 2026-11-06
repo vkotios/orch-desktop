@@ -20,6 +20,21 @@ graphite interface, closer to Codex or Claude Code desktop. Native Codex and
 Claude debug conversations work; the main unfinished work is durable application
 integration, recovery, and release qualification.
 
+## Active continuation checkpoint — 2026-11-06
+
+Audited base remains `76076fb3cd6c82f3ca7d74220d226e34955521c4`. Cursor completion
+work above that base repairs the audited CHO-03 recovery defects and CHO-04/05
+admission/delegation gaps (see
+[evidence](docs/evidence/CURSOR-COMPLETION-2026-11-06.md)). Local verification on
+the completion candidate: **767** package tests, typecheck, web build, 61 focused
+coordinator tests, staged `.runtime` (Node 24.22.2), and 12 Rust host tests.
+Release/clean-machine AC rows and live Codex/Claude qualification remain blocked
+on owner environments/accounts. M2/M3 exit gates are improved but not closed.
+
+The verified checkpoint table and workforce paragraphs below describe earlier
+work. For the owner-supplied Cursor continuation, the plan's current execution
+amendment takes precedence over its historical workforce assignments.
+
 ## Verified checkpoint
 
 | Checkpoint | State |
@@ -62,16 +77,19 @@ CHO-03 storage is implemented and locally verified through:
 - S3c typed body-backed text deltas and a bounded last-message-turn marker.
 - S3d typed tool lifecycle facts with actor dual-write + hydrate/poll projection.
 
-**Local CHO-03 consumer path is wired:** dual-write, hydrate, durable poll
-cursor (hybrid with mailbox), drafts, close settle, and tool facts. Approvals
-and clarifications remain mailbox-only. CHO-05 local associations + Accept /
-Integrate / Discard are in NativeChat. Release/public/installer still open.
+**CHO-03 consumers are implemented in part, not accepted as durable recovery:**
+dual-write, hydrate, drafts, close settlement and tool projection exist, but replay,
+ownership, failure cleanup/outcomes, Unicode and draft/history gaps remain in the
+current audit. Approvals/clarifications remain mailbox-only. CHO-05 associations
+and Accept / Finish / Discard exist; Integrate is disabled and recovery/admission
+remain incomplete. Release/public/installer qualification is open.
 
 ## Next concrete slice
 
-**Product path next:** CHO-06 interaction polish that still blocks journeys
-(diff viewer, richer recovery UX), then CHO-07/08 installer evidence with the
-owner. Do not invent a second coordinator or lift Grok JSONL persistence.
+**Product path next:** repair and verify the audited CHO-03 recovery defects and
+CHO-04/05 admission/delegation gaps, then finish CHO-06 journeys and CHO-07/08
+qualification. Follow the Cursor completion instruction's dependency order.
+Do not invent a second coordinator or lift Grok JSONL persistence.
 Release path: [RELEASE_v01](docs/RELEASE_v01.md).
 
 Start by reading the current actors/mappers and the

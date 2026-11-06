@@ -1420,4 +1420,106 @@ describe("Codex durable dual-write", () => {
       store.close();
     }
   });
+
+  it("settles in-flight turns as unknown on close even after interrupt was requested", async () => {
+    const dir = tempDir();
+    const dbPath = join(dir, "sessions.sqlite3");
+    const generation = randomUUID();
+    const sessionId = randomUUID();
+    const turnId = randomUUID();
+    const client = new FakeClient();
+    const svc = createNativeChatService({
+      generation,
+      onFatal: () => {},
+      openClient: async (opts) => { client.handlers = opts; return client; },
+      databasePath: dbPath,
+    });
+    const validated = await svc.handle("native_chat_validate_project", { path: dir });
+    await svc.handle("native_chat_prepare_project", {
+      projectToken: validated.projectToken,
+      trusted: true,
+    });
+    const ack = await svc.handle("direct_chat_send", {
+      generation,
+      projectToken: validated.projectToken,
+      sessionId,
+      turnId,
+      model: "gpt-test",
+      prompt: "still running",
+      role: "implement",
+      effort: "medium",
+    });
+    client.note("turn/started", { threadId: "th-1", turn: { id: ack.nativeTurnId } });
+    await svc.handle("direct_chat_cancel", {
+      generation,
+      projectToken: validated.projectToken,
+      sessionId,
+      turnId,
+    });
+    await svc.close();
+
+    const store = openSessionStore({ databasePath: dbPath });
+    try {
+      const rows = store.transaction((tx) =>
+        tx.all("SELECT outcome FROM turns WHERE id = ?", turnId),
+      );
+      expect(rows).toHaveLength(1);
+      expect(rows[0].outcome).toBe("unknown");
+    } finally {
+      store.close();
+    }
+  });
+
+  it("always closes the native client when durable settle throws", async () => {
+    const dir = tempDir();
+    const client = new FakeClient();
+    const generation = randomUUID();
+    let settleCalls = 0;
+    const persistence = {
+      ensureProject: () => ({ id: randomUUID() }),
+      ensureConversation: () => ({}),
+      beginTurn: () => ({}),
+      afterThreadStart: () => ({}),
+      afterTurnWritten: () => ({}),
+      afterObserved: () => ({}),
+      appendDelta: () => ({}),
+      appendToolFact: () => ({}),
+      settleTurn: () => {
+        settleCalls += 1;
+        throw new Error("injected storage write failure");
+      },
+      releaseAllProducers: () => {},
+      listConversations: () => [],
+      hydrateConversation: () => null,
+      pollUiCatchup: () => ({ events: [], cursor: null, tip: 0, hasMore: false }),
+      close: () => {},
+    };
+    const svc = createNativeChatService({
+      generation,
+      onFatal: () => {},
+      openClient: async (opts) => { client.handlers = opts; return client; },
+      persistence,
+    });
+    const validated = await svc.handle("native_chat_validate_project", { path: dir });
+    await svc.handle("native_chat_prepare_project", {
+      projectToken: validated.projectToken,
+      trusted: true,
+    });
+    const sessionId = randomUUID();
+    const turnId = randomUUID();
+    const ack = await svc.handle("direct_chat_send", {
+      generation,
+      projectToken: validated.projectToken,
+      sessionId,
+      turnId,
+      model: "gpt-test",
+      prompt: "close settle",
+      role: "implement",
+      effort: "medium",
+    });
+    client.note("turn/started", { threadId: "th-1", turn: { id: ack.nativeTurnId } });
+    await expect(svc.close()).rejects.toThrow(/injected storage write failure/);
+    expect(settleCalls).toBeGreaterThan(0);
+    expect(client.closes).toBeGreaterThanOrEqual(1);
+  });
 });
