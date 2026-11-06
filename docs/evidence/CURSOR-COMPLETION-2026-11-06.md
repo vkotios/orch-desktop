@@ -57,7 +57,7 @@ exe hash after the combined bundle step is the NSIS-patched binary.
 | AC-02 | partial | Distinct error paths exist in host/UI; live CLI/sign-in matrix not re-run |
 | AC-03 | partial | Resume wiring + hydrate present; live reopen with real CLI not qualified here |
 | AC-04 | partial | Draft/switch fixes landed; rendered journey evidence not captured |
-| AC-05 | partial | Durable approval dual-write journalled; live CLI deny/cancel/stale still owner-blocked |
+| AC-05 | partial | Durable approval + clarification journals dual-written; live CLI deny/cancel/stale still owner-blocked |
 | AC-06 | partial | Association intent + host-admitted run dir; end-to-end orch launch not re-qualified |
 | AC-07 | partial | Uncertain adopt/abandon UI; live interrupt/reconcile journey open |
 | AC-08 | blocked | Independent review unavailable; read-only Diff drawer implemented locally |
