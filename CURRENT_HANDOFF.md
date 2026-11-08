@@ -23,16 +23,14 @@ integration, recovery, and release qualification.
 ## Active continuation checkpoint — 2026-11-08
 
 Audited base remains `76076fb3cd6c82f3ca7d74220d226e34955521c4`. Accessible Cursor
-completion candidate tip: **`4fbabb6`** (binaries from **`9911924`**; see
+completion candidate: **`9302b87`** (see
 [progress matrix](docs/evidence/PROGRESS-MATRIX-2026-11-06.md) and
-[evidence](docs/evidence/CURSOR-COMPLETION-2026-11-06.md)). Locally closed after
-E1/E2: hydrate paging/export, migrate stale-lock reclaim, conversation/route/
-project admission, dirty Diff overlay, integrate receipt/serialize, draft
-restart journey, landmark/keyboard layout contracts, staged-host
-`delegation-admit`, MSI/NSIS rebuild+rehash. **No authorized accessible
-implementation work remains** without owner env/authority. Externally blocked:
-live CLI qualification, clean-machine AC-01/13/15, independent review,
-push/tag/sign, owner scaling/WebView2 screenshots, remote CI on published head.
+[evidence](docs/evidence/CURSOR-COMPLETION-2026-11-06.md)). Includes export
+paging past the UI 500-turn window with `hasMoreTurns` / `truncation.turns`
+disclosure (fixes silent 501→500 omission) and MSI/NSIS rebuild+rehash for this
+SHA. Externally blocked: live CLI qualification, clean-machine AC-01/13/15,
+independent review, push/tag/sign, owner scaling/WebView2 screenshots, remote CI
+on published head.
 
 The verified checkpoint table and workforce paragraphs below describe earlier
 work. For the owner-supplied Cursor continuation, the plan's current execution
