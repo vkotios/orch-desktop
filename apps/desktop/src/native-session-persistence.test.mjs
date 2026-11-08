@@ -630,11 +630,77 @@ describe("native-session-persistence Codex dual-write", () => {
       turnLimit: 2,
     });
     expect(narrow?.messages.length).toBeLessThanOrEqual(4);
+    expect(narrow?.hasMoreTurns).toBe(true);
+    expect(narrow?.turnsLoaded).toBe(2);
     const exported = persistence.exportConversation({
       projectId: project.id,
       conversationId,
     });
     expect(exported?.conversation.messages.length).toBe(10);
     expect(exported?.truncated).toBe(false);
+    expect(exported?.truncation).toEqual({ events: false, turns: false });
+  });
+
+  it("exports all turns past the UI 500-turn window and discloses turn-cap truncation on hydrate", {
+    timeout: 180_000,
+  }, () => {
+    const { persistence, evidence } = makePersistence();
+    const project = persistence.ensureProject({
+      pathCanonical: "C:/synthetic/export-501",
+      name: "export-501",
+    });
+    const conversationId = randomUUID();
+    persistence.ensureConversation({
+      projectId: project.id,
+      conversationId,
+      controller: "codex",
+      modelRequested: "gpt-test",
+      effort: "low",
+      role: "implement",
+      evidence,
+    });
+    persistence.afterThreadStart({ conversationId, nativeThreadId: "thread-501", evidence });
+    const turnCount = 501;
+    for (let i = 0; i < turnCount; i += 1) {
+      const turnId = randomUUID();
+      const operationId = randomUUID();
+      persistence.beginTurn({
+        conversationId, turnId, operationId, prompt: `q${i}`, effort: "low", evidence,
+      });
+      persistence.afterTurnWritten({ conversationId, turnId, operationId, evidence });
+      persistence.afterObserved({
+        conversationId, turnId, operationId,
+        nativeIdentity: "thread-501", nativeTurnId: `native-${i}`, evidence,
+      });
+      persistence.appendDelta({
+        conversationId, turnId, operationId, partId: randomUUID(),
+        nativeMessageId: `m-${i}`, text: `a${i}`, evidence,
+      });
+      persistence.settleTurn({
+        conversationId, turnId, operationId, outcome: "completed",
+        nativeIdentity: "thread-501", nativeTurnId: `native-${i}`, evidence,
+      });
+    }
+
+    const uiWindow = persistence.hydrateConversation({
+      projectId: project.id,
+      conversationId,
+      maxEventPages: 512,
+      turnLimit: 500,
+    });
+    expect(uiWindow?.turnsLoaded).toBe(500);
+    expect(uiWindow?.hasMoreTurns).toBe(true);
+    // UI hydrate previously claimed truncated:false when only the turn axis was hit.
+    expect(uiWindow?.hasMoreEvents === true || uiWindow?.hasMoreTurns === true).toBe(true);
+
+    const exported = persistence.exportConversation({
+      projectId: project.id,
+      conversationId,
+    });
+    expect(exported?.conversation.turnsLoaded).toBe(501);
+    expect(exported?.conversation.hasMoreTurns).toBe(false);
+    expect(exported?.conversation.messages.length).toBe(turnCount * 2);
+    expect(exported?.truncated).toBe(false);
+    expect(exported?.truncation).toEqual({ events: false, turns: false });
   });
 });

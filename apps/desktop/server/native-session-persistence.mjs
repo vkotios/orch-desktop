@@ -230,6 +230,12 @@ export function createNativeSessionPersistence(options) {
   });
   const authorizer = createProducerAuthorizer({ verifyOwnerEvidence });
 
+  // Export pages past the UI hydrate window (512 event pages / 500 turns);
+  // both axes disclose via hasMoreEvents / hasMoreTurns (+ export.truncation).
+  const EXPORT_EVENT_PAGE_CEILING = 10_000;
+  const EXPORT_TURN_CEILING = 10_000;
+  const LIST_TURNS_PAGE = 100;
+
   /** @type {Map<string, { id: string, pathCanonical: string, name: string }>} */
   const projectsByPath = new Map();
   /**
@@ -705,23 +711,31 @@ export function createNativeSessionPersistence(options) {
   /**
    * Read-only export of hydrated transcript + metadata. Native execution
    * permissions are never included.
+   *
+   * Export pages beyond the UI hydrate window (up to safety ceilings). If a
+   * ceiling is hit, truncated is true and truncation names the limiting axis.
    */
   function exportConversation({ projectId, conversationId }) {
     assertOpen();
-    // Full-history export: use the hydrate caps (512 event pages / 500 turns).
     const hydrated = hydrateConversation({
       projectId,
       conversationId,
-      maxEventPages: 512,
-      turnLimit: 500,
+      maxEventPages: EXPORT_EVENT_PAGE_CEILING,
+      turnLimit: EXPORT_TURN_CEILING,
     });
     if (!hydrated) return null;
+    const truncation = {
+      events: Boolean(hydrated.hasMoreEvents),
+      turns: Boolean(hydrated.hasMoreTurns),
+    };
+    const truncated = truncation.events || truncation.turns;
     return {
       format: "cho.session.export.v1",
       exportedAtMs: Date.now(),
       projectId,
       conversation: hydrated,
-      truncated: Boolean(hydrated.hasMoreEvents),
+      truncated,
+      truncation,
     };
   }
 
@@ -827,6 +841,30 @@ export function createNativeSessionPersistence(options) {
   }
 
   /**
+   * Page listTurns (API limit 100) up to turnCap. Probes one past the cap so
+   * callers can disclose turn truncation even when the last page is full.
+   */
+  function listTurnSummariesPaged({ projectId, conversationId, turnCap }) {
+    /** @type {Array<{ id: string }>} */
+    const turnSummaries = [];
+    for (let offset = 0; turnSummaries.length < turnCap; offset += LIST_TURNS_PAGE) {
+      const pageLimit = Math.min(LIST_TURNS_PAGE, turnCap - turnSummaries.length);
+      const page = turns.listTurns({ projectId, conversationId, limit: pageLimit, offset });
+      turnSummaries.push(...page);
+      if (page.length < pageLimit) {
+        return { turnSummaries, hasMoreTurns: false };
+      }
+    }
+    const probe = turns.listTurns({
+      projectId,
+      conversationId,
+      limit: 1,
+      offset: turnSummaries.length,
+    });
+    return { turnSummaries, hasMoreTurns: probe.length > 0 };
+  }
+
+  /**
    * Rebuild a UI-shaped transcript from durable turns + message_delta bodies.
    * Does not restore live approvals/clarifications (still memory-only).
    */
@@ -881,17 +919,21 @@ export function createNativeSessionPersistence(options) {
       }
     }
 
-    const pageCap = Math.min(512, Math.max(1, Number.isSafeInteger(maxEventPages) ? maxEventPages : 64));
-    const turnCap = Math.min(500, Math.max(1, Number.isSafeInteger(turnLimit) ? turnLimit : 100));
-    // listTurns caps limit at 100; page until turnCap is satisfied.
-    /** @type {Array<{ id: string }>} */
-    const turnSummaries = [];
-    for (let offset = 0; turnSummaries.length < turnCap; offset += 100) {
-      const pageLimit = Math.min(100, turnCap - turnSummaries.length);
-      const page = turns.listTurns({ projectId, conversationId, limit: pageLimit, offset });
-      turnSummaries.push(...page);
-      if (page.length < pageLimit) break;
-    }
+    const requestedPages = Number.isSafeInteger(maxEventPages) ? maxEventPages : 64;
+    const requestedTurns = Number.isSafeInteger(turnLimit) ? turnLimit : 100;
+    const pageCap = Math.min(
+      EXPORT_EVENT_PAGE_CEILING,
+      Math.max(1, requestedPages),
+    );
+    const turnCap = Math.min(
+      EXPORT_TURN_CEILING,
+      Math.max(1, requestedTurns),
+    );
+    const { turnSummaries, hasMoreTurns } = listTurnSummariesPaged({
+      projectId,
+      conversationId,
+      turnCap,
+    });
 
     // Import-only conversations have no event tip/snapshot; return the body.
     if (importedMessages.length > 0 && turnSummaries.length === 0) {
@@ -910,6 +952,9 @@ export function createNativeSessionPersistence(options) {
         eventTip: 0,
         eventCursor: null,
         hasMoreEvents: false,
+        hasMoreTurns: false,
+        turnsLoaded: 0,
+        turnLimit: turnCap,
         historicalClarifications: [],
         historicalApprovals: [],
         imported: true,
@@ -1057,6 +1102,9 @@ export function createNativeSessionPersistence(options) {
       eventTip: tip,
       eventCursor,
       hasMoreEvents,
+      hasMoreTurns,
+      turnsLoaded: turnSummaries.length,
+      turnLimit: turnCap,
       historicalClarifications: historical.clarifications,
       historicalApprovals: historical.approvals,
       ...(importedMessages.length > 0

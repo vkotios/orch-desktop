@@ -377,7 +377,7 @@ export function NativeChat() {
               const hydrated = await nativeChatHydrateConversation(p.generation, p.projectToken, entry.id);
               if (!hydrated.conversation) continue;
               const session = sessionFromHydrated(p, hydrated.conversation);
-              if (hydrated.conversation.hasMoreEvents) {
+              if (hydrated.conversation.hasMoreEvents || hydrated.conversation.hasMoreTurns) {
                 hydrateNotice = "Earlier transcript pages exist for one or more chats; only the recent window was loaded.";
                 if (mounted.current) setHistoryTruncated(true);
               }
@@ -657,7 +657,10 @@ export function NativeChat() {
                 void nativeChatExportConversation(project.generation, project.projectToken, selected)
                   .then((result) => {
                     const payload = result.export && typeof result.export === "object"
-                      ? result.export as { truncated?: boolean }
+                      ? result.export as {
+                        truncated?: boolean;
+                        truncation?: { events?: boolean; turns?: boolean };
+                      }
                       : null;
                     const blob = new Blob([JSON.stringify(result.export, null, 2)], { type: "application/json" });
                     const url = URL.createObjectURL(blob);
@@ -667,7 +670,11 @@ export function NativeChat() {
                     a.click();
                     URL.revokeObjectURL(url);
                     if (payload?.truncated) {
-                      setError("Export downloaded, but history exceeded the hydrate window and was truncated.");
+                      const parts = [];
+                      if (payload.truncation?.turns) parts.push("turns");
+                      if (payload.truncation?.events) parts.push("events");
+                      const axis = parts.length > 0 ? parts.join(" and ") : "history";
+                      setError(`Export downloaded, but ${axis} exceeded the export ceiling and were truncated.`);
                       setLoading("");
                     } else {
                       setError("");
@@ -774,9 +781,12 @@ export function NativeChat() {
                       if (result.conversation.eventCursor) {
                         cursorRef.current.set(selected, result.conversation.eventCursor);
                       }
-                      setHistoryTruncated(Boolean(result.conversation.hasMoreEvents));
-                      setError(result.conversation.hasMoreEvents
-                        ? "Loaded the maximum history window; older events may still remain beyond the export/hydrate caps."
+                      const moreHistory = Boolean(
+                        result.conversation.hasMoreEvents || result.conversation.hasMoreTurns,
+                      );
+                      setHistoryTruncated(moreHistory);
+                      setError(moreHistory
+                        ? "Loaded the maximum UI history window; older turns or events may still remain. Export pages further (and warns if a ceiling is hit)."
                         : "");
                     })
                     .catch((err) => setError(errorText(err)))

@@ -551,6 +551,9 @@ export interface NativeHydratedConversation {
   eventTip: number;
   eventCursor?: NativeEventCursor | null;
   hasMoreEvents: boolean;
+  hasMoreTurns?: boolean;
+  turnsLoaded?: number;
+  turnLimit?: number;
 }
 
 export function nativeChatListConversations(
@@ -570,7 +573,13 @@ export function nativeChatExportConversation(
   generation: string,
   projectToken: string,
   conversationId: string,
-): Promise<{ generation: string; export: { truncated?: boolean } & Record<string, unknown> }> {
+): Promise<{
+  generation: string;
+  export: {
+    truncated?: boolean;
+    truncation?: { events?: boolean; turns?: boolean };
+  } & Record<string, unknown>;
+}> {
   return invokeNative("native_chat_export_conversation", {
     generation,
     projectToken,
