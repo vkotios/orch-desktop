@@ -30,6 +30,7 @@ export const SERVER_MODULES = [
   'claude-wire.mjs',
   'claude-client.mjs',
   'claude-chat-actor.mjs',
+  'delegation-admit.mjs',
   'delegation-integrate.mjs',
   'delegation-integrate-evidence.mjs',
   'delegation-associations.mjs',

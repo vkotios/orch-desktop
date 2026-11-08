@@ -62,6 +62,7 @@ async function makeSourceRoot(extra: Record<string, string> = {}, root = ""): Pr
     "apps/desktop/server/claude-wire.mjs": "export const wire = 1;\n",
     "apps/desktop/server/claude-client.mjs": "export const claudeClient = 1;\n",
     "apps/desktop/server/claude-chat-actor.mjs": "export const actor = 1;\n",
+    "apps/desktop/server/delegation-admit.mjs": "export const admit = 1;\n",
     "apps/desktop/server/delegation-integrate.mjs": "export const integrate = 1;\n",
     "apps/desktop/server/delegation-integrate-evidence.mjs": "export const evidence = 1;\n",
     "apps/desktop/server/delegation-associations.mjs": "export const associations = 1;\n",
@@ -150,8 +151,8 @@ describe("prepareRuntime", () => {
     for (const name of [
       "bridge.mjs", "host.mjs", "protocol.mjs", "native-rpc.mjs", "codex-client.mjs",
       "event-mailbox.mjs", "native-chat.mjs", "native-clarification.mjs", "claude-wire.mjs",
-      "claude-client.mjs", "claude-chat-actor.mjs", "delegation-integrate.mjs",
-      "delegation-integrate-evidence.mjs",
+      "claude-client.mjs", "claude-chat-actor.mjs", "delegation-admit.mjs",
+      "delegation-integrate.mjs", "delegation-integrate-evidence.mjs",
       "delegation-associations.mjs", "native-session-persistence.mjs", "session-store.mjs",
       "session-store-schema.mjs", "session-store-migrate.mjs", "session-records.mjs",
       "session-bindings.mjs", "session-turns.mjs", "session-message-deltas.mjs",
@@ -344,6 +345,7 @@ describe("prepareRuntime", () => {
     const stagedServer = join(outputDir, "app", "apps", "desktop", "server");
     for (const name of [
       "host.mjs",
+      "delegation-admit.mjs",
       "delegation-integrate.mjs",
       "delegation-integrate-evidence.mjs",
       "delegation-associations.mjs",
