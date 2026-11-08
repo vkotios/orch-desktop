@@ -656,6 +656,9 @@ export function NativeChat() {
                 if (!project) return;
                 void nativeChatExportConversation(project.generation, project.projectToken, selected)
                   .then((result) => {
+                    const payload = result.export && typeof result.export === "object"
+                      ? result.export as { truncated?: boolean }
+                      : null;
                     const blob = new Blob([JSON.stringify(result.export, null, 2)], { type: "application/json" });
                     const url = URL.createObjectURL(blob);
                     const a = document.createElement("a");
@@ -663,8 +666,14 @@ export function NativeChat() {
                     a.download = `cho-conversation-${selected.slice(0, 8)}.json`;
                     a.click();
                     URL.revokeObjectURL(url);
-                    setLoading("Exported conversation.");
-                    setTimeout(() => { if (mounted.current) setLoading(""); }, 1500);
+                    if (payload?.truncated) {
+                      setError("Export downloaded, but history exceeded the hydrate window and was truncated.");
+                      setLoading("");
+                    } else {
+                      setError("");
+                      setLoading("Exported conversation.");
+                      setTimeout(() => { if (mounted.current) setLoading(""); }, 1500);
+                    }
                   })
                   .catch((err) => setError(errorText(err)));
               }}
@@ -751,17 +760,23 @@ export function NativeChat() {
                 onClick={() => {
                   if (!project || !selected) return;
                   setLoading("Loading more history…");
+                  // Full hydrate rebuild with maximum server caps (event pages +
+                  // paged listTurns). Not a cursor prepend — hydrate always
+                  // recomposes the conversation from durable state.
                   void nativeChatHydrateConversation(project.generation, project.projectToken, selected, {
-                    maxEventPages: 256,
-                    turnLimit: 300,
+                    maxEventPages: 512,
+                    turnLimit: 500,
                   })
                     .then((result) => {
                       if (!result.conversation) throw new Error("Conversation not found.");
                       const session = sessionFromHydrated(project, result.conversation);
                       changeSessions((all) => all.map((s) => (s.id === selected ? session : s)));
+                      if (result.conversation.eventCursor) {
+                        cursorRef.current.set(selected, result.conversation.eventCursor);
+                      }
                       setHistoryTruncated(Boolean(result.conversation.hasMoreEvents));
                       setError(result.conversation.hasMoreEvents
-                        ? "Loaded a larger history window; more pages may still remain."
+                        ? "Loaded the maximum history window; older events may still remain beyond the export/hydrate caps."
                         : "");
                     })
                     .catch((err) => setError(errorText(err)))

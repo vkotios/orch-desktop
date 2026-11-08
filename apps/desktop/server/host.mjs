@@ -17,7 +17,11 @@ import {
   deriveReviewInspection,
   deriveRunInspection,
 } from './delegation-integrate-evidence.mjs';
-import { admitOrchRunArgs, stripPrivilegedOrchFlags } from './delegation-admit.mjs';
+import {
+  admitOrchRunArgs,
+  admitOrchWorktreeCreateArgs,
+  stripPrivilegedOrchFlags,
+} from './delegation-admit.mjs';
 
 const execFileAsync = promisify(execFile);
 
@@ -600,21 +604,12 @@ export async function runHost(options = {}) {
         return admitOrchRunArgs(association, args);
       }
       if (command === 'orch_worktree_create') {
-        delete args.force;
-        args.by = 'owner';
         const associationId = typeof args.associationId === 'string' ? args.associationId : null;
-        if (associationId) {
-          const store = await getDelegationStore();
-          const association = store.get(associationId);
-          if (!association) throw new Error('orch_worktree_create association not found');
-          if (association.disposition !== 'none') {
-            throw new Error('orch_worktree_create association is no longer open');
-          }
-          args.repo = association.repoPath;
-          args.wp = association.wp;
-          args.slice = association.slice;
+        if (!associationId) {
+          throw new Error('orch_worktree_create requires a host associationId');
         }
-        return args;
+        const store = await getDelegationStore();
+        return admitOrchWorktreeCreateArgs(store.get(associationId), args);
       }
       if (command === 'orch_release') {
         if (args.force === true) {

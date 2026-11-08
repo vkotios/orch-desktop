@@ -570,7 +570,7 @@ export function nativeChatExportConversation(
   generation: string,
   projectToken: string,
   conversationId: string,
-): Promise<{ generation: string; export: unknown }> {
+): Promise<{ generation: string; export: { truncated?: boolean } & Record<string, unknown> }> {
   return invokeNative("native_chat_export_conversation", {
     generation,
     projectToken,

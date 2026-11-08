@@ -85,6 +85,41 @@ export function admitOrchRunArgs(association, rawArgs) {
 }
 
 /**
+ * Admit orch_worktree_create against a host association. Requires associationId
+ * binding; derives repo/wp/slice from the association (never renderer paths alone).
+ *
+ * @param {object|null} association
+ * @param {object} rawArgs
+ */
+export function admitOrchWorktreeCreateArgs(association, rawArgs) {
+  const args = stripPrivilegedOrchFlags(rawArgs);
+  delete args.force;
+  args.by = "owner";
+  if (!association || typeof association !== "object") {
+    throw new Error("orch_worktree_create association not found");
+  }
+  if (association.disposition !== "none") {
+    throw new Error("orch_worktree_create association is no longer open");
+  }
+  if (typeof association.conversationId !== "string" || association.conversationId.length === 0) {
+    throw new Error("orch_worktree_create requires a conversation-bound association");
+  }
+  if (typeof association.repoPath !== "string" || association.repoPath.length === 0) {
+    throw new Error("orch_worktree_create association has no prepared project repoPath");
+  }
+  const repoRoot = path.resolve(association.repoPath);
+  if (!fs.existsSync(repoRoot) || !fs.statSync(repoRoot).isDirectory()) {
+    throw new Error("orch_worktree_create prepared project path is missing");
+  }
+  args.repo = repoRoot;
+  args.wp = association.wp;
+  args.slice = association.slice;
+  args.conversationId = association.conversationId;
+  args.by = "owner";
+  return args;
+}
+
+/**
  * Strip privileged renderer flags from any orch command args.
  * @param {object} rawArgs
  */

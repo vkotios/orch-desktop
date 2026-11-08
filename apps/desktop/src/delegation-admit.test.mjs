@@ -2,7 +2,11 @@ import { describe, expect, it } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { admitOrchRunArgs, stripPrivilegedOrchFlags } from "../server/delegation-admit.mjs";
+import {
+  admitOrchRunArgs,
+  admitOrchWorktreeCreateArgs,
+  stripPrivilegedOrchFlags,
+} from "../server/delegation-admit.mjs";
 
 function fixtureRepo() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "cho-admit-"));
@@ -86,5 +90,37 @@ describe("delegation admission", () => {
         {},
       ),
     ).toThrow(/worktree path/);
+  });
+
+  it("requires conversation-bound association for orch_worktree_create", () => {
+    const { repo } = fixtureRepo();
+    expect(() => admitOrchWorktreeCreateArgs(null, {})).toThrow(/association not found/);
+    expect(() =>
+      admitOrchWorktreeCreateArgs(
+        {
+          id: "a1",
+          repoPath: repo,
+          wp: "cho-05",
+          slice: "delegate",
+          disposition: "none",
+          conversationId: null,
+        },
+        { repo: "C:/evil" },
+      ),
+    ).toThrow(/conversation-bound/);
+    const admitted = admitOrchWorktreeCreateArgs(
+      {
+        id: "a1",
+        repoPath: repo,
+        wp: "cho-05",
+        slice: "delegate",
+        disposition: "none",
+        conversationId: "11111111-1111-4111-8111-111111111111",
+      },
+      { repo: "C:/evil", force: true },
+    );
+    expect(admitted.repo).toBe(path.resolve(repo));
+    expect(admitted.force).toBeUndefined();
+    expect(admitted.conversationId).toBe("11111111-1111-4111-8111-111111111111");
   });
 });
