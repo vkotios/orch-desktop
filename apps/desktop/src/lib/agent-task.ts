@@ -67,11 +67,14 @@ export async function startAgentTask(invoke: OrchInvoke, task: AgentTask) {
     throw new Error("Add a work package, task ID, and instructions first.");
   }
 
+  if (typeof task.conversationId !== "string" || task.conversationId.length === 0) {
+    throw new Error("Delegation requires an active conversation so the host can bind admission.");
+  }
   const listed = await callHost<{ associations: DelegationAssociation[] }>(
     "delegation_list",
     {
       repoPath: task.repo,
-      ...(task.conversationId ? { conversationId: task.conversationId } : {}),
+      conversationId: task.conversationId,
     },
   );
   const prior = (
@@ -199,6 +202,7 @@ export async function startAgentTask(invoke: OrchInvoke, task: AgentTask) {
     cli: task.cli,
     model: task.model,
     associationId: association.id,
+    conversationId: association.conversationId ?? task.conversationId ?? undefined,
     // dir is host-admitted from the association worktree; passed here for
     // local/dev bridge compatibility and stripped/re-derived by the host.
     dir: worktreePath,

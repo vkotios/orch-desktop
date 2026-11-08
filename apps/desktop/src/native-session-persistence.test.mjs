@@ -583,5 +583,58 @@ describe("native-session-persistence Codex dual-write", () => {
       conversationId: imported.conversationId,
     });
     expect(exported?.conversation.messages).toHaveLength(4);
+    expect(exported?.truncated).toBe(false);
+  });
+
+  it("exports with full hydrate caps and pages multi-turn history", { timeout: 30_000 }, () => {
+    const { persistence, evidence } = makePersistence();
+    const project = persistence.ensureProject({
+      pathCanonical: "C:/synthetic/paging-export",
+      name: "paging-export",
+    });
+    const conversationId = randomUUID();
+    persistence.ensureConversation({
+      projectId: project.id,
+      conversationId,
+      controller: "codex",
+      modelRequested: "gpt-test",
+      effort: "low",
+      role: "implement",
+      evidence,
+    });
+    persistence.afterThreadStart({ conversationId, nativeThreadId: "thread-page", evidence });
+    for (let i = 0; i < 5; i += 1) {
+      const turnId = randomUUID();
+      const operationId = randomUUID();
+      persistence.beginTurn({
+        conversationId, turnId, operationId, prompt: `q${i}`, effort: "low", evidence,
+      });
+      persistence.afterTurnWritten({ conversationId, turnId, operationId, evidence });
+      persistence.afterObserved({
+        conversationId, turnId, operationId,
+        nativeIdentity: "thread-page", nativeTurnId: `native-${i}`, evidence,
+      });
+      persistence.appendDelta({
+        conversationId, turnId, operationId, partId: randomUUID(),
+        nativeMessageId: `m-${i}`, text: `a${i}`, evidence,
+      });
+      persistence.settleTurn({
+        conversationId, turnId, operationId, outcome: "completed",
+        nativeIdentity: "thread-page", nativeTurnId: `native-${i}`, evidence,
+      });
+    }
+    const narrow = persistence.hydrateConversation({
+      projectId: project.id,
+      conversationId,
+      maxEventPages: 1,
+      turnLimit: 2,
+    });
+    expect(narrow?.messages.length).toBeLessThanOrEqual(4);
+    const exported = persistence.exportConversation({
+      projectId: project.id,
+      conversationId,
+    });
+    expect(exported?.conversation.messages.length).toBe(10);
+    expect(exported?.truncated).toBe(false);
   });
 });

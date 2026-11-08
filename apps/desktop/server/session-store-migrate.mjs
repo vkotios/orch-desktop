@@ -39,10 +39,49 @@ function migrationLockPath(databasePath) {
   return `${databasePath}.migrate.lock`;
 }
 
+function processAlive(pid) {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    const code = err && typeof err === 'object' ? err.code : null;
+    // EPERM/EACCES: process may still exist; treat as alive (do not steal).
+    if (code === 'EPERM' || code === 'EACCES') return true;
+    return false;
+  }
+}
+
+function tryRecoverStaleMigrationLock(lockPath) {
+  let raw;
+  try {
+    raw = fs.readFileSync(lockPath, 'utf8');
+  } catch {
+    return false;
+  }
+  const [pidLine, startedLine] = String(raw).split(/\r?\n/);
+  const pid = Number.parseInt(pidLine, 10);
+  const startedAt = Number.parseInt(startedLine, 10);
+  if (!Number.isSafeInteger(pid) || pid <= 0) return false;
+  if (processAlive(pid)) return false;
+  // Dead owner: only reclaim locks older than a short grace window so a
+  // concurrent creator that has not yet written the pid is not raced.
+  if (Number.isSafeInteger(startedAt) && startedAt > 0 && Date.now() - startedAt < 2000) {
+    return false;
+  }
+  try {
+    fs.unlinkSync(lockPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function withMigrationLock(databasePath, fn) {
   const lockPath = migrationLockPath(databasePath);
   let fd = null;
   const deadline = Date.now() + 5000;
+  let recoveredStale = false;
   for (;;) {
     try {
       fd = fs.openSync(lockPath, 'wx');
@@ -50,6 +89,10 @@ function withMigrationLock(databasePath, fn) {
       break;
     } catch (err) {
       if (!err || err.code !== 'EEXIST') throw err;
+      if (!recoveredStale && tryRecoverStaleMigrationLock(lockPath)) {
+        recoveredStale = true;
+        continue;
+      }
       if (Date.now() >= deadline) {
         throw new Error('ERR_BUSY: session store migration lock held');
       }

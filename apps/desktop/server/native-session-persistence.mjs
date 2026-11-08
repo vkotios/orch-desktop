@@ -708,13 +708,20 @@ export function createNativeSessionPersistence(options) {
    */
   function exportConversation({ projectId, conversationId }) {
     assertOpen();
-    const hydrated = hydrateConversation({ projectId, conversationId });
+    // Full-history export: use the hydrate caps (512 event pages / 500 turns).
+    const hydrated = hydrateConversation({
+      projectId,
+      conversationId,
+      maxEventPages: 512,
+      turnLimit: 500,
+    });
     if (!hydrated) return null;
     return {
       format: "cho.session.export.v1",
       exportedAtMs: Date.now(),
       projectId,
       conversation: hydrated,
+      truncated: Boolean(hydrated.hasMoreEvents),
     };
   }
 
@@ -876,8 +883,15 @@ export function createNativeSessionPersistence(options) {
 
     const pageCap = Math.min(512, Math.max(1, Number.isSafeInteger(maxEventPages) ? maxEventPages : 64));
     const turnCap = Math.min(500, Math.max(1, Number.isSafeInteger(turnLimit) ? turnLimit : 100));
-    // listTurns strips prompts by design; hydrate each turn via getTurn.
-    const turnSummaries = turns.listTurns({ projectId, conversationId, limit: turnCap, offset: 0 });
+    // listTurns caps limit at 100; page until turnCap is satisfied.
+    /** @type {Array<{ id: string }>} */
+    const turnSummaries = [];
+    for (let offset = 0; turnSummaries.length < turnCap; offset += 100) {
+      const pageLimit = Math.min(100, turnCap - turnSummaries.length);
+      const page = turns.listTurns({ projectId, conversationId, limit: pageLimit, offset });
+      turnSummaries.push(...page);
+      if (page.length < pageLimit) break;
+    }
 
     // Import-only conversations have no event tip/snapshot; return the body.
     if (importedMessages.length > 0 && turnSummaries.length === 0) {

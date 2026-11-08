@@ -61,6 +61,9 @@ function decodePreviewToken(token) {
   return payload;
 }
 
+/** Serialize integrate mutations per association so concurrent apply cannot race. */
+const integrateInFlight = new Map();
+
 /**
  * @param {{ get: (id: string) => any, setDisposition: (id: string, disposition: string, note?: string|null) => any }} store
  * @param {{ id: string, dryRun?: boolean, previewToken?: string }} args
@@ -69,6 +72,19 @@ function decodePreviewToken(token) {
 export async function integrateAssociationWorktree(store, args, hooks = {}) {
   const associationId = typeof args?.id === 'string' ? args.id : null;
   if (!associationId) throw new Error('delegation_integrate requires id');
+  if (integrateInFlight.has(associationId)) {
+    throw new Error('Integrate already in progress for this association; wait for the in-flight receipt');
+  }
+  integrateInFlight.set(associationId, Date.now());
+  try {
+    return await integrateAssociationWorktreeUnlocked(store, args, hooks);
+  } finally {
+    integrateInFlight.delete(associationId);
+  }
+}
+
+async function integrateAssociationWorktreeUnlocked(store, args, hooks = {}) {
+  const associationId = typeof args?.id === 'string' ? args.id : null;
   const dryRun = args?.dryRun === true;
   const association = store.get(associationId);
   if (!association) throw new Error('association not found');
@@ -203,11 +219,11 @@ export async function integrateAssociationWorktree(store, args, hooks = {}) {
   }
 
   try {
-    const updated = store.setDisposition(
+    const updated = await Promise.resolve(store.setDisposition(
       associationId,
       'integrated',
       `Merged ${expectedBranch} (${sourceSha.slice(0, 12)}) into ${targetBranch}. Finish/cleanup remain explicit.`,
-    );
+    ));
     return {
       ...previewPayload,
       previewToken: args.previewToken,

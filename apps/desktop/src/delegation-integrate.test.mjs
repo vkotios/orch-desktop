@@ -191,4 +191,77 @@ describe("delegation integrate", () => {
     ).rejects.toThrow(/not a successful clean review|No exact review|source SHA|review/i);
     expect(seen).toEqual([currentSha]);
   });
+
+  it("reports receipt failure after a successful merge without claiming clean association state", { timeout: 30_000 }, async () => {
+    const { repo, wt, target } = makeRepo();
+    const association = {
+      id: "assoc-receipt",
+      repoPath: repo,
+      worktreePath: wt,
+      wp: "cho-05",
+      slice: "delegate",
+      disposition: "accepted",
+      stage: "recorded",
+      runId: "run-1",
+    };
+    const preview = await integrateAssociationWorktree(
+      {
+        get: () => ({ ...association, disposition: "accepted" }),
+        setDisposition: () => association,
+      },
+      { id: "assoc-receipt", dryRun: true },
+      okHooks,
+    );
+    await expect(
+      integrateAssociationWorktree(
+        {
+          get: () => ({ ...association, disposition: "accepted" }),
+          setDisposition: () => {
+            throw new Error("disk full");
+          },
+        },
+        { id: "assoc-receipt", previewToken: preview.previewToken },
+        okHooks,
+      ),
+    ).rejects.toThrow(/Git merge succeeded but association receipt failed|do not re-merge/i);
+    // Merge landed (merge commit) even though the association receipt failed.
+    expect(git(repo, ["rev-parse", "--abbrev-ref", "HEAD"])).toBe(target);
+    expect(fs.existsSync(path.join(repo, "feature.txt"))).toBe(true);
+    expect(git(repo, ["merge-base", "--is-ancestor", preview.sourceSha, "HEAD"]) || true).toBeTruthy();
+  });
+
+  it("serializes concurrent integrate applies for the same association", { timeout: 30_000 }, async () => {
+    const { repo, wt } = makeRepo();
+    const association = {
+      id: "assoc-lock",
+      repoPath: repo,
+      worktreePath: wt,
+      wp: "cho-05",
+      slice: "delegate",
+      disposition: "accepted",
+      stage: "recorded",
+      runId: "run-1",
+    };
+    let disposition = "accepted";
+    const store = {
+      get: () => ({ ...association, disposition }),
+      setDisposition: async (id, next, note) => {
+        await new Promise((r) => setTimeout(r, 80));
+        disposition = next;
+        return { ...association, id, disposition: next, note };
+      },
+    };
+    const preview = await integrateAssociationWorktree(store, { id: "assoc-lock", dryRun: true }, okHooks);
+    const first = integrateAssociationWorktree(
+      store,
+      { id: "assoc-lock", previewToken: preview.previewToken },
+      okHooks,
+    );
+    await new Promise((r) => setTimeout(r, 10));
+    await expect(
+      integrateAssociationWorktree(store, { id: "assoc-lock", previewToken: preview.previewToken }, okHooks),
+    ).rejects.toThrow(/already in progress|in-flight receipt/i);
+    await first;
+    expect(disposition).toBe("integrated");
+  });
 });

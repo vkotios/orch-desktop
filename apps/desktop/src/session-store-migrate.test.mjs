@@ -102,4 +102,28 @@ describe("session-store migrate", () => {
     expect(result.noop).toBe(true);
     expect(result.applied).toEqual([]);
   });
+
+  it("recovers a crash-left migration lock owned by a dead pid", () => {
+    const file = tempDb("migrate-stale-lock.sqlite3");
+    craftV1Database(file);
+    const lockPath = `${file}.migrate.lock`;
+    // Synthetic dead owner: pid that is extremely unlikely to be alive.
+    fs.writeFileSync(lockPath, "2147483646\n1\n", "utf8");
+    const result = migrateSessionStore({ databasePath: file });
+    expect(result.noop).toBe(false);
+    expect(fs.existsSync(lockPath)).toBe(false);
+    const store = openSessionStore({ databasePath: file });
+    expect(store.schemaVersion).toBe(2);
+    store.close();
+  });
+
+  it("refuses to steal a migration lock owned by a live pid", { timeout: 15_000 }, () => {
+    const file = tempDb("migrate-live-lock.sqlite3");
+    craftV1Database(file);
+    const lockPath = `${file}.migrate.lock`;
+    fs.writeFileSync(lockPath, `${process.pid}\n${Date.now()}\n`, "utf8");
+    expect(() => migrateSessionStore({ databasePath: file })).toThrow(/ERR_BUSY|lock held/);
+    expect(fs.existsSync(lockPath)).toBe(true);
+    fs.unlinkSync(lockPath);
+  });
 });

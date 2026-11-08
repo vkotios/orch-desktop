@@ -19,6 +19,7 @@ import {
   defaultNativeModel, failNativeTurn, markNativeCancelling, markNativeClarificationAnswering, markNativeUnavailable,
   NATIVE_MAX_SESSIONS, NATIVE_POLL_INTERVAL_MS, type NativeUiSession,
 } from "../lib/native-chat-state";
+import { shouldSendOnComposerKey } from "../lib/composer-keyboard";
 import "./native-chat.css";
 
 type Project = NativePrepareResult;
@@ -611,7 +612,7 @@ export function NativeChat() {
     updateSettings({ model, effort });
   }
   function composerKey(e: KeyboardEvent<HTMLTextAreaElement>) {
-    if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); }
+    if (shouldSendOnComposerKey(e)) { e.preventDefault(); void send(); }
   }
 
   return <div className="native-shell">

@@ -1,7 +1,7 @@
 # Progress matrix — Cursor completion continuation
 
-Europe/London. Candidate HEAD continues past Codex controller recheck of
-`25b25a4` (`docs/reviews/CURSOR-R1-R10-RECHECK-2026-11-06.md`, B1–B4).
+Europe/London. Candidate continues past E1/E2 closure at `5537a77`
+(`docs/reviews/CURSOR-D1-D4-RECHECK-2026-11-06.md` controller addendum).
 
 Status vocabulary:
 
@@ -15,45 +15,39 @@ Status vocabulary:
 
 | ID | Status | Notes |
 | --- | --- | --- |
-| R1 | Implemented + locally checked (partial) | Host module closure + staged-host import probe pass; durable/delegation staged journeys and installer rebuild/rehash remain open |
-| R2 | Implemented + locally checked (partial) | VACUUM INTO backup/rollback + exclusive lock; crash-left lock dead-owner recovery and full concurrent-writer qualification remain |
-| R3 | Implemented + locally checked (partial) | B1 + D1 + E1: exact run/review + `reviewed`/`clean`; Git-resolved source SHA required before review; no association-field SHA |
-| R4 | Implemented + locally checked (partial) | Preview token binds source/target SHAs; stale apply refuses. End-to-end host mutation serialization / post-merge receipt recovery still need qualification |
-| R5 | Implemented + locally checked (partial) | B4 + S5 + D2: prior-owner ack authorizes current fence/`verifyOwnerEvidence` in the writer tx (denied proof refuses); no adoption of prior `hostGeneration` |
-| R6 | Implemented + locally checked (partial) | B2 + D4 + E2: parts retained on completed messages; durable catch-up after live completion yields `abc`. RUN-02/04 rendered journeys remain |
-| R7 | Implemented + locally checked (partial) | B3 + D3: import body prefixes hydrate; later native turns compose into hydrate/export. Full event paging beyond window still open |
-| R8 | Implemented + locally checked (partial) | Committed merge-base…branch patch; dirty/untracked overlay on normal merge-base path incomplete |
-| R9 | Implemented + locally checked (partial) | Renderer worktree/run injection stripped; host writes orch success associations. Prepared-project/conversation/approved-route binding qualification remains |
-| R10 | Implemented + locally checked (partial) | Exact `resolution === "open"` filter; rendered conflict resolution lifecycle still needs consumer tests |
+| R1 | Implemented + locally checked (partial) | Host module closure + staged-host import probe; installer rebuild/rehash on post-E1/E2 head still required for release candidate |
+| R2 | Implemented + locally checked | VACUUM INTO backup/rollback + exclusive lock; crash-left lock dead-owner reclaim + live-pid refuse tested |
+| R3 | Implemented + locally checked | Exact run/review + `reviewed`/`clean`; Git-resolved source SHA required before review |
+| R4 | Implemented + locally checked | Preview token binds source/target SHAs; stale apply refuses; receipt-fail after merge + per-association integrate serialization tested |
+| R5 | Implemented + locally checked | Prior-owner ack authorizes current fence/`verifyOwnerEvidence` in the writer tx |
+| R6 | Implemented + locally checked (partial) | Parts retained on completed messages; durable catch-up after live completion yields `abc`. Live RUN-02/04 rendered journeys remain owner/WebView |
+| R7 | Implemented + locally checked | Import body prefixes hydrate; later native turns compose; hydrate pages listTurns (100-cap) up to turnCap 500; export uses full hydrate caps |
+| R8 | Implemented + locally checked | Committed merge-base…branch patch + dirty/untracked overlay (`dirtyCount`) |
+| R9 | Implemented + locally checked | Renderer injection stripped; `admitOrchRunArgs` requires conversation + approved-route cli/model + prepared project path containment |
+| R10 | Implemented + locally checked | Exact `resolution === "open"` filter; host draft conflict list/resolve + restart draft retention journey tested |
 
-## Recheck defects B1–B4 / D1–D4
+## Recheck defects B1–B4 / D1–D4 / E1–E2
 
 | ID | Status | Fix |
 | --- | --- | --- |
-| B1 | Implemented + locally checked | Real bridge run/gate/review adapters |
-| B2 | Implemented + locally checked | Shared `partId` on live+durable deltas |
-| B3 | Implemented + locally checked | Import → `large_bodies` (no tip-0 snapshot) |
-| B4 | Implemented + locally checked | `meta.hostGeneration` + `recoveryNotice` |
-| D1 | Implemented + locally checked | Exact run + `reviewed` + clean; E1 binds Git-resolved source SHA before review |
-| D2 | Implemented + locally checked | Fence + `verifyOwnerEvidence` in prior-owner ack tx |
-| D3 | Implemented + locally checked | Compose import prefix with later native turns |
-| D4 | Implemented + locally checked | Ordered parts; E2 retains parts after live completion for durable catch-up |
-| E1 | Implemented + locally checked | Integrate resolves branch tip SHA before `inspectReview`; association SHA fields ignored |
-| E2 | Implemented + locally checked | Finished-turn durable `message_delta` rebuilds text from retained message parts |
+| B1–B4 | Implemented + locally checked | See prior commits through `15f79f5` / `2e8101c` |
+| D1–D4 | Implemented + locally checked | See `4ccf930` |
+| E1 | Implemented + locally checked | Integrate resolves branch tip SHA before `inspectReview` |
+| E2 | Implemented + locally checked | Finished-turn durable catch-up rebuilds text from retained parts |
 
 ## Work packages
 
 | Package | Implemented | Locally checked | Unfinished | Externally blocked |
 | --- | --- | --- | --- | --- |
-| CHO-03 | Recovery + migrate safety + body-backed import + current-host reconcile + prior-owner ack + partId replay + import/export UI | package + B1–B4 + prior-ack tests | Turn/event paging beyond hydrate window; complete export of very large histories; restore/clone identity rotation | Live reopen with real CLIs |
-| CHO-04/05 | Admission harden; real bridge integrate evidence; preview binding; baseline Diff; host-owned association resources | integrate + evidence adapter tests | Live delegated change + independent review round through orch | Reviewer quota; live orch worker |
-| CHO-06 | Maintained Markdown/file refs; draft-conflict filter | unit tests | Real rendered viewport/keyboard journeys (CSS string checks are not layout proof) | Owner 125/150% scaling |
-| CHO-07 | Runtime closure; CSP/docs/CI; advisory release-scan | staged-host probe | Installer rebuild+rehash after closure; remote CI on final head | Clean-machine; signing; public repo |
-| CHO-08 | Evidence matrix maintained against recheck | local suites | — | AC-01/13/15 clean machine; live AC routes |
+| CHO-03 | Recovery + migrate stale-lock reclaim + body-backed import + paging/export caps + draft conflict host journey + prior-owner ack | package + migrate/paging/draft/export tests | Restore/clone identity rotation; rendered long-history WebView journey | Live reopen with real CLIs |
+| CHO-04/05 | Conversation/route/project admission; dirty Diff overlay; integrate receipt recovery + serialize; uncertain adopt/abandon | admit + integrate + diff + agent-task tests | Live delegated change + independent review round through orch | Reviewer quota; live orch worker |
+| CHO-06 | Landmark/flex/overflow layout contract + composer Enter keyboard helper | viewport + composer-keyboard tests | Owner 125/150% scaling + live WebView2 keyboard capture | Owner display matrix |
+| CHO-07 | Runtime closure; CSP/docs/CI; advisory release-scan | staged-host probe | Installer rebuild+rehash after this candidate; remote CI on final head | Clean-machine; signing; public repo |
+| CHO-08 | Evidence matrix maintained | local suites | — | AC-01/13/15 clean machine; live AC routes |
 
 ## Exact external blockers
 
 1. **Live Codex/Claude routes** — owner subscription/quota.
 2. **Clean Windows environment** — MSI/NSIS install/upgrade/uninstall.
-3. **Independent review** — approved orch reviewer availability (check route before declaring quota unavailable).
+3. **Independent review** — approved orch reviewer availability.
 4. **Owner authority** — push, tag, signing, public visibility.

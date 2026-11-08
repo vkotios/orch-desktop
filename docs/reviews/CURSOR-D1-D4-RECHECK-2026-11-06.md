@@ -1,5 +1,22 @@
 # D1–D4 recheck — 4ccf930
 
+## Controller closure recheck — 2026-11-08
+
+Candidate `5537a77`: **E1 and E2 below are resolved for the reported cases**.
+Integration now resolves the actual Git source SHA before review inspection; the
+host passes that SHA and the adapter refuses missing/mismatched commit evidence.
+The integration regression test rejects an extra post-review commit even when
+stale association SHA fields claim otherwise. Completed assistant messages retain
+their parts; replay after live completion recovers the lost middle part without
+reopening the turn. The controller reran the exact E2 sequence: text `abc`, outcome
+`completed`, busy false, active turn null.
+
+Focused integration/evidence/chat-state tests: **44/44 passed**. Root typecheck
+passed. No full suite, build, installer, live-provider or clean-machine acceptance
+was rerun in this narrow recheck. Remaining partial work in the progress matrix is
+still open; this closure does not accept the entire implementation plan. The
+findings below preserve the historical `4ccf930` assessment.
+
 Date: 2026-11-06, Europe/London. Codex controller review of `4ccf930`.
 The earlier D2 current-owner authorization and D3 imported-history composition
 repairs are present. Exact run/review matching and successful review outcome

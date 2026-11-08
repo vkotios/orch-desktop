@@ -17,6 +17,7 @@ const task = {
   model: "fixture-model",
   handoffText: "Inspect src/example.ts",
   effort: "high",
+  conversationId: "conv-a",
 };
 const ok = (output: object = {}) => ({
   ok: true,

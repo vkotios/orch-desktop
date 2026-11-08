@@ -17,6 +17,7 @@ import {
   deriveReviewInspection,
   deriveRunInspection,
 } from './delegation-integrate-evidence.mjs';
+import { admitOrchRunArgs, stripPrivilegedOrchFlags } from './delegation-admit.mjs';
 
 const execFileAsync = promisify(execFile);
 
@@ -99,6 +100,42 @@ async function readAssociationWorktreeDiff(store, args) {
   if (focus && (focus.includes('..') || path.isAbsolute(focus))) {
     throw new Error('diff path must be repository-relative');
   }
+  function parsePorcelain(statusOut) {
+    return statusOut
+      .split(/\r?\n/)
+      .map((line) => line.trimEnd())
+      .filter((line) => line.length > 0)
+      .map((line) => {
+        const status = line.slice(0, 2);
+        const filePath = line.slice(3).replace(/\\/g, '/');
+        return { status, path: filePath, dirty: true };
+      })
+      .filter((entry) => entry.path);
+  }
+
+  let dirtyFiles = [];
+  let dirtyPatch = null;
+  const statusOut = await git(resolved, ['status', '--porcelain', '--untracked-files=all']);
+  dirtyFiles = parsePorcelain(statusOut).slice(0, 200);
+  if (focus) {
+    try {
+      const raw = await git(resolved, ['diff', '--no-ext-diff', '--', focus]);
+      const untracked = dirtyFiles.some((f) => f.path === focus && f.status.includes('?'));
+      dirtyPatch = raw.length > 0
+        ? (raw.length > 200_000 ? `${raw.slice(0, 200_000)}\n... truncated` : raw)
+        : (untracked ? `(untracked) ${focus}\n` : null);
+    } catch {
+      dirtyPatch = null;
+    }
+  } else if (dirtyFiles.length > 0) {
+    try {
+      const raw = await git(resolved, ['diff', '--no-ext-diff']);
+      dirtyPatch = raw.length > 200_000 ? `${raw.slice(0, 200_000)}\n... truncated` : raw;
+    } catch {
+      dirtyPatch = null;
+    }
+  }
+
   if (baseline) {
     const nameStatus = await git(repoRoot, [
       'diff', '--name-status', '--no-ext-diff', `${baseline}...${branch}`,
@@ -109,40 +146,38 @@ async function readAssociationWorktreeDiff(store, args) {
       .filter((line) => line.length > 0)
       .map((line) => {
         const parts = line.split(/\t/);
-        return { status: parts[0] || 'M', path: (parts[parts.length - 1] || '').replace(/\\/g, '/') };
+        return { status: parts[0] || 'M', path: (parts[parts.length - 1] || '').replace(/\\/g, '/'), dirty: false };
       })
       .filter((entry) => entry.path)
       .slice(0, 200);
+    // Overlay in-progress dirty/untracked worktree paths not already listed.
+    const seen = new Set(files.map((f) => f.path));
+    for (const dirty of dirtyFiles) {
+      if (!seen.has(dirty.path)) {
+        files.push(dirty);
+        seen.add(dirty.path);
+      } else {
+        const idx = files.findIndex((f) => f.path === dirty.path);
+        if (idx >= 0) files[idx] = { ...files[idx], dirty: true, worktreeStatus: dirty.status };
+      }
+    }
+    files = files.slice(0, 200);
     if (focus) {
       const raw = await git(repoRoot, [
         'diff', '--no-ext-diff', `${baseline}...${branch}`, '--', focus,
       ]);
-      patch = raw.length > 200_000 ? `${raw.slice(0, 200_000)}\n… truncated` : raw;
+      const committed = raw.length > 200_000 ? `${raw.slice(0, 200_000)}\n... truncated` : raw;
+      patch = [committed, dirtyPatch].filter((p) => typeof p === 'string' && p.length > 0).join('\n') || null;
     } else if (files.length > 0) {
       const raw = await git(repoRoot, [
         'diff', '--no-ext-diff', `${baseline}...${branch}`,
       ]);
-      patch = raw.length > 200_000 ? `${raw.slice(0, 200_000)}\n… truncated` : raw;
+      const committed = raw.length > 200_000 ? `${raw.slice(0, 200_000)}\n... truncated` : raw;
+      patch = [committed, dirtyPatch].filter((p) => typeof p === 'string' && p.length > 0).join('\n') || null;
     }
   } else {
-    const statusOut = await git(resolved, ['status', '--porcelain', '--untracked-files=all']);
-    files = statusOut
-      .split(/\r?\n/)
-      .map((line) => line.trimEnd())
-      .filter((line) => line.length > 0)
-      .map((line) => {
-        const status = line.slice(0, 2);
-        const filePath = line.slice(3).replace(/\\/g, '/');
-        return { status, path: filePath };
-      })
-      .slice(0, 200);
-    if (focus) {
-      const raw = await git(resolved, ['diff', '--no-ext-diff', '--', focus]);
-      patch = raw.length > 200_000 ? `${raw.slice(0, 200_000)}\n… truncated` : raw;
-    } else if (files.length > 0) {
-      const raw = await git(resolved, ['diff', '--no-ext-diff']);
-      patch = raw.length > 200_000 ? `${raw.slice(0, 200_000)}\n… truncated` : raw;
-    }
+    files = dirtyFiles;
+    patch = dirtyPatch;
   }
   return {
     associationId,
@@ -151,6 +186,7 @@ async function readAssociationWorktreeDiff(store, args) {
     branch,
     baseline,
     files,
+    dirtyCount: dirtyFiles.length,
     path: focus,
     patch,
     readOnly: true,
@@ -552,39 +588,16 @@ export async function runHost(options = {}) {
      * self-authorize models, force release, or choose execution directories.
      */
     async function admitOrchArgs(command, rawArgs) {
-      const args = rawArgs && typeof rawArgs === 'object' && !Array.isArray(rawArgs)
-        ? { ...rawArgs }
-        : {};
-      delete args.ownerApprovedModel;
-      delete args.allow;
+      const args = stripPrivilegedOrchFlags(rawArgs);
       // Claimant is always the host-backed owner principal for desktop mutations.
-      if ('by' in args) args.by = 'owner';
       if (command === 'orch_run') {
-        delete args.force;
         const associationId = typeof args.associationId === 'string' ? args.associationId : null;
         if (!associationId) {
           throw new Error('orch_run requires a host associationId so dir/claimant can be derived');
         }
         const store = await getDelegationStore();
         const association = store.get(associationId);
-        if (!association) throw new Error('orch_run association not found');
-        if (!association.worktreePath) {
-          throw new Error('orch_run association has no worktree path yet');
-        }
-        if (association.disposition !== 'none') {
-          throw new Error('orch_run association is no longer open');
-        }
-        const worktreePath = path.resolve(association.worktreePath);
-        const repoRoot = path.resolve(association.repoPath);
-        const rel = path.relative(repoRoot, worktreePath);
-        if (rel.startsWith('..') || path.isAbsolute(rel)) {
-          throw new Error('orch_run worktree path is outside the associated repository');
-        }
-        args.dir = worktreePath;
-        args.wp = association.wp;
-        args.slice = association.slice;
-        args.by = 'owner';
-        return args;
+        return admitOrchRunArgs(association, args);
       }
       if (command === 'orch_worktree_create') {
         delete args.force;
