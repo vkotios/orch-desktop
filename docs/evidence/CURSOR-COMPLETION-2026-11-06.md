@@ -1,7 +1,7 @@
 # Cursor completion evidence — 2026-11-06 (candidate update 2026-11-08)
 
 Europe/London. Final accessible candidate tip:
-`273bea03065050d88de6a9c4533e7ee82e4fddb2` on `codex/cho-v01-foundation`
+`4fbabb62eea67414d608536a6db169bef0bd19d5` on `codex/cho-v01-foundation`
 (docs/evidence only above binary source
 `9911924ae99dc95e5fa482210ad6e814fb468c57`; audited base
 `76076fb3cd6c82f3ca7d74220d226e34955521c4`).
@@ -26,7 +26,7 @@ Europe/London. Final accessible candidate tip:
 
 | Item | SHA-256 / identity |
 | --- | --- |
-| Git tip (docs) | `273bea03065050d88de6a9c4533e7ee82e4fddb2` |
+| Git tip (docs) | `4fbabb62eea67414d608536a6db169bef0bd19d5` |
 | Binary source HEAD | `9911924ae99dc95e5fa482210ad6e814fb468c57` |
 | `apps/desktop/src-tauri/.runtime/runtime-manifest.json` | `EB673CEDACDD211B12CCE93A39F4B0256A4E3EAE3E32A66662E7F950A8477EE4` |
 | Staged Node | `v24.22.2` win-x64 (`node.exe` sha256 `1c331340fa6cac5e4294725959070a143fa0507195a78ad77eed7943f719aac9`) |

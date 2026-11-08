@@ -23,7 +23,7 @@ integration, recovery, and release qualification.
 ## Active continuation checkpoint — 2026-11-08
 
 Audited base remains `76076fb3cd6c82f3ca7d74220d226e34955521c4`. Accessible Cursor
-completion candidate tip: **`273bea0`** (binaries from **`9911924`**; see
+completion candidate tip: **`4fbabb6`** (binaries from **`9911924`**; see
 [progress matrix](docs/evidence/PROGRESS-MATRIX-2026-11-06.md) and
 [evidence](docs/evidence/CURSOR-COMPLETION-2026-11-06.md)). Locally closed after
 E1/E2: hydrate paging/export, migrate stale-lock reclaim, conversation/route/
