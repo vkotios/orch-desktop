@@ -1,8 +1,10 @@
 # Cursor completion evidence — 2026-11-06 (candidate update 2026-11-08)
 
-Europe/London. Final accessible candidate HEAD:
-`9911924ae99dc95e5fa482210ad6e814fb468c57` on `codex/cho-v01-foundation`
-(above audited base `76076fb3cd6c82f3ca7d74220d226e34955521c4`).
+Europe/London. Final accessible candidate tip:
+`273bea03065050d88de6a9c4533e7ee82e4fddb2` on `codex/cho-v01-foundation`
+(docs/evidence only above binary source
+`9911924ae99dc95e5fa482210ad6e814fb468c57`; audited base
+`76076fb3cd6c82f3ca7d74220d226e34955521c4`).
 
 ## Checks run (this candidate)
 
@@ -24,7 +26,8 @@ Europe/London. Final accessible candidate HEAD:
 
 | Item | SHA-256 / identity |
 | --- | --- |
-| Git HEAD | `9911924ae99dc95e5fa482210ad6e814fb468c57` |
+| Git tip (docs) | `273bea03065050d88de6a9c4533e7ee82e4fddb2` |
+| Binary source HEAD | `9911924ae99dc95e5fa482210ad6e814fb468c57` |
 | `apps/desktop/src-tauri/.runtime/runtime-manifest.json` | `EB673CEDACDD211B12CCE93A39F4B0256A4E3EAE3E32A66662E7F950A8477EE4` |
 | Staged Node | `v24.22.2` win-x64 (`node.exe` sha256 `1c331340fa6cac5e4294725959070a143fa0507195a78ad77eed7943f719aac9`) |
 | `apps/desktop/src-tauri/target/release/cho-desktop.exe` | `C71B46B59CD68EF5BCC27F74A5B88FA341875EE940A4BF03AE38331CACE4706F` |
