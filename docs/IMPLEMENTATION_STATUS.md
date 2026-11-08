@@ -4,20 +4,20 @@ Updated: 2026-11-06. Integration branch: `codex/cho-v01-foundation`. Native Code
 
 Product contract: [specification](PRODUCT_SPEC.md). Sequence: [plan](IMPLEMENTATION_PLAN.md). Sonnet findings: [validated dispositions](reviews/FINDINGS_DISPOSITION.md). Current package: [CHO-03 durable sessions](work-packages/CHO-03.md). Native Codex and Claude runtime and focused rendered conversation checks pass; broader [CHO-04 qualification](work-packages/CHO-04.md) remains open.
 
-## Current integrated-candidate assessment — 2026-11-06
+## Current integrated-candidate assessment — 2026-11-08
 
 Historical milestones below are not acceptance of the current release candidate.
-Audited base `76076fb` plus Cursor completion repairs: close/unknown settlement,
-native cleanup on settle failure, stranded-turn reconcile, UTF-8 body decode,
-durable catch-up recovery, tool-fact id stability, draft/history notices,
-host-admitted orch mutations, Finish preview/Stop, **explicit Git Integrate**,
-maintained Markdown/file refs, and session **schema migrate v1→v2**. Local
-verification: **743** desktop package tests (+ shared), typecheck, web build
-([progress](evidence/PROGRESS-MATRIX-2026-11-06.md)). Live CLI reopen,
-clean-machine installer, independent review, and remaining AC-01–15 release rows
-remain open or externally blocked. Follow
-[Cursor completion instructions](CURSOR_COMPLETION_INSTRUCTIONS.md) and the
-[audit](reviews/CURSOR-DELIVERY-REVIEW-2026-11-05.md).
+Accessible Cursor completion candidate HEAD `9911924` (after E1/E2 at `5537a77`):
+paging/export caps, migrate crash-lock reclaim, conversation/route/project
+admission, dirty Diff overlay, integrate receipt/serialize, draft restart
+journey, landmark/keyboard layout contracts, staged-host closure including
+`delegation-admit`, and rebuilt MSI/NSIS with recorded hashes
+([evidence](evidence/CURSOR-COMPLETION-2026-11-06.md),
+[progress](evidence/PROGRESS-MATRIX-2026-11-06.md)). Local verification: **770**
+desktop + 44 shared tests, typecheck, web build, cargo 12, `native:build`.
+The plan is **not** complete: live CLI, clean-machine install, independent
+review, remote CI, push/sign/publish remain owner-blocked. Follow
+[Cursor completion instructions](CURSOR_COMPLETION_INSTRUCTIONS.md).
 
 ## Durable storage foundation
 

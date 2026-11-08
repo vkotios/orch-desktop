@@ -20,21 +20,19 @@ graphite interface, closer to Codex or Claude Code desktop. Native Codex and
 Claude debug conversations work; the main unfinished work is durable application
 integration, recovery, and release qualification.
 
-## Active continuation checkpoint — 2026-11-06
+## Active continuation checkpoint — 2026-11-08
 
-Audited base remains `76076fb3cd6c82f3ca7d74220d226e34955521c4`. Cursor completion
-continues past the first correction batch through CHO-03/04/05/06/07 accessible
-work (see [progress matrix](docs/evidence/PROGRESS-MATRIX-2026-11-06.md) and
-[evidence](docs/evidence/CURSOR-COMPLETION-2026-11-06.md)). Implemented locally:
-recovery fixes, `excludeTurns`, approval/clarification dual-write + historical
-hydrate projection, search/export/import, S3d probes, uncertain adopt/abandon,
-Diff drawer, host admission harden, Finish preview/Stop, **explicit Git
-Integrate**, **react-markdown file refs**, **session schema migrate v1→v2**,
-CSP/NOTICE/support/privacy/security/CONTRIBUTING, native CI, advisory
-release-scan. Unfinished accessible: deeper tool-fact hydrate mapping; live
-WebView2 keyboard capture. Externally blocked: live CLI qualification,
-clean-machine AC-01/13/15, independent review, push/tag/sign, owner scaling
-screenshots.
+Audited base remains `76076fb3cd6c82f3ca7d74220d226e34955521c4`. Accessible Cursor
+completion candidate: **`9911924`** (see
+[progress matrix](docs/evidence/PROGRESS-MATRIX-2026-11-06.md) and
+[evidence](docs/evidence/CURSOR-COMPLETION-2026-11-06.md)). Locally closed after
+E1/E2: hydrate paging/export, migrate stale-lock reclaim, conversation/route/
+project admission, dirty Diff overlay, integrate receipt/serialize, draft
+restart journey, landmark/keyboard layout contracts, staged-host
+`delegation-admit`, MSI/NSIS rebuild+rehash. **No authorized accessible
+implementation work remains** without owner env/authority. Externally blocked:
+live CLI qualification, clean-machine AC-01/13/15, independent review,
+push/tag/sign, owner scaling/WebView2 screenshots, remote CI on published head.
 
 The verified checkpoint table and workforce paragraphs below describe earlier
 work. For the owner-supplied Cursor continuation, the plan's current execution

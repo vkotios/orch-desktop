@@ -15,7 +15,7 @@ Status vocabulary:
 
 | ID | Status | Notes |
 | --- | --- | --- |
-| R1 | Implemented + locally checked (partial) | Host module closure + staged-host import probe; installer rebuild/rehash on post-E1/E2 head still required for release candidate |
+| R1 | Implemented + locally checked | Host module closure + staged-host import probe; installer rebuild+rehash recorded for `9911924` |
 | R2 | Implemented + locally checked | VACUUM INTO backup/rollback + exclusive lock; crash-left lock dead-owner reclaim + live-pid refuse tested |
 | R3 | Implemented + locally checked | Exact run/review + `reviewed`/`clean`; Git-resolved source SHA required before review |
 | R4 | Implemented + locally checked | Preview token binds source/target SHAs; stale apply refuses; receipt-fail after merge + per-association integrate serialization tested |
@@ -42,7 +42,7 @@ Status vocabulary:
 | CHO-03 | Recovery + migrate stale-lock reclaim + body-backed import + paging/export caps + draft conflict host journey + prior-owner ack | package + migrate/paging/draft/export tests | Restore/clone identity rotation; rendered long-history WebView journey | Live reopen with real CLIs |
 | CHO-04/05 | Conversation/route/project admission; dirty Diff overlay; integrate receipt recovery + serialize; uncertain adopt/abandon | admit + integrate + diff + agent-task tests | Live delegated change + independent review round through orch | Reviewer quota; live orch worker |
 | CHO-06 | Landmark/flex/overflow layout contract + composer Enter keyboard helper | viewport + composer-keyboard tests | Owner 125/150% scaling + live WebView2 keyboard capture | Owner display matrix |
-| CHO-07 | Runtime closure; CSP/docs/CI; advisory release-scan | staged-host probe | Installer rebuild+rehash after this candidate; remote CI on final head | Clean-machine; signing; public repo |
+| CHO-07 | Runtime closure; CSP/docs/CI; advisory release-scan; installer rebuild+rehash | staged-host + native:build + cargo test | Remote CI on published final head | Clean-machine; signing; public repo |
 | CHO-08 | Evidence matrix maintained | local suites | — | AC-01/13/15 clean machine; live AC routes |
 
 ## Exact external blockers
