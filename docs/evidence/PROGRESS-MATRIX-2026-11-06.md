@@ -20,6 +20,12 @@ in-app restore and native restored-store qualification remain open. History
 expands beyond 500 turns and reports count/byte ceilings. The original `9302b87`
 binary receipt does not qualify this later working-tree source.
 
+The independent [Opus review](../reviews/OPUS-5.5-REVIEW-2026-11-11.md) refuted
+the earlier adopt/abandon and long-history completion claims. The
+[controller adjudication](../reviews/OPUS-ADJUDICATION-2026-11-11.md) records all
+eleven repairs and their current tests. Those corrections supersede the older
+rows below; source review does not establish live delegated-change acceptance.
+
 | ID | Status | Notes |
 | --- | --- | --- |
 | R1 | Implemented + locally checked | Host module closure + staged-host import probe; installer rebuild+rehash recorded for `9302b87` |

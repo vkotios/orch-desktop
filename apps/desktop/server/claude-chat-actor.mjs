@@ -415,5 +415,15 @@ export function createClaudeChatActor(options) {
     })();
     return closePromise;
   }
-  return { send, cancel, respond, answer, touch, close };
+  async function forgetSession(id) {
+    if (active?.sessionId === id) throw new Error("Cannot evict an active Claude session");
+    const session = sessions.get(id);
+    if (!session) return;
+    session.token = null;
+    if (session.opening) await session.opening;
+    if (session.lateCleanupError) throw session.lateCleanupError;
+    if (session.client) await session.client.close();
+    sessions.delete(id);
+  }
+  return { send, cancel, respond, answer, touch, close, forgetSession };
 }

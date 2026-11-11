@@ -517,6 +517,7 @@ export function nativeChatClose(
 }
 
 export interface NativeConversationSummary {
+  archived?: boolean;
   id: string;
   controller: NativeController;
   title: string;
@@ -526,7 +527,14 @@ export interface NativeConversationSummary {
   updatedAtMs: number;
 }
 
+export function nativeChatForgetSession(generation: string, projectToken: string, sessionId: string) {
+  return invokeNative<{ forgotten: boolean }>("native_chat_forget_session", { generation, projectToken, sessionId });
+}
+
 export interface NativeHydratedMessage {
+  imported?: boolean;
+  importIndex?: number;
+  parts?: Array<{ partId: string; text: string; seq: number | null; order: number }>;
   id: string;
   role: "user" | "assistant";
   text: string;
@@ -553,6 +561,8 @@ export interface NativeHydratedConversation {
   hasMoreEvents: boolean;
   hasMoreTurns?: boolean;
   hasMoreBytes?: boolean;
+  beforeTurnSeq?: number;
+  beforeImportedIndex?: number;
   turnsLoaded?: number;
   turnLimit?: number;
 }
@@ -560,13 +570,15 @@ export interface NativeHydratedConversation {
 export function nativeChatListConversations(
   generation: string,
   projectToken: string,
-  options: { query?: string; includeArchived?: boolean } = {},
-): Promise<{ generation: string; projectId?: string; query?: string; conversations: NativeConversationSummary[] }> {
+  options: { query?: string; includeArchived?: boolean; offset?: number; limit?: number } = {},
+): Promise<{ generation: string; projectId?: string; query?: string; hasMore?: boolean; conversations: NativeConversationSummary[] }> {
   return invokeNative("native_chat_list_conversations", {
     generation,
     projectToken,
     ...(typeof options.query === "string" ? { query: options.query } : {}),
     ...(options.includeArchived === true ? { includeArchived: true } : {}),
+    ...(typeof options.offset === "number" ? { offset: options.offset } : {}),
+    ...(typeof options.limit === "number" ? { limit: options.limit } : {}),
   });
 }
 
@@ -574,6 +586,7 @@ export function nativeChatExportConversation(
   generation: string,
   projectToken: string,
   conversationId: string,
+  options: { messageOffset?: number; expectedEventTip?: number } = {},
 ): Promise<{
   generation: string;
   export: {
@@ -585,6 +598,7 @@ export function nativeChatExportConversation(
     generation,
     projectToken,
     conversationId,
+    ...options,
   });
 }
 
@@ -620,7 +634,7 @@ export function nativeChatHydrateConversation(
   generation: string,
   projectToken: string,
   conversationId: string,
-  options: { maxEventPages?: number; turnLimit?: number } = {},
+  options: { maxEventPages?: number; turnLimit?: number; beforeTurnSeq?: number; beforeImportedIndex?: number } = {},
 ): Promise<{ generation: string; conversation: NativeHydratedConversation | null }> {
   return invokeNative("native_chat_hydrate_conversation", {
     generation,
@@ -628,6 +642,8 @@ export function nativeChatHydrateConversation(
     conversationId,
     ...(Number.isSafeInteger(options.maxEventPages) ? { maxEventPages: options.maxEventPages } : {}),
     ...(Number.isSafeInteger(options.turnLimit) ? { turnLimit: options.turnLimit } : {}),
+    ...(Number.isSafeInteger(options.beforeTurnSeq) ? { beforeTurnSeq: options.beforeTurnSeq } : {}),
+    ...(Number.isSafeInteger(options.beforeImportedIndex) ? { beforeImportedIndex: options.beforeImportedIndex } : {}),
   });
 }
 

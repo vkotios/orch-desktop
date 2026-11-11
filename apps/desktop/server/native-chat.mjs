@@ -184,7 +184,7 @@ export function createNativeChatService(options) {
     if (evidence.reason !== "host-reclaim") return false;
     const priorPid = evidence.priorPid;
     if (!Number.isSafeInteger(priorPid) || priorPid <= 0) return false;
-    if (priorPid === process.pid) return false;
+    if (priorPid === process.pid && evidence.identityVerdict !== "mismatch") return false;
     let signalError = null;
     try {
       process.kill(priorPid, 0);
@@ -204,7 +204,7 @@ export function createNativeChatService(options) {
       signalError = err;
     }
     const code = signalError && typeof signalError === "object" ? signalError.code : null;
-    // ESRCH / missing process → dead. EPERM/EACCES → uncertain, not proof of death.
+    // ESRCH / missing process â†’ dead. EPERM/EACCES â†’ uncertain, not proof of death.
     if (code === "EPERM" || code === "EACCES") return false;
     if (code === "ESRCH") return true;
     // Unknown access failure is uncertain; do not steal the fence.
@@ -226,11 +226,16 @@ export function createNativeChatService(options) {
     if (persistence !== null) return persistence;
     if (persistenceDatabasePath === null) return null;
     const { createNativeSessionPersistence } = await import("./native-session-persistence.mjs");
+    // Read native identities asynchronously once at the recovery boundary.
+    // The synchronous writer uses this immutable snapshot, never a shell probe.
+    const { readProcessTable } = await import("../../../orch/src/procs.mjs");
+    const processTable = await readProcessTable({ deadlineMs: 3000 });
     persistence = createNativeSessionPersistence({
       databasePath: persistenceDatabasePath,
       hostGeneration: generation,
       livenessPath: `${persistenceDatabasePath}.liveness.json`,
       verifyOwnerEvidence: verifyPersistenceOwner,
+      processTable: () => processTable,
       verifyPendingApproval,
       verifyPendingQuestion,
     });
@@ -1776,11 +1781,13 @@ export function createNativeChatService(options) {
     state.prepared = null;
     const closing = (async () => {
       try {
-        if (context) await context.done;
-        if (context?.cleanupError) throw context.cleanupError;
-        try { await closeClient(owned); } catch (err) { state.dead = true; throw err; }
+        const errors = settleError ? [settleError] : [];
+        try { if (context) await context.done; } catch (err) { errors.push(err); }
+        if (context?.cleanupError) errors.push(context.cleanupError);
+        try { await closeClient(owned); } catch (err) { state.dead = true; errors.push(err); }
         while (mailbox.size) mailbox.drain();
-        if (settleError) throw settleError;
+        if (errors.length === 1) throw errors[0];
+        if (errors.length > 1) throw new AggregateError(errors, `Native close failed: ${errors.map((err) => err?.message ?? String(err)).join('; ')}`);
       } finally {
         if (state.context === context) state.context = null;
         state.closing = null;
@@ -1805,8 +1812,12 @@ export function createNativeChatService(options) {
     const durable = await ensurePersistence();
     if (!durable || !state.durableProject) return { generation, conversations: [] };
     const query = typeof args.query === "string" ? args.query.slice(0, 512) : "";
+    const offset = Number.isSafeInteger(args.offset) && args.offset >= 0 ? args.offset : 0;
+    const limit = Number.isSafeInteger(args.limit) ? Math.min(49, Math.max(1, args.limit)) : 20;
     const conversations = durable.listConversations({
       projectId: state.durableProject.id,
+      offset,
+      limit: limit + 1,
       query,
       includeArchived: args.includeArchived === true,
     });
@@ -1814,7 +1825,9 @@ export function createNativeChatService(options) {
       generation,
       projectId: state.durableProject.id,
       query,
-      conversations: conversations.map((c) => ({
+      hasMore: conversations.length > limit,
+      offset,
+      conversations: conversations.slice(0, limit).map((c) => ({
         id: c.id,
         controller: c.controller,
         title: c.title,
@@ -1837,6 +1850,8 @@ export function createNativeChatService(options) {
     const exported = durable.exportConversation({
       projectId: state.durableProject.id,
       conversationId: args.conversationId,
+      messageOffset: args.messageOffset ?? 0,
+      expectedEventTip: args.expectedEventTip,
     });
     if (!exported) throw new Error("conversation not found");
     return { generation, export: exported };
@@ -1932,6 +1947,8 @@ export function createNativeChatService(options) {
       conversationId: args.conversationId,
       maxEventPages,
       turnLimit,
+      ...(Number.isSafeInteger(args.beforeTurnSeq) ? { beforeTurnSeq: args.beforeTurnSeq } : {}),
+      ...(Number.isSafeInteger(args.beforeImportedIndex) ? { beforeImportedIndex: args.beforeImportedIndex, beforeTurnSeq: 1 } : {}),
     });
     if (conversation === null) return { generation, conversation: null };
     // Register the session so later sends reuse the durable conversation id
@@ -1973,6 +1990,14 @@ export function createNativeChatService(options) {
       case "native_chat_answer": return cmdQueueAnswer(args);
       case "direct_chat_cancel": return cmdCancel(args);
       case "native_chat_close": return cmdClose(args);
+      case "native_chat_forget_session": {
+        requireLive(); requireGeneration(args); requireToken(args);
+        if (!isValidId(args.sessionId)) throw new Error("Invalid session id");
+        if (state.active?.sessionId === args.sessionId || state.claudeDurable?.sessionId === args.sessionId || state.pendingSteers.size > 0) throw new Error("Cannot evict an active session or an unsettled answer");
+        if (state.prepared.actor?.forgetSession) await state.prepared.actor.forgetSession(args.sessionId);
+        state.sessions.delete(args.sessionId);
+        return { generation, forgotten: true };
+      }
       case "native_chat_list_conversations": return cmdListConversations(args);
       case "native_chat_hydrate_conversation": return cmdHydrateConversation(args);
       case "native_chat_export_conversation": return cmdExportConversation(args);
@@ -2005,5 +2030,16 @@ export function createNativeChatService(options) {
     }
   }
 
-  return { handle, close };
+  async function authorizeDelegationAssociation({ conversationId, repoPath }) {
+    requireLive();
+    if (!state.prepared || !isValidId(conversationId)) throw new Error("Delegation requires a prepared project and conversation");
+    const root = fs.realpathSync(state.prepared.path);
+    if (typeof repoPath !== "string" || fs.realpathSync(repoPath) !== root) throw new Error("Delegation repository does not match the prepared project");
+    const durable = await ensurePersistence();
+    if (!durable || !state.durableProject) throw new Error("Delegation requires durable conversation storage");
+    durable.ensureConversation({ projectId: state.durableProject.id, conversationId,
+      controller: state.prepared.controller, evidence: ownerEvidence() });
+    return { conversationId, repoPath: root };
+  }
+  return { handle, close, authorizeDelegationAssociation };
 }

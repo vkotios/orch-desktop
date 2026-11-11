@@ -1334,6 +1334,40 @@ describe("Claude durable dual-write", () => {
 });
 
 describe("Codex durable dual-write", () => {
+  it("OPUS-07: pages/searches archived chats and evicts idle metadata before opening a ninth", { timeout: 30_000 }, async () => {
+    const dir = tempDir(), generation = randomUUID(), client = new FakeClient();
+    const svc = createNativeChatService({ generation, databasePath: join(dir, "history.sqlite3"), onFatal: () => {},
+      openClient: async (opts) => { client.handlers = opts; return client; } });
+    const validated = await svc.handle("native_chat_validate_project", { path: dir });
+    await svc.handle("native_chat_prepare_project", { projectToken: validated.projectToken, trusted: true });
+    const args = { generation, projectToken: validated.projectToken }, ids = [];
+    try {
+      for (let i = 0; i < 13; i++) {
+        const r = await svc.handle("native_chat_import_transcript", { ...args, source: "history", sourceKey: `${i}`, title: `history-${i}`, messages: [{ role: "user", text: `${i}` }] });
+        ids.push(r.conversationId);
+      }
+      await svc.handle("native_chat_archive_conversation", { ...args, conversationId: ids[0], archived: true });
+      const all = [];
+      for (let offset = 0; ; offset += 5) {
+        const page = await svc.handle("native_chat_list_conversations", { ...args, includeArchived: true, limit: 5, offset });
+        all.push(...page.conversations);
+        if (!page.hasMore) break;
+      }
+      expect(new Set(all.map((c) => c.id)).size).toBe(13);
+      expect(all.some((c) => c.id === ids[0] && c.archived)).toBe(true);
+      const search = await svc.handle("native_chat_list_conversations", { ...args, query: "history-12" });
+      expect(search.conversations.map((c) => c.id)).toEqual([ids[12]]);
+      for (const id of ids.slice(0, 8)) await svc.handle("native_chat_hydrate_conversation", { ...args, conversationId: id });
+      await svc.handle("native_chat_forget_session", { ...args, sessionId: ids[0] });
+      await svc.handle("native_chat_hydrate_conversation", { ...args, conversationId: ids[8] });
+      await svc.handle("native_chat_forget_session", { ...args, sessionId: ids[1] });
+      const ack = await svc.handle("direct_chat_send", { ...sendFor(validated.projectToken), ...args, sessionId: randomUUID(), turnId: randomUUID() });
+      expect(ack.nativeThreadId).toBeTruthy();
+      completeTurn(client, ack.nativeThreadId, ack.nativeTurnId, "completed");
+      const retained = await svc.handle("native_chat_hydrate_conversation", { ...args, conversationId: ids[0] });
+      expect(retained.conversation.messages[0].text).toBe("0");
+    } finally { await svc.close(); }
+  });
   it("journals deltas and outcomes into SQLite while the mailbox still drains", async () => {
     const dir = tempDir();
     const dbPath = join(dir, "sessions.sqlite3");
@@ -1470,7 +1504,7 @@ describe("Codex durable dual-write", () => {
     }
   });
 
-  it("always closes the native client when durable settle throws", async () => {
+  it.each([false, true])("always closes the native client when durable settle throws (close failure: %s)", async (closeFails) => {
     const dir = tempDir();
     const client = new FakeClient();
     const generation = randomUUID();
@@ -1518,7 +1552,13 @@ describe("Codex durable dual-write", () => {
       effort: "medium",
     });
     client.note("turn/started", { threadId: "th-1", turn: { id: ack.nativeTurnId } });
-    await expect(svc.close()).rejects.toThrow(/injected storage write failure/);
+    if (closeFails) client.closeImpl = async () => { throw new Error("injected client close failure"); };
+    const failure = await svc.close().then(() => null, (err) => err);
+    expect(failure?.message).toMatch(/injected storage write failure/);
+    if (closeFails) {
+      expect(failure).toBeInstanceOf(AggregateError);
+      expect(failure.errors.some((err) => err.message.includes("injected client close failure"))).toBe(true);
+    }
     expect(settleCalls).toBeGreaterThan(0);
     expect(client.closes).toBeGreaterThanOrEqual(1);
   });

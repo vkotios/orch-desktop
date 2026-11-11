@@ -6,6 +6,8 @@
 // transactions. verifyOwnerEvidence is supplied by the host/native-chat owner.
 
 import { createHash, randomUUID } from "node:crypto";
+import { verifyIdentity } from "../../../orch/src/procs.mjs";
+import { creationPoint } from "../../../orch/src/process-time.mjs";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -24,23 +26,38 @@ import { createSessionApprovals } from "./session-approvals.mjs";
 import { createSessionClarifications } from "./session-clarifications.mjs";
 import { createProducerAuthorizer } from "./session-producer-transaction.mjs";
 
-function boundHydratedTranscript(payload) {
-  const ceiling = 900 * 1024; // headroom within the host's 1 MiB response frame
-  if (Buffer.byteLength(JSON.stringify(payload), "utf8") <= ceiling) return payload;
-  payload.hasMoreBytes = true;
-  for (const key of ["messages", "historicalApprovals", "historicalClarifications"]) {
-    const items = payload[key];
-    if (!Array.isArray(items)) continue;
-    let lo = 0, hi = items.length;
-    while (lo < hi) {
-      const mid = Math.ceil((lo + hi) / 2);
-      payload[key] = items.slice(0, mid);
-      if (Buffer.byteLength(JSON.stringify(payload), "utf8") <= ceiling) lo = mid;
-      else hi = mid - 1;
+function boundHydratedTranscript(payload, latest = true) {
+  const ceiling = 900 * 1024;
+  if (Buffer.byteLength(JSON.stringify(payload), "utf8") > ceiling) {
+    payload.hasMoreBytes = true;
+    for (const key of ["historicalClarifications", "historicalApprovals", "messages"]) {
+      const items = payload[key];
+      if (!Array.isArray(items)) continue;
+      const slice = (count) => {
+        let start = key === "messages" && latest ? items.length - count : 0;
+        let end = key === "messages" && latest ? items.length : count;
+        if (key === "messages") {
+          if (start > 0 && items[start]?.turnSeq != null && items[start - 1]?.turnSeq === items[start].turnSeq) start++;
+          if (end < items.length && items[end - 1]?.turnSeq != null && items[end]?.turnSeq === items[end - 1].turnSeq) end--;
+        }
+        return items.slice(start, Math.max(start, end));
+      };
+      let lo = 0, hi = items.length;
+      while (lo < hi) {
+        const mid = Math.ceil((lo + hi) / 2);
+        payload[key] = slice(mid);
+        if (Buffer.byteLength(JSON.stringify(payload), "utf8") <= ceiling) lo = mid;
+        else hi = mid - 1;
+      }
+      payload[key] = slice(lo);
+      if (key !== "messages" && payload[key].length < items.length) payload.historyMetadataTruncated = true;
+      if (Buffer.byteLength(JSON.stringify(payload), "utf8") <= ceiling) break;
     }
-    payload[key] = items.slice(0, lo);
-    if (Buffer.byteLength(JSON.stringify(payload), "utf8") <= ceiling) break;
   }
+  const firstTurn = payload.messages.find((m) => m.turnSeq != null);
+  const firstImport = payload.messages.find((m) => m.importIndex != null);
+  if (latest && firstTurn && (payload.hasMoreTurns || payload.hasMoreBytes)) payload.beforeTurnSeq = firstTurn.turnSeq;
+  if (latest && firstImport?.importIndex > 0) payload.beforeImportedIndex = firstImport.importIndex;
   return payload;
 }
 
@@ -76,34 +93,13 @@ function sleepMs(ms) {
   }
 }
 
-function readOwnProcessCreatedAt() {
+function readProcessSnapshotSync(pid) {
   try {
-    if (process.platform === "win32") {
-      const raw = execFileSync(
-        "powershell.exe",
-        [
-          "-NoProfile",
-          "-Command",
-          `(Get-CimInstance Win32_Process -Filter "ProcessId=${process.pid}").CreationDate`,
-        ],
-        { encoding: "utf8", timeout: 3000, windowsHide: true },
-      );
-      const text = String(raw || "").trim();
-      return text.length > 0 ? text : null;
-    }
-    if (process.platform === "linux") {
-      const stat = fs.readFileSync(`/proc/${process.pid}/stat`, "utf8");
-      const open = stat.indexOf("(");
-      const close = stat.lastIndexOf(")");
-      if (open < 0 || close <= open) return null;
-      const fields = stat.slice(close + 1).trim().split(/\s+/);
-      const startTicks = fields[19];
-      return startTicks ? `linux:${startTicks}` : null;
-    }
-  } catch {
-    return null;
-  }
-  return null;
+    const helper = new URL("../../../orch/src/procs.mjs", import.meta.url).href;
+    const script = `import {readProcessTable} from ${JSON.stringify(helper)}; const rows = await readProcessTable({pids:[Number(process.argv[1])],deadlineMs:3000}); process.stdout.write(JSON.stringify(rows));`;
+    return JSON.parse(execFileSync(process.execPath, ["--input-type=module", "-e", script, String(pid)],
+      { encoding: "utf8", timeout: 4500, windowsHide: true }));
+  } catch { return null; }
 }
 
 function withLivenessLock(filePath, fn) {
@@ -204,6 +200,12 @@ export function createNativeSessionPersistence(options) {
     throw new TypeError("createNativeSessionPersistence requires options");
   }
   const { databasePath, hostGeneration, verifyOwnerEvidence, now = Date.now } = options;
+  const processSnapshot = typeof options.processTable === "function" ? options.processTable : readProcessSnapshotSync;
+  let ownCreatedAt;
+  function readOwnProcessCreatedAt() {
+    if (ownCreatedAt === undefined) ownCreatedAt = processSnapshot(process.pid)?.find((row) => row.pid === process.pid)?.createdAt ?? null;
+    return ownCreatedAt;
+  }
   if (typeof databasePath !== "string" || databasePath.length === 0) {
     throw new TypeError("createNativeSessionPersistence requires databasePath");
   }
@@ -341,7 +343,8 @@ export function createNativeSessionPersistence(options) {
     let fence = bindings.getProducer({ projectId, conversationId });
     if (fence?.state === "held") {
       updateLivenessMap(livenessPath, (entries) => {
-        const prior = entries[conversationId];
+        const key = `${store.instanceId}:${conversationId}`;
+        const prior = entries[key] ?? entries[conversationId];
         const priorPid = prior && Number.isSafeInteger(prior.pid) ? prior.pid : null;
         const priorHost = prior && typeof prior.hostGeneration === "string" ? prior.hostGeneration : null;
         const priorCreatedAt = prior && typeof prior.createdAt === "string" ? prior.createdAt : null;
@@ -350,6 +353,10 @@ export function createNativeSessionPersistence(options) {
           && prior.ownerToken === fence.ownerToken
           && prior.generation === fence.generation;
         const signal = priorPid != null ? processSignalState(priorPid) : "invalid";
+        // Legacy locale-formatted timestamps are ambiguous; only canonical
+        // native creation identities can prove PID reuse.
+        const identity = sameOwnerRecord && signal === "alive" && creationPoint(priorCreatedAt)
+          ? verifyIdentity(priorPid, priorCreatedAt, processSnapshot(priorPid)).verdict : null;
         if (
           sameOwnerRecord
           && priorHost === hostGeneration
@@ -363,7 +370,8 @@ export function createNativeSessionPersistence(options) {
             state: "released",
             evidence,
           });
-          delete entries[conversationId];
+          delete entries[key];
+          if (entries[conversationId]?.ownerToken === fence.ownerToken) delete entries[conversationId];
           return entries;
         }
         if (
@@ -371,7 +379,7 @@ export function createNativeSessionPersistence(options) {
           && priorPid != null
           && priorHost != null
           && priorHost !== hostGeneration
-          && signal === "gone"
+          && (signal === "gone" || identity === "mismatch")
         ) {
           bindings.settleProducer({
             projectId,
@@ -384,10 +392,12 @@ export function createNativeSessionPersistence(options) {
               reason: "host-reclaim",
               priorPid,
               priorHostGeneration: priorHost,
-              ...(priorCreatedAt ? { priorCreatedAt, identityVerdict: "gone" } : { identityVerdict: "gone" }),
+              ...(priorCreatedAt ? { priorCreatedAt } : {}),
+              identityVerdict: identity === "mismatch" ? "mismatch" : "gone",
             },
           });
-          delete entries[conversationId];
+          delete entries[key];
+          if (entries[conversationId]?.ownerToken === fence.ownerToken) delete entries[conversationId];
           return entries;
         }
         if ((signal === "alive" || signal === "uncertain") && priorHost !== hostGeneration) {
@@ -419,7 +429,8 @@ export function createNativeSessionPersistence(options) {
 
     const createdAt = readOwnProcessCreatedAt();
     updateLivenessMap(livenessPath, (entries) => {
-      entries[conversationId] = {
+      entries[`${store.instanceId}:${conversationId}`] = {
+        instanceId: store.instanceId,
         pid: process.pid,
         hostGeneration,
         ownerToken: claim.ownerToken,
@@ -463,7 +474,8 @@ export function createNativeSessionPersistence(options) {
       evidence,
     });
     updateLivenessMap(livenessPath, (entries) => {
-      if (entries[conversationId]) delete entries[conversationId];
+      delete entries[`${store.instanceId}:${conversationId}`];
+      if (entries[conversationId]?.ownerToken === meta.ownerToken) delete entries[conversationId];
       return entries;
     });
     conversations.delete(conversationId);
@@ -506,13 +518,13 @@ export function createNativeSessionPersistence(options) {
     return Buffer.concat(chunks).toString("utf8");
   }
 
-  function listConversations({ projectId, limit = 50, query = "", includeArchived = false }) {
+  function listConversations({ projectId, limit = 50, offset = 0, query = "", includeArchived = false }) {
     assertOpen();
     requireUuid(projectId, "projectId");
     return records.listConversations({
       projectId,
       limit,
-      offset: 0,
+      offset,
       includeArchived: includeArchived === true,
       query: typeof query === "string" ? query : "",
     });
@@ -735,50 +747,24 @@ export function createNativeSessionPersistence(options) {
    * Export pages beyond the UI hydrate window (up to safety ceilings). If a
    * ceiling is hit, truncated is true and truncation names the limiting axis.
    */
-  function exportConversation({ projectId, conversationId }) {
-    assertOpen();
-    const hydrated = hydrateConversation({
-      projectId,
-      conversationId,
-      maxEventPages: EXPORT_EVENT_PAGE_CEILING,
-      turnLimit: EXPORT_TURN_CEILING,
-    });
+  function exportConversation({ projectId, conversationId, messageOffset = 0, expectedEventTip }) {
+    if (!Number.isSafeInteger(messageOffset) || messageOffset < 0) throw new Error("Invalid export message offset");
+    const hydrated = hydrateConversation({ projectId, conversationId,
+      maxEventPages: EXPORT_EVENT_PAGE_CEILING, turnLimit: EXPORT_TURN_CEILING,
+      latest: false, includeParts: false, bound: false });
     if (!hydrated) return null;
-    const truncation = {
-      events: Boolean(hydrated.hasMoreEvents),
-      turns: Boolean(hydrated.hasMoreTurns),
-      ...(hydrated.hasMoreBytes ? { bytes: true } : {}),
-    };
-    const payload = {
-      format: "cho.session.export.v1",
-      exportedAtMs: Date.now(),
-      projectId,
-      conversation: hydrated,
-      truncated: truncation.events || truncation.turns || Boolean(truncation.bytes),
-      truncation,
-    };
-    // Export crosses the same 1 MiB framed IPC boundary as other responses.
-    // Leave envelope headroom and disclose a byte ceiling rather than failing
-    // serialization after claiming a successful untruncated export.
-    const byteCeiling = 900 * 1024;
-    if (Buffer.byteLength(JSON.stringify(payload), "utf8") > byteCeiling) {
-      payload.truncated = true;
-      truncation.bytes = true;
-      for (const key of ["messages", "historicalApprovals", "historicalClarifications"]) {
-        const items = hydrated[key];
-        if (!Array.isArray(items)) continue;
-        let lo = 0, hi = items.length;
-        while (lo < hi) {
-          const mid = Math.ceil((lo + hi) / 2);
-          hydrated[key] = items.slice(0, mid);
-          if (Buffer.byteLength(JSON.stringify(payload), "utf8") <= byteCeiling) lo = mid;
-          else hi = mid - 1;
-        }
-        hydrated[key] = items.slice(0, lo);
-        if (Buffer.byteLength(JSON.stringify(payload), "utf8") <= byteCeiling) break;
-      }
-    }
-    return payload;
+    if (expectedEventTip !== undefined && expectedEventTip !== hydrated.eventTip) throw new Error("Conversation changed during export; restart the export");
+    const totalMessages = hydrated.messages.length;
+    if (messageOffset > totalMessages) throw new Error("Export offset exceeds history");
+    hydrated.messages = hydrated.messages.slice(messageOffset);
+    boundHydratedTranscript(hydrated, false);
+    const nextOffset = messageOffset + hydrated.messages.length;
+    if (nextOffset === messageOffset && nextOffset < totalMessages) throw new Error("An individual turn exceeds the export page byte ceiling");
+    const truncation = { events: Boolean(hydrated.hasMoreEvents), turns: Boolean(hydrated.hasMoreTurns),
+      ...(hydrated.hasMoreBytes ? { bytes: true } : {}), ...(hydrated.historyMetadataTruncated ? { metadata: true } : {}) };
+    return { format: "cho.session.export.v1", exportedAtMs: Date.now(), projectId, conversation: hydrated,
+      truncated: truncation.events || truncation.turns || Boolean(truncation.bytes), truncation,
+      pagination: { offset: messageOffset, nextOffset: nextOffset < totalMessages ? nextOffset : null, totalMessages } };
   }
 
   /**
@@ -828,9 +814,6 @@ export function createNativeSessionPersistence(options) {
     const importedMessages = messages.map((m, index) => {
       const role = m && typeof m.role === "string" ? m.role.slice(0, 32) : "assistant";
       const text = m && typeof m.text === "string" ? m.text : "";
-      if (text.length > 200_000) {
-        throw new Error(`importTranscript message ${index} exceeds 200KiB text bound`);
-      }
       return {
         id: `import-${importBatchId}-${index}`,
         role: role === "user" ? "user" : "assistant",
@@ -886,31 +869,36 @@ export function createNativeSessionPersistence(options) {
    * Page listTurns (API limit 100) up to turnCap. Probes one past the cap so
    * callers can disclose turn truncation even when the last page is full.
    */
-  function listTurnSummariesPaged({ projectId, conversationId, turnCap }) {
-    /** @type {Array<{ id: string }>} */
+  function listTurnSummariesPaged({ projectId, conversationId, turnCap, latest, beforeTurnSeq }) {
+    const total = store.transaction((tx) => tx.get(
+      "SELECT COUNT(*) AS count FROM turns WHERE conversation_id = ? AND seq < ?", [conversationId, beforeTurnSeq ?? Number.MAX_SAFE_INTEGER],
+    )).count;
+    const startOffset = latest ? Math.max(0, total - turnCap) : 0;
+    /** @type {Array<{ id: string, seq: number }>} */
     const turnSummaries = [];
-    for (let offset = 0; turnSummaries.length < turnCap; offset += LIST_TURNS_PAGE) {
-      const pageLimit = Math.min(LIST_TURNS_PAGE, turnCap - turnSummaries.length);
+    for (let offset = startOffset; turnSummaries.length < turnCap; offset += LIST_TURNS_PAGE) {
+      const pageLimit = Math.min(LIST_TURNS_PAGE, turnCap - turnSummaries.length, total - offset);
+      if (pageLimit <= 0) return { turnSummaries, hasMoreTurns: startOffset > 0 };
       const page = turns.listTurns({ projectId, conversationId, limit: pageLimit, offset });
       turnSummaries.push(...page);
       if (page.length < pageLimit) {
-        return { turnSummaries, hasMoreTurns: false };
+        return { turnSummaries, hasMoreTurns: startOffset > 0 };
       }
     }
     const probe = turns.listTurns({
       projectId,
       conversationId,
       limit: 1,
-      offset: turnSummaries.length,
+      offset: startOffset + turnSummaries.length,
     });
-    return { turnSummaries, hasMoreTurns: probe.length > 0 };
+    return { turnSummaries, hasMoreTurns: startOffset > 0 || (!latest && probe.length > 0) };
   }
 
   /**
    * Rebuild a UI-shaped transcript from durable turns + message_delta bodies.
    * Does not restore live approvals/clarifications (still memory-only).
    */
-  function hydrateConversation({ projectId, conversationId, maxEventPages = 64, turnLimit = 100 }) {
+  function hydrateConversation({ projectId, conversationId, maxEventPages = 64, turnLimit = 100, latest = true, includeParts = true, bound = true, beforeTurnSeq, beforeImportedIndex }) {
     assertOpen();
     requireUuid(projectId, "projectId");
     requireUuid(conversationId, "conversationId");
@@ -942,9 +930,11 @@ export function createNativeSessionPersistence(options) {
             projection?.kind === "imported_transcript" &&
             Array.isArray(projection.importedMessages)
           ) {
-            for (const item of projection.importedMessages) {
+            for (const [importIndex, item] of projection.importedMessages.entries()) {
+              if (beforeImportedIndex !== undefined && importIndex >= beforeImportedIndex) break;
               importedMessages.push({
                 id: item.id,
+                importIndex,
                 role: item.role === "user" ? "user" : "assistant",
                 text: typeof item.text === "string" ? item.text : "",
                 tools: [],
@@ -975,12 +965,13 @@ export function createNativeSessionPersistence(options) {
       projectId,
       conversationId,
       turnCap,
+      latest, beforeTurnSeq,
     });
 
     // Import-only conversations have no event tip/snapshot; return the body.
     if (importedMessages.length > 0 && turnSummaries.length === 0) {
       const native = bindings.getNativeRef({ projectId, conversationId });
-      return boundHydratedTranscript({
+      return (bound ? boundHydratedTranscript : (value) => value)({
         conversationId,
         projectId,
         controller: conversation.controller,
@@ -1001,16 +992,24 @@ export function createNativeSessionPersistence(options) {
         historicalApprovals: [],
         imported: true,
         importBatchId: importRow.importBatchId,
-      });
+      }, latest);
     }
 
-    /** @type {Map<string, string[]>} */
+    /** @type {Map<string, Array<{partId: string, text: string, seq: number, order: number}>>} */
     const deltaTexts = new Map();
     /** @type {Map<string, Array<{ id: string, title: string, status: string }>>} */
     const toolsByTurn = new Map();
     /** @type {Map<string, string>} */
     const outcomesByTurn = new Map();
-    let cursor = null;
+    // Start at the selected recent window, not at the beginning of an arbitrarily
+    // long event stream. Export uses an oldest-first window and starts at zero.
+    const firstSeq = latest && turnSummaries.length > 0 ? store.transaction((tx) => tx.get(
+      `SELECT MIN(e.seq) AS seq FROM events e JOIN turns t
+       ON t.conversation_id = e.conversation_id AND t.id = json_extract(e.payload_json, '$.turnId')
+       WHERE e.conversation_id = ? AND t.seq >= ?`,
+      [conversationId, turnSummaries[0].seq],
+    )).seq : null;
+    let cursor = firstSeq > 1 ? { instanceId: store.instanceId, conversationId, seq: firstSeq - 1 } : null;
     let tip = 0;
     let hasMoreEvents = false;
     let eventCursor = null;
@@ -1030,7 +1029,7 @@ export function createNativeSessionPersistence(options) {
           if (typeof turnId !== "string" || typeof bodyId !== "string") continue;
           const text = readBodyText(projectId, conversationId, bodyId);
           const list = deltaTexts.get(turnId) ?? [];
-          list.push(text);
+          list.push({ partId: event.payload.partId ?? bodyId, text, seq: event.seq, order: list.length });
           deltaTexts.set(turnId, list);
         } else if (event.kind === "tool_fact") {
           const turnId = event.payload?.turnId;
@@ -1081,19 +1080,23 @@ export function createNativeSessionPersistence(options) {
       }
       messages.push({
         id: `user-${turn.id}`,
+        turnSeq: turn.seq,
         role: "user",
         text: prompt,
         tools: [],
         isStreaming: false,
       });
       const outcome = outcomesByTurn.get(turn.id) ?? turn.outcome ?? undefined;
-      const assistantText = (deltaTexts.get(turn.id) ?? []).join("");
+      const parts = deltaTexts.get(turn.id) ?? [];
+      const assistantText = parts.map((part) => part.text).join("");
       const terminal = outcome === "completed" || outcome === "failed"
         || outcome === "interrupted" || outcome === "unknown";
       messages.push({
         id: turn.id,
+        turnSeq: turn.seq,
         role: "assistant",
         text: assistantText,
+        ...(includeParts ? { parts } : {}),
         tools: toolsByTurn.get(turn.id) ?? [],
         outcome,
         isError: outcome === "failed" || outcome === "unknown",
@@ -1130,7 +1133,7 @@ export function createNativeSessionPersistence(options) {
         })),
       };
     });
-    return boundHydratedTranscript({
+    return (bound ? boundHydratedTranscript : (value) => value)({
       conversationId,
       projectId,
       controller: conversation.controller,
@@ -1152,7 +1155,7 @@ export function createNativeSessionPersistence(options) {
       ...(importedMessages.length > 0
         ? { imported: true, importBatchId: importRow.importBatchId }
         : {}),
-    });
+    }, latest);
   }
 
   function scopeOf(meta, evidence) {
@@ -1448,7 +1451,9 @@ export function createNativeSessionPersistence(options) {
           sessionId: conversationId,
           turnId,
           text: readBodyText(projectId, conversationId, bodyId),
-          ...(typeof nativeMessageId === "string" ? { nativeItemId: nativeMessageId, nativeMessageId } : {}),
+          ...(typeof nativeMessageId === "string"
+            ? harness === "claude" ? { nativeMessageId } : { nativeItemId: nativeMessageId }
+            : {}),
         });
       } else if (event.kind === "turn_outcome") {
         const turnId = event.payload?.turnId;

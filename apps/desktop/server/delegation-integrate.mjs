@@ -215,6 +215,14 @@ async function integrateAssociationWorktreeUnlocked(store, args, hooks = {}) {
     ]);
     mergeOk = true;
   } catch (err) {
+    let mergeHead = null;
+    try { mergeHead = await git(repoRoot, ['rev-parse', '--verify', 'MERGE_HEAD']); } catch { /* no verified merge to abort */ }
+    if (mergeHead === sourceSha && await git(repoRoot, ['rev-parse', 'HEAD']) === targetSha) {
+      const conflicts = await git(repoRoot, ['diff', '--name-only', '--diff-filter=U']);
+      try { await git(repoRoot, ['merge', '--abort']); }
+      catch (abortError) { throw new Error(`Integrate failed; merge abort also failed. Inspect the merge state before retrying: ${abortError.message}`); }
+      throw new Error(`Integrate conflicted${conflicts ? ` in ${conflicts.split('\n').join(', ')}` : ''}; merge aborted and target checkout restored. Resolve the branch conflicts before retrying.`);
+    }
     throw err;
   }
 

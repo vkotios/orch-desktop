@@ -55,6 +55,7 @@ beforeEach(() => {
     if (command === "delegation_upsert") {
       return { association: association(args) };
     }
+    if (command === "delegation_adopt") return { association: association({ ...args, stage: "running", runId: "run-1" }) };
     if (command === "delegation_list") {
       return { associations: [] };
     }
@@ -164,8 +165,8 @@ describe("agent task preparation", () => {
     );
     expect(invoke).toHaveBeenCalledWith("orch_run_detail", { runId: "run-1" });
     expect(callHost).toHaveBeenCalledWith(
-      "delegation_upsert",
-      expect.objectContaining({ id: "assoc-1", stage: "running", runId: "run-1" }),
+      "delegation_adopt",
+      expect.objectContaining({ id: "assoc-1" }),
     );
     expect(result.association.stage).toBe("running");
   });

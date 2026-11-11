@@ -647,16 +647,19 @@ describe("native-session-persistence Codex dual-write", () => {
     const project = persistence.ensureProject({ pathCanonical: "C:/synthetic/byte-export", name: "byte-export" });
     const imported = persistence.importTranscript({
       projectId: project.id, source: "fixture", sourceKey: "large",
-      messages: Array.from({ length: 5 }, () => ({ role: "assistant", text: "x".repeat(190_000) })),
+      messages: Array.from({ length: 5 }, (_, i) => ({ role: "assistant", text: `${i}${"x".repeat(189_999)}` })),
     });
     const exported = persistence.exportConversation({ projectId: project.id, conversationId: imported.conversationId });
     expect(exported.truncated).toBe(true);
     expect(exported.truncation.bytes).toBe(true);
     expect(Buffer.byteLength(JSON.stringify({ type: "response", result: { export: exported } }))).toBeLessThan(1024 * 1024);
     expect(exported.conversation.messages.length).toBeLessThan(5);
+    expect(exported.conversation.messages[0].text.startsWith("0")).toBe(true);
     // Truncating the transport projection must not delete stored history.
     const hydrated = persistence.hydrateConversation({ projectId: project.id, conversationId: imported.conversationId });
     expect(hydrated.hasMoreBytes).toBe(true);
+    expect(hydrated.messages[0].text.startsWith("1")).toBe(true);
+    expect(hydrated.messages.at(-1).text.startsWith("4")).toBe(true);
     expect(Buffer.byteLength(JSON.stringify(hydrated))).toBeLessThan(1024 * 1024);
     const again = persistence.importTranscript({ projectId: project.id, source: "fixture", sourceKey: "large", messages: [] });
     expect(again.conversationId).toBe(imported.conversationId);
@@ -711,6 +714,11 @@ describe("native-session-persistence Codex dual-write", () => {
     });
     expect(uiWindow?.turnsLoaded).toBe(500);
     expect(uiWindow?.hasMoreTurns).toBe(true);
+    expect(uiWindow.messages[0].text).toBe("q1");
+    expect(uiWindow.messages.at(-1).text).toBe("a500");
+    const reopened = persistence.hydrateConversation({ projectId: project.id, conversationId });
+    expect(reopened.messages[0].text).toBe("q401");
+    expect(reopened.messages.at(-1).text).toBe("a500");
     // UI hydrate previously claimed truncated:false when only the turn axis was hit.
     expect(uiWindow?.hasMoreEvents === true || uiWindow?.hasMoreTurns === true).toBe(true);
 

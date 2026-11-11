@@ -218,6 +218,7 @@ const NATIVE_COMMANDS = new Set([
   'native_chat_answer',
   'direct_chat_cancel',
   'native_chat_close',
+    'native_chat_forget_session',
   'native_chat_list_conversations',
   'native_chat_hydrate_conversation',
   'native_chat_save_draft',
@@ -258,6 +259,8 @@ const DELEGATION_COMMANDS = new Set([
   'delegation_set_disposition',
   'delegation_worktree_diff',
   'delegation_integrate',
+  'delegation_adopt',
+  'delegation_abandon',
   'project_resolve_path',
 ]);
 const ALLOWED_COMMANDS = new Set([
@@ -289,7 +292,7 @@ function parseSenderId(requestId) {
 export async function runHost(options = {}) {
   const { input = process.stdin, output = process.stdout, error = process.stderr,
     generation = crypto.randomUUID(), dispatch, serviceFactory, openClient, onFatal,
-    databasePath } = options ?? {};
+    databasePath, delegationFilePath } = options ?? {};
   const sessionDatabasePath = resolveSessionDatabasePath(databasePath);
   const dispatchFn = dispatch
     ?? ((command, args) => import('./bridge.mjs').then((mod) => mod.handleBridgeCommand(command, args)));
@@ -297,7 +300,7 @@ export async function runHost(options = {}) {
   async function getDelegationStore() {
     if (delegationStore) return delegationStore;
     const mod = await import('./delegation-associations.mjs');
-    delegationStore = mod.createDelegationAssociations();
+    delegationStore = mod.createDelegationAssociations({ filePath: delegationFilePath });
     return delegationStore;
   }
 
@@ -478,6 +481,12 @@ export async function runHost(options = {}) {
             }
             const prior = typeof admitted.id === 'string' ? store.get(admitted.id) : null;
             if (prior) {
+              if (prior.stage === 'uncertain' && admitted.stage && admitted.stage !== 'uncertain') throw new Error('Use Adopt or Abandon to resolve uncertain work');
+              for (const key of ['conversationId', 'repoPath', 'wp', 'slice', 'cli', 'model', 'reviewId']) {
+                if (key in admitted && admitted[key] !== prior[key]) throw new Error(`association ${key} is host-owned and immutable`);
+              }
+              const service = await getNativeService();
+              await service.authorizeDelegationAssociation(prior);
               // Existing associations: repo/worktree/run identity are host-owned.
               delete admitted.repoPath;
               delete admitted.worktreePath;
@@ -487,15 +496,49 @@ export async function runHost(options = {}) {
               }
             } else if (admitted.worktreePath || admitted.runId) {
               throw new Error('new associations cannot invent worktreePath or runId');
+            } else {
+              const service = await getNativeService();
+              Object.assign(admitted, await service.authorizeDelegationAssociation(admitted));
+              delete admitted.reviewId;
+              admitted.stage = 'intent_claim';
             }
             data = { association: store.upsert(admitted) };
+          } else if (env.command === 'delegation_adopt' || env.command === 'delegation_abandon') {
+            const association = store.get(args.id);
+            if (!association || association.stage !== 'uncertain' || association.disposition !== 'none') throw new Error('Recovery requires an open uncertain association');
+            const service = await getNativeService();
+            await service.authorizeDelegationAssociation(association);
+            if (env.command === 'delegation_abandon') {
+              data = { association: store.setDisposition(args.id, 'discarded', 'Explicitly abandoned; recorded resources remain retained.') };
+            } else {
+              if (!association.runId || !association.worktreePath) throw new Error('No recorded run/worktree to adopt');
+              const detail = await dispatchFn('orch_run_detail', { runId: association.runId, by: 'owner' });
+              const body = detail?.output ?? detail;
+              const status = typeof body?.status === 'object' ? body.status : body;
+              const observedId = body?.runId ?? status?.id;
+              if (detail?.ok === false || observedId !== association.runId || typeof status?.dir !== 'string'
+                || fs.realpathSync(status.dir) !== fs.realpathSync(association.worktreePath)) throw new Error('Recorded run does not match the association worktree');
+              if (status.wp && status.wp !== association.wp) throw new Error('Recorded run work package does not match');
+              const inspection = deriveRunInspection(detail);
+              if (!inspection.status || inspection.status === 'unknown') throw new Error('Run identity/state remains uncertain');
+              data = { association: store.upsert({ id: association.id, stage: inspection.terminal ? 'recorded' : 'running', note: 'Adopted recorded identity; execution was not relaunched.' }) };
+            }
           } else if (env.command === 'delegation_set_disposition') {
+            const association = store.get(args.id);
+            if (!association) throw new Error('association not found');
+            const service = await getNativeService();
+            await service.authorizeDelegationAssociation(association);
+            if (['integrated', 'finished'].includes(args.disposition) && association.disposition !== args.disposition) throw new Error('Completion dispositions require a host operation receipt');
             data = {
               association: store.setDisposition(args.id, args.disposition, args.note ?? null),
             };
           } else if (env.command === 'delegation_worktree_diff') {
             data = await readAssociationWorktreeDiff(store, args);
           } else if (env.command === 'delegation_integrate') {
+            const association = store.get(args.id);
+            if (!association) throw new Error('association not found');
+            const service = await getNativeService();
+            await service.authorizeDelegationAssociation(association);
             data = await integrateAssociationWorktree(store, args, {
               inspectRun: async (runId) => {
                 const detail = await dispatchFn('orch_run_detail', { runId, by: 'owner' });
@@ -555,6 +598,18 @@ export async function runHost(options = {}) {
         // Host-owned association resource updates after successful orch prep/launch.
         if (data && data.ok !== false) {
           const associationId = typeof admitted.associationId === 'string' ? admitted.associationId : null;
+          if (associationId && env.command === 'orch_finish') {
+            const store = await getDelegationStore();
+            const prior = store.get(associationId);
+            if (prior?.disposition !== 'integrated') store.setDisposition(associationId, 'finished', 'Coordinator finish succeeded; Git integration remains separate.');
+          }
+          if (associationId && env.command === 'orch_review') {
+            const reviewId = data.output?.review_id ?? data.output?.id;
+            if (typeof reviewId === 'string') {
+              const store = await getDelegationStore();
+              store.upsert({ id: associationId, reviewId });
+            }
+          }
           if (associationId && (env.command === 'orch_worktree_create' || env.command === 'orch_run')) {
             const store = await getDelegationStore();
             if (env.command === 'orch_worktree_create') {
@@ -601,7 +656,12 @@ export async function runHost(options = {}) {
         }
         const store = await getDelegationStore();
         const association = store.get(associationId);
-        return admitOrchRunArgs(association, args);
+          if (association?.runId || association?.stage === 'uncertain' || association?.stage === 'launching') throw new Error('Recorded or uncertain launch cannot be relaunched');
+          const service = await getNativeService();
+          await service.authorizeDelegationAssociation(association);
+          const admitted = admitOrchRunArgs(association, args);
+          store.upsert({ id: associationId, stage: 'launching' });
+          return admitted;
       }
       if (command === 'orch_worktree_create') {
         const associationId = typeof args.associationId === 'string' ? args.associationId : null;
@@ -609,35 +669,32 @@ export async function runHost(options = {}) {
           throw new Error('orch_worktree_create requires a host associationId');
         }
         const store = await getDelegationStore();
-        return admitOrchWorktreeCreateArgs(store.get(associationId), args);
+          const association = store.get(associationId);
+          const service = await getNativeService();
+          await service.authorizeDelegationAssociation(association);
+          return admitOrchWorktreeCreateArgs(association, args);
       }
-      if (command === 'orch_release') {
-        if (args.force === true) {
-          const reason = typeof args.reason === 'string' ? args.reason : '';
-          if (!reason.startsWith('discarded from CHO')) {
-            throw new Error('forced release is only admitted for CHO discard flows');
-          }
-        }
-        args.by = 'owner';
-        return args;
-      }
-      if (command === 'orch_cleanup' || command === 'orch_finish' || command === 'orch_claim') {
+        if (['orch_release', 'orch_cleanup', 'orch_finish', 'orch_claim', 'orch_cancel', 'orch_record', 'orch_review', 'orch_review_finish', 'orch_gate_record', 'orch_adopt'].includes(command)) {
+          if (args.force === true) throw new Error('Renderer cannot force coordinator ownership changes');
         delete args.force;
         args.by = 'owner';
         const associationId = typeof args.associationId === 'string' ? args.associationId : null;
-        if (associationId) {
+          if (!associationId) throw new Error(`${command} requires associationId`);
           const store = await getDelegationStore();
           const association = store.get(associationId);
           if (!association) throw new Error(`${command} association not found`);
+          const service = await getNativeService();
+          await service.authorizeDelegationAssociation(association);
           args.wp = association.wp;
-        } else if (typeof args.wp !== 'string' || args.wp.length === 0) {
-          throw new Error(`${command} requires associationId or wp`);
-        }
-        return args;
-      }
-      if (command === 'orch_cancel') {
-        delete args.force;
-        args.by = 'owner';
+          args.repo = association.repoPath;
+          if ('dir' in args) args.dir = association.worktreePath ?? association.repoPath;
+          if (args.runId && args.runId !== association.runId) throw new Error('runId does not match association');
+          if (association.runId) args.runId = association.runId;
+          if (command === 'orch_review_finish') {
+            if (!association.reviewId) throw new Error('No recorded review to finish');
+            if (args.reviewId && args.reviewId !== association.reviewId) throw new Error('reviewId does not match association');
+            args.reviewId = association.reviewId;
+          }
         return args;
       }
       delete args.force;

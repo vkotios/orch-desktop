@@ -7,6 +7,9 @@ The product is still called **CHO Desktop** in source, package names and older d
 ## Start here
 
 Latest controller repair review: [2026-11-11](docs/reviews/CODEX-CURSOR-REVIEW-2026-11-11.md).
+Independent [Opus review and adjudication](docs/reviews/OPUS-ADJUDICATION-2026-11-11.md)
+supersede its earlier completion claims. The owner authorized the Opus review,
+repairs, push and a PR on 2026-11-11; merge and release publication remain separate.
 It supersedes the earlier source candidate for local changes only; see
 [coordinator provenance](docs/COORDINATOR_UPSTREAM.md) for incorporated upstream fixes.
 

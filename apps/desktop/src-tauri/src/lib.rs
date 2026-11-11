@@ -126,6 +126,11 @@ async fn native_chat_close(app: AppHandle, args: Value) -> Result<Value, String>
 }
 
 #[tauri::command]
+async fn native_chat_forget_session(app: AppHandle, args: Value) -> Result<Value, String> {
+    route_with_args(&app, "native_chat_forget_session", args).await
+}
+
+#[tauri::command]
 async fn native_chat_list_conversations(app: AppHandle, args: Value) -> Result<Value, String> {
     route_with_args(&app, "native_chat_list_conversations", args).await
 }
@@ -261,6 +266,7 @@ pub fn run() {
             native_chat_answer,
             direct_chat_cancel,
             native_chat_close,
+            native_chat_forget_session,
             native_chat_list_conversations,
             native_chat_hydrate_conversation,
             native_chat_save_draft,

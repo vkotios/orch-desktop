@@ -207,6 +207,15 @@ data, native references, journals and producer fences remain unchanged. Restored
 history is not permission to adopt a live owner or replay native effects. Stop the
 app before configuring it to use the restored path; an in-app switch is not supplied.
 
+To continue a clone in a **new provider context**, explicitly pass
+`resetNativeOwnership: true`. This releases copied held fences only in the new
+store and clears copied native refs/requested Claude UUIDs; original journals are
+retained for unknown-outcome acknowledgement. A `.restore.json` audit receipt
+records the rotated identity and decision. This does not assert that a source
+process stopped. Default restore preserves ownership and may remain read-only.
+Liveness entries are namespaced by store instance UUID; legacy conversation-only
+entries are read conservatively during transition.
+
 Durable cursor is `(instance_uuid, conversation_id, seq)`. Normalized facts are
 recorded before any durable ACK or display. Append is idempotent on caller-stable
 `event_key` with canonical `payload_json`: same key + same canonical payload returns

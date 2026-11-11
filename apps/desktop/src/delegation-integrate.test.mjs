@@ -41,6 +41,22 @@ const okHooks = {
 };
 
 describe("delegation integrate", () => {
+  it("OPUS-06: aborts its conflicted merge and restores the target checkout", { timeout: 30_000 }, async () => {
+    const { repo, wt } = makeRepo();
+    fs.writeFileSync(path.join(wt, "README.md"), "worker edit\n");
+    git(wt, ["add", "README.md"]); git(wt, ["commit", "-m", "worker conflict"]);
+    fs.writeFileSync(path.join(repo, "README.md"), "owner edit\n");
+    git(repo, ["add", "README.md"]); git(repo, ["commit", "-m", "owner conflict"]);
+    const target = git(repo, ["rev-parse", "HEAD"]);
+    const association = { id: "a", repoPath: repo, worktreePath: wt, wp: "cho-05", slice: "delegate", disposition: "accepted", stage: "recorded", runId: "r" };
+    const store = { get: () => association, setDisposition: () => { throw new Error("must not write success"); } };
+    const preview = await integrateAssociationWorktree(store, { id: "a", dryRun: true }, okHooks);
+    await expect(integrateAssociationWorktree(store, { id: "a", previewToken: preview.previewToken }, okHooks)).rejects.toThrow(/README.md.*aborted/);
+    expect(git(repo, ["rev-parse", "HEAD"])).toBe(target);
+    expect(git(repo, ["status", "--porcelain", "-uno"])).toBe("");
+    expect(fs.existsSync(path.join(repo, ".git", "MERGE_HEAD"))).toBe(false);
+    expect(fs.readFileSync(path.join(repo, "README.md"), "utf8").replace(/\r\n/g, "\n")).toBe("owner edit\n");
+  });
   it("dry-runs with a preview token and merges only when refs still match", { timeout: 30_000 }, async () => {
     const { repo, wt, target } = makeRepo();
     const association = {

@@ -250,10 +250,8 @@ export async function startAgentTask(invoke: OrchInvoke, task: AgentTask) {
 
 /** Mark an uncertain association abandoned so a new launch may proceed. */
 export async function abandonDelegation(associationId: string, note?: string) {
-  return callHost<{ association: DelegationAssociation }>("delegation_upsert", {
+  return callHost<{ association: DelegationAssociation }>("delegation_abandon", {
     id: associationId,
-    stage: "discarded",
-    disposition: "discarded",
     note: note ?? "Abandoned after uncertain recovery.",
   });
 }
@@ -281,11 +279,8 @@ export async function adoptUncertainDelegation(
       "No run id was recorded for this uncertain association. Abandon it or inspect orch manually before retrying.",
     );
   }
-  return callHost<{ association: DelegationAssociation }>("delegation_upsert", {
+  return callHost<{ association: DelegationAssociation }>("delegation_adopt", {
     id: association.id,
-    stage: "running",
-    runId,
-    worktreePath,
     note: "Adopted after uncertain recovery; not relaunched.",
   });
 }
@@ -316,6 +311,7 @@ export async function acceptDelegation(
 ) {
   if (runId) {
     const recorded = await invoke("orch_record", {
+      associationId,
       runId,
       disposition: "accepted",
       notes: "Accepted from CHO desktop; finish/discard remain explicit.",
@@ -376,6 +372,7 @@ export async function cancelDelegationRun(
     throw new Error("This association has no run id to cancel.");
   }
   const cancelled = await invoke("orch_cancel", {
+    associationId: association.id,
     runId: association.runId,
   });
   if (!cancelled.ok) {
@@ -448,7 +445,6 @@ export async function discardDelegation(
   const released = await invoke("orch_release", {
     associationId: association.id,
     wp: association.wp,
-    force: true,
     reason: "discarded from CHO desktop",
   });
   if (!released.ok) {

@@ -35,6 +35,8 @@ export interface NativeToolStep {
 }
 
 export interface NativeChatMessage {
+  imported?: boolean;
+  importIndex?: number;
   id: string;
   role: "user" | "assistant";
   text: string;

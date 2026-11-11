@@ -3,16 +3,18 @@ import { Dialog, Icon } from "./Chrome";
 import { FormattedMarkdown } from "./FormattedMarkdown";
 import { NativeClarificationCard } from "./NativeClarificationCard";
 import { OrchAgentsPanel } from "./OrchAgentsPanel";
-import { historyAtCeiling, nextHistoryWindow } from "../lib/history-window";
+import { historyAtCeiling, nextHistoryWindow, mergeHistoryMessages } from "../lib/history-window";
+import { collectTranscriptExport } from "../lib/transcript-export";
 import {
   nativeChatAcknowledgeStranded, nativeChatAnswer, nativeChatArchiveConversation, nativeChatCancel, nativeChatClose,
   nativeChatExportConversation, nativeChatGetDraft, nativeChatHydrateConversation,
+  nativeChatForgetSession,
   nativeChatImportTranscript, nativeChatListConversations, nativeChatListDraftConflicts, nativeChatPoll,
   nativeChatPrepareProject, nativeChatRenameConversation, nativeChatResolveDraftConflict,
   nativeChatRespond, nativeChatSaveDraft, nativeChatSend, nativeChatValidateProject,
   nativeChatPickProjectFolder,
   type NativeClarificationRequest, type NativeController, type NativeDecision, type NativeEffort,
-  type NativeEventCursor, type NativeHydratedConversation, type NativeModelInfo,
+  type NativeEventCursor, type NativeHydratedConversation, type NativeModelInfo, type NativeConversationSummary,
   type NativePrepareResult, type NativeRecoveryUnresolved, type NativeRole, type NativeValidateResult,
 } from "../lib/api";
 import {
@@ -53,7 +55,8 @@ function sessionFromHydrated(p: Project, hydrated: NativeHydratedConversation): 
   return {
     ...base,
     history: { maxEventPages: 64, turnLimit: hydrated.turnLimit ?? 100,
-      hasMore: Boolean(hydrated.hasMoreEvents || hydrated.hasMoreTurns || hydrated.hasMoreBytes), byteCeiling: hydrated.hasMoreBytes },
+      hasMore: Boolean(hydrated.hasMoreEvents || hydrated.hasMoreTurns || hydrated.hasMoreBytes), byteCeiling: hydrated.hasMoreBytes,
+      beforeTurnSeq: hydrated.beforeTurnSeq, beforeImportedIndex: hydrated.beforeImportedIndex },
     title: hydrated.title || base.title,
     messages: hydrated.messages.map((m) => ({
       id: m.id,
@@ -64,6 +67,9 @@ function sessionFromHydrated(p: Project, hydrated: NativeHydratedConversation): 
       isError: m.isError,
       isStreaming: false,
       nativeTurnId: m.nativeTurnId,
+      parts: m.parts,
+      imported: m.imported,
+      importIndex: m.importIndex,
     })),
     nativeThreadId: hydrated.nativeThreadId,
     nativeSessionId: hydrated.nativeSessionUuid,
@@ -89,6 +95,13 @@ export function NativeChat() {
   const [selected, setSelected] = useState("");
   const [draft, setDraft] = useState("");
   const [chatSearch, setChatSearch] = useState("");
+  const [browserOpen, setBrowserOpen] = useState(false);
+  const [browserRows, setBrowserRows] = useState<NativeConversationSummary[]>([]);
+  const [browserQuery, setBrowserQuery] = useState("");
+  const [browserArchived, setBrowserArchived] = useState(false);
+  const [browserMore, setBrowserMore] = useState(false);
+  const [browserOffset, setBrowserOffset] = useState(0);
+  const browserRequestRef = useRef(0);
   const [loading, setLoading] = useState("");
   const [error, setError] = useState("");
   const [recoveryUnresolved, setRecoveryUnresolved] = useState<NativeRecoveryUnresolved[]>([]);
@@ -414,14 +427,59 @@ export function NativeChat() {
     finally { actionRef.current = false; if (mounted.current) setLoading(""); }
   }
 
-  function newChat() {
-    if (!project || lost || sessionsRef.current.length >= NATIVE_MAX_SESSIONS) return;
-    const session = createProjectChat(project);
-    changeSessions((all) => [...all, session]);
-    setSelected(session.id);
-    setDraft("");
-    cursorRef.current.set(session.id, null);
-    draftMetaRef.current.set(session.id, { version: 0 });
+  async function reserveChatSlot(id: string) {
+    if (!project || sessionsRef.current.some((s) => s.id === id) || sessionsRef.current.length < NATIVE_MAX_SESSIONS) return;
+    const victim = [...sessionsRef.current].reverse().find((s) => !s.busy);
+    if (!victim) throw new Error("All loaded chats are busy; wait before opening another.");
+    await flushDraftFor(victim.id);
+    await nativeChatForgetSession(project.generation, project.projectToken, victim.id);
+    changeSessions((all) => all.filter((s) => s.id !== victim.id));
+    cursorRef.current.delete(victim.id);
+    if (selectedRef.current === victim.id) setSelected(sessionsRef.current[0]?.id ?? "");
+  }
+
+  async function newChat() {
+    if (!project || lost || actionRef.current) return;
+    actionRef.current = true;
+    try {
+      const session = createProjectChat(project);
+      await reserveChatSlot(session.id);
+      changeSessions((all) => [session, ...all]);
+      setSelected(session.id); setDraft("");
+      cursorRef.current.set(session.id, null);
+      draftMetaRef.current.set(session.id, { version: 0 });
+    } catch (err) { setError(errorText(err)); }
+    finally { actionRef.current = false; }
+  }
+
+  async function listStoredChats(offset = 0, query = browserQuery, archived = browserArchived) {
+    if (!project) return;
+    const request = ++browserRequestRef.current;
+    const result = await nativeChatListConversations(project.generation, project.projectToken,
+      { query, includeArchived: archived, offset, limit: 20 });
+    if (request !== browserRequestRef.current || ownerRef.current?.project.generation !== project.generation) return;
+    setBrowserRows((old) => offset === 0 ? result.conversations : [...old, ...result.conversations]);
+    setBrowserOffset(offset + result.conversations.length);
+    setBrowserMore(Boolean(result.hasMore));
+  }
+
+  async function openStoredChat(row: NativeConversationSummary) {
+    if (!project || busy || actionRef.current) return;
+    if (row.controller !== projectController) { setError(`Open this project with ${labelController(row.controller)} to continue this chat.`); return; }
+    actionRef.current = true; setLoading("Opening chat…");
+    try {
+      if (selectedRef.current) await flushDraftFor(selectedRef.current);
+      await reserveChatSlot(row.id);
+      if (row.archived) await nativeChatArchiveConversation(project.generation, project.projectToken, row.id, false);
+      const result = await nativeChatHydrateConversation(project.generation, project.projectToken, row.id);
+      if (!result.conversation) throw new Error("Conversation not found");
+      const session = sessionFromHydrated(project, result.conversation);
+      changeSessions((all) => [session, ...all.filter((s) => s.id !== session.id)]);
+      cursorRef.current.set(session.id, result.conversation.eventCursor ?? null);
+      setSelected(session.id); setBrowserOpen(false);
+      await loadDraftFor(session.id, project);
+    } catch (err) { setError(errorText(err)); }
+    finally { actionRef.current = false; setLoading(""); }
   }
 
   async function flushDraftFor(conversationId: string) {
@@ -491,7 +549,7 @@ export function NativeChat() {
     try {
       await nativeChatClose(project.generation, project.projectToken);
       if (!mounted.current) return;
-      setProject(null); setChallenge(null); setSelected(""); setDraft(""); setPath(""); setError("");
+      setProject(null); setChallenge(null); setSelected(""); setDraft(""); setPath(""); setError(""); setBrowserOpen(false);
       decisionsRef.current.clear(); setPendingDecisions([]);
       changeSessions(() => []);
     } catch (e) {
@@ -622,7 +680,8 @@ export function NativeChat() {
       <div className="native-brand"><Icon name="terminal" size={18} /><strong>CHO</strong><span>{controllerName} · Preview</span></div>
       <p className="native-muted">Conversation text is stored locally and restored when you reopen this project.</p>
       {project && <><div className="native-project"><Icon name="folder" size={16} /><div><strong>{project.name}</strong><small title={project.path}>{project.path}</small></div></div>
-        <button className="native-button" onClick={newChat} disabled={lost || !project.models.length || sessions.length >= NATIVE_MAX_SESSIONS}><Icon name="plus" size={15} /> New chat</button>
+        <button className="native-button" onClick={() => void newChat()} disabled={lost || !project.models.length || Boolean(loading)}><Icon name="plus" size={15} /> New chat</button>
+        <button className="native-button" disabled={lost || busy} onClick={() => { setBrowserOpen(true); void listStoredChats().catch((err) => setError(errorText(err))); }}>Browse all chats</button>
         <OrchAgentsPanel repoPath={project.path} conversationId={selected || null} disabled={lost || busy || Boolean(loading)} />
         <label className="native-search">
           <span className="sr-only">Search chats</span>
@@ -656,15 +715,13 @@ export function NativeChat() {
               disabled={busy || Boolean(loading)}
               onClick={() => {
                 if (!project) return;
-                void nativeChatExportConversation(project.generation, project.projectToken, selected)
+                void collectTranscriptExport((options) => nativeChatExportConversation(project.generation, project.projectToken, selected, options))
                   .then((result) => {
-                    const payload = result.export && typeof result.export === "object"
-                      ? result.export as {
+                    const payload = result as {
                         truncated?: boolean;
-                          truncation?: { events?: boolean; turns?: boolean; bytes?: boolean };
-                      }
-                      : null;
-                    const blob = new Blob([JSON.stringify(result.export, null, 2)], { type: "application/json" });
+                          truncation?: { events?: boolean; turns?: boolean; bytes?: boolean; metadata?: boolean };
+                      };
+                    const blob = new Blob([JSON.stringify(result, null, 2)], { type: "application/json" });
                     const url = URL.createObjectURL(blob);
                     const a = document.createElement("a");
                     a.href = url;
@@ -676,6 +733,7 @@ export function NativeChat() {
                       if (payload.truncation?.turns) parts.push("turns");
                       if (payload.truncation?.events) parts.push("events");
                         if (payload.truncation?.bytes) parts.push("bytes");
+                        if (payload.truncation?.metadata) parts.push("decision history");
                       const axis = parts.length > 0 ? parts.join(" and ") : "history";
                       setError(`Export downloaded, but ${axis} exceeded the export ceiling and were truncated.`);
                       setLoading("");
@@ -725,6 +783,7 @@ export function NativeChat() {
                       controller: (parsed.conversation?.controller === "claude" ? "claude" : controller),
                       messages,
                     });
+                    await reserveChatSlot(imported.conversationId);
                     const hydrated = await nativeChatHydrateConversation(
                       project.generation,
                       project.projectToken,
@@ -777,9 +836,14 @@ export function NativeChat() {
                     .then((result) => {
                       if (!result.conversation) throw new Error("Conversation not found.");
                       const session = sessionFromHydrated(project, result.conversation);
-                      session.history = { ...limits, hasMore: Boolean(result.conversation.hasMoreEvents || result.conversation.hasMoreTurns || result.conversation.hasMoreBytes), byteCeiling: result.conversation.hasMoreBytes };
+                      session.history = { ...limits, hasMore: Boolean(result.conversation.hasMoreEvents || result.conversation.hasMoreTurns || result.conversation.hasMoreBytes), byteCeiling: result.conversation.hasMoreBytes,
+                        beforeTurnSeq: result.conversation.beforeTurnSeq, beforeImportedIndex: result.conversation.beforeImportedIndex };
+                      const olderPage = Boolean(limits.beforeTurnSeq || limits.beforeImportedIndex);
+                      if (olderPage && current) {
+                        session.messages = mergeHistoryMessages(session.messages, current.messages);
+                      }
                       changeSessions((all) => all.map((s) => (s.id === selected ? session : s)));
-                      if (result.conversation.eventCursor) {
+                      if (!olderPage && result.conversation.eventCursor) {
                         cursorRef.current.set(selected, result.conversation.eventCursor);
                       }
                       const moreHistory = Boolean(
@@ -903,6 +967,18 @@ export function NativeChat() {
           <div className="native-composer"><label className="sr-only" htmlFor="native-prompt">Message {controllerName}</label><textarea id="native-prompt" value={draft} onChange={(e) => { const text = e.target.value; setDraft(text); if (current) queueDraftSave(current.id, text); }} onKeyDown={composerKey} placeholder={`Message ${controllerName}…`} disabled={lost || current.unavailable} rows={3} /><div className="native-composer-actions"><span>Enter to send · Shift+Enter for a new line</span>{current.busy ? <button className="native-button" onClick={() => void stop()} disabled={current.cancelling || lost}><Icon name="stop" size={14} />{current.cancelling ? "Stopping…" : "Stop"}</button> : <button className="native-primary" onClick={() => void send()} disabled={!draft.trim() || draft.length > 65536 || busy || lost || !current.model}><Icon name="arrow" size={15} /> Send</button>}</div></div></>}
       </div>
     </main>
+    {browserOpen && project && <Dialog title="All chats" subtitle="Search stored conversations; archived chats can be restored." onClose={() => setBrowserOpen(false)}>
+      <form onSubmit={(e) => { e.preventDefault(); void listStoredChats().catch((err) => setError(errorText(err))); }}>
+        <label>Search stored chats<input value={browserQuery} onChange={(e) => setBrowserQuery(e.target.value)} /></label>
+        <label><input type="checkbox" checked={browserArchived} onChange={(e) => { setBrowserArchived(e.target.checked); void listStoredChats(0, browserQuery, e.target.checked).catch((err) => setError(errorText(err))); }} /> Include archived</label>
+        <button type="submit" className="native-button">Search</button>
+      </form>
+      <nav aria-label="Stored chats" className="native-chat-list" style={{ maxHeight: "50vh", overflowY: "auto" }}>
+        {browserRows.map((row) => <button key={row.id} disabled={busy || Boolean(loading)} onClick={() => void openStoredChat(row)}>{row.title || "Chat"} · {labelController(row.controller)}{row.archived ? " · Unarchive and open" : ""}</button>)}
+      </nav>
+      {browserRows.length === 0 && <p>No matching stored chats.</p>}
+      {browserMore && <button className="native-button" onClick={() => void listStoredChats(browserOffset).catch((err) => setError(errorText(err)))}>More chats</button>}
+    </Dialog>}
     {challenge && <Dialog title="Trust this project?" subtitle={`${labelController(challenge.controller ?? "codex")} may read or change files according to the access you choose.`} onClose={() => { if (!loading) setChallenge(null); }}><p>Confirm this project directory:</p><p className="native-confirm-path">{challenge.path}</p><div className="native-dialog-actions"><button className="native-button" disabled={Boolean(loading)} onClick={() => setChallenge(null)}>Cancel</button><button className="native-primary" disabled={Boolean(loading)} onClick={() => void prepare()}>Trust and continue</button></div></Dialog>}
   </div>;
 }

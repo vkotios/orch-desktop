@@ -1,0 +1,40 @@
+# Controller adjudication of the Opus review
+
+Audit: [Opus 5.5 medium report](OPUS-5.5-REVIEW-2026-11-11.md), candidate
+`4e093711be6ab758f61ba85e7c2a105be0879965`, run `20261111-213241-139d9d`.
+Main-agent messages verify `claude-opus-5-5`; launch arguments verify medium
+effort and Read/Grep/Glob/Edit/Write/Bash. The report-only run used the implementer
+tool profile for the owner's full tool-access request. Scope passed: only the
+report was created. This is source review, not a live delegated-change journey.
+
+All eleven findings were confirmed and repaired:
+
+| ID | Repair | Controller regression |
+| --- | --- | --- |
+| OPUS-01 | Hydrate returns stable parts/seq; UI retains them. Durable Codex facts use nativeItemId instead of Claude's nativeMessageId. | Actual hydrate→poll→UI across 2,048 events, replay applied twice, full text retained. |
+| OPUS-02 | Recent byte windows keep complete native user/assistant pairs; older-page cursors remain accessible. Export pages assemble into one download and bind event tip. | 60 × 20 KB replies: every history turn and exported message recovered; each RPC <1 MiB. |
+| OPUS-03 | Initial hydrate selects recent turns; event replay starts at that window. | 501-turn fixture checks the recent 100 and 500-turn windows, preserving full chronological export. |
+| OPUS-04 | Explicit host Adopt verifies recorded run/worktree/state; Abandon writes the discarded disposition. | Real runHost: wrong id rejected, uncertain→running and discarded/discarded checked. |
+| OPUS-05 | Immutable existing identity/route/resource bindings; new associations require a prepared project/conversation. Mutations require association scope; renderer force is refused; host launch intent blocks relaunch. | Real host rejects rebinding, foreign repo and forged forced release before dispatch. |
+| OPUS-06 | Abort only this merge: MERGE_HEAD must match source and HEAD must still match target. Errors name conflicts. | Real Git conflict restores target SHA/content, clean status and no MERGE_HEAD. |
+| OPUS-07 | Host-backed chat browser supports search, paging, archived inclusion and explicit unarchive/open. Evict idle native metadata without deleting history. Active sessions/answers refuse eviction. | Native facade: 13 chats, archived/search/paging, idle eviction and opening a ninth/new chat. |
+| OPUS-08 | Remove the inconsistent 200k UTF-16 per-message limit; retain the explicit whole-import UTF-8 bound. | 210,326-character export/import round trip. |
+| OPUS-09 | Reuse orch birth identities; production reads asynchronously at recovery and caches them. Canonical birth mismatch permits reclaim; matching live identity refuses. Ambiguous legacy timestamps stay uncertain. | Synthetic matching and PID-reused birth fixtures. |
+| OPUS-10 | Namespace liveness by store UUID. Explicit resetNativeOwnership on clone releases copied fences and clears native refs/requested UUIDs, with receipt. Source state is untouched. | Held-fence clone becomes claimable in a fresh context; source keeps its native identity and liveness record. |
+| OPUS-11 | Always close the client; AggregateError preserves settlement/context/client failures. | Settlement-only and simultaneous client-close failure cases. |
+
+The controller independently reproduced OPUS-03 before repair (`q0` vs expected
+`q1`). Actual replay testing also exposed the Codex identity-field mismatch above.
+Windows line endings and the new typed recovery command's test mock were corrected
+after the first focused run; remaining runtime assertions passed.
+
+Local receipts: `.reviews/opus-review-20261111/`. Opus independently passed 777
+desktop tests, 94 focused checks and eight coordinator tests on the original
+candidate. The first complete repair suite passed 786 desktop tests. Final checks,
+artifact receipts and focused re-review follow below when complete.
+
+Limits remain explicit: imports are at most 1 MiB UTF-8; a native turn must fit an
+export page; export retains its 10k turn/event-page safety ceilings and reports
+those axes. This repair does not claim unlimited transfer. WebView rendering,
+live provider/worker journeys, clean-machine installation and release qualification
+remain separate. The owner authorized push and a PR, not merge or publication.
