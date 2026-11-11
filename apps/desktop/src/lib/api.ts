@@ -552,6 +552,7 @@ export interface NativeHydratedConversation {
   eventCursor?: NativeEventCursor | null;
   hasMoreEvents: boolean;
   hasMoreTurns?: boolean;
+  hasMoreBytes?: boolean;
   turnsLoaded?: number;
   turnLimit?: number;
 }
@@ -577,7 +578,7 @@ export function nativeChatExportConversation(
   generation: string;
   export: {
     truncated?: boolean;
-    truncation?: { events?: boolean; turns?: boolean };
+    truncation?: { events?: boolean; turns?: boolean; bytes?: boolean };
   } & Record<string, unknown>;
 }> {
   return invokeNative("native_chat_export_conversation", {

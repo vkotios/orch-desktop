@@ -639,6 +639,27 @@ describe("native-session-persistence Codex dual-write", () => {
     expect(exported?.conversation.messages.length).toBe(10);
     expect(exported?.truncated).toBe(false);
     expect(exported?.truncation).toEqual({ events: false, turns: false });
+
+  });
+
+  it("discloses byte truncation before a large export exceeds the IPC frame", () => {
+    const { persistence } = makePersistence();
+    const project = persistence.ensureProject({ pathCanonical: "C:/synthetic/byte-export", name: "byte-export" });
+    const imported = persistence.importTranscript({
+      projectId: project.id, source: "fixture", sourceKey: "large",
+      messages: Array.from({ length: 5 }, () => ({ role: "assistant", text: "x".repeat(190_000) })),
+    });
+    const exported = persistence.exportConversation({ projectId: project.id, conversationId: imported.conversationId });
+    expect(exported.truncated).toBe(true);
+    expect(exported.truncation.bytes).toBe(true);
+    expect(Buffer.byteLength(JSON.stringify({ type: "response", result: { export: exported } }))).toBeLessThan(1024 * 1024);
+    expect(exported.conversation.messages.length).toBeLessThan(5);
+    // Truncating the transport projection must not delete stored history.
+    const hydrated = persistence.hydrateConversation({ projectId: project.id, conversationId: imported.conversationId });
+    expect(hydrated.hasMoreBytes).toBe(true);
+    expect(Buffer.byteLength(JSON.stringify(hydrated))).toBeLessThan(1024 * 1024);
+    const again = persistence.importTranscript({ projectId: project.id, source: "fixture", sourceKey: "large", messages: [] });
+    expect(again.conversationId).toBe(imported.conversationId);
   });
 
   it("exports all turns past the UI 500-turn window and discloses turn-cap truncation on hydrate", {
@@ -702,5 +723,11 @@ describe("native-session-persistence Codex dual-write", () => {
     expect(exported?.conversation.messages.length).toBe(turnCount * 2);
     expect(exported?.truncated).toBe(false);
     expect(exported?.truncation).toEqual({ events: false, turns: false });
+    const imported = persistence.importTranscript({
+      projectId: project.id, source: "export-roundtrip", sourceKey: "501-turns",
+      messages: exported.conversation.messages,
+    });
+    const roundtrip = persistence.hydrateConversation({ projectId: project.id, conversationId: imported.conversationId });
+    expect(roundtrip.messages.map((m) => m.text)).toEqual(exported.conversation.messages.map((m) => m.text));
   });
 });

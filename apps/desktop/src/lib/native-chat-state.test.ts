@@ -11,6 +11,17 @@ const ack = (extra: Partial<NativeCodexSendAck> = {}): NativeCodexSendAck =>
 const started = () => beginNativeTurn(createNativeUiSession("s1", "model"), "t1", "hello");
 
 describe("native conversation state", () => {
+  it("recovers durable tool facts after live completion without reviving a turn or regressing tool progress", () => {
+    let s = applyNativeAck(started(), ack(), generation);
+    s = applyNativeUiEvent(s, event("turn_complete", { nativeOutcome: "completed", nativeThreadId: "thread", nativeTurnId: "turn" }), generation);
+    s = applyNativeUiEvent(s, event("tool_call", { source: "durable", seq: 4, toolCallId: "tool", toolTitle: "Read", toolStatus: "completed" }), generation);
+    expect(s.messages[1].tools).toMatchObject([{ id: "tool", status: "completed" }]);
+    s = applyNativeUiEvent(s, event("tool_call", { source: "durable", seq: 3, toolCallId: "tool", toolStatus: "running" }), generation);
+    expect(s.messages[1].tools[0].status).toBe("completed");
+    expect(s.busy).toBe(false);
+    expect(s.activeTurnId).toBeNull();
+    expect(s.messages[1].outcome).toBe("completed");
+  });
   it("keeps one native thread across two terminal turns", () => {
     let s = applyNativeAck(started(), ack(), generation);
     s = applyNativeUiEvent(s, event("turn_complete", { nativeOutcome: "completed", nativeThreadId: "thread", nativeTurnId: "turn" }), generation);

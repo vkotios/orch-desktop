@@ -24,6 +24,26 @@ import { createSessionApprovals } from "./session-approvals.mjs";
 import { createSessionClarifications } from "./session-clarifications.mjs";
 import { createProducerAuthorizer } from "./session-producer-transaction.mjs";
 
+function boundHydratedTranscript(payload) {
+  const ceiling = 900 * 1024; // headroom within the host's 1 MiB response frame
+  if (Buffer.byteLength(JSON.stringify(payload), "utf8") <= ceiling) return payload;
+  payload.hasMoreBytes = true;
+  for (const key of ["messages", "historicalApprovals", "historicalClarifications"]) {
+    const items = payload[key];
+    if (!Array.isArray(items)) continue;
+    let lo = 0, hi = items.length;
+    while (lo < hi) {
+      const mid = Math.ceil((lo + hi) / 2);
+      payload[key] = items.slice(0, mid);
+      if (Buffer.byteLength(JSON.stringify(payload), "utf8") <= ceiling) lo = mid;
+      else hi = mid - 1;
+    }
+    payload[key] = items.slice(0, lo);
+    if (Buffer.byteLength(JSON.stringify(payload), "utf8") <= ceiling) break;
+  }
+  return payload;
+}
+
 function defaultLivenessPath() {
   if (typeof process.env.CHO_PRODUCER_LIVENESS === "string" && process.env.CHO_PRODUCER_LIVENESS.trim()) {
     return path.resolve(process.env.CHO_PRODUCER_LIVENESS.trim());
@@ -727,22 +747,44 @@ export function createNativeSessionPersistence(options) {
     const truncation = {
       events: Boolean(hydrated.hasMoreEvents),
       turns: Boolean(hydrated.hasMoreTurns),
+      ...(hydrated.hasMoreBytes ? { bytes: true } : {}),
     };
-    const truncated = truncation.events || truncation.turns;
-    return {
+    const payload = {
       format: "cho.session.export.v1",
       exportedAtMs: Date.now(),
       projectId,
       conversation: hydrated,
-      truncated,
+      truncated: truncation.events || truncation.turns || Boolean(truncation.bytes),
       truncation,
     };
+    // Export crosses the same 1 MiB framed IPC boundary as other responses.
+    // Leave envelope headroom and disclose a byte ceiling rather than failing
+    // serialization after claiming a successful untruncated export.
+    const byteCeiling = 900 * 1024;
+    if (Buffer.byteLength(JSON.stringify(payload), "utf8") > byteCeiling) {
+      payload.truncated = true;
+      truncation.bytes = true;
+      for (const key of ["messages", "historicalApprovals", "historicalClarifications"]) {
+        const items = hydrated[key];
+        if (!Array.isArray(items)) continue;
+        let lo = 0, hi = items.length;
+        while (lo < hi) {
+          const mid = Math.ceil((lo + hi) / 2);
+          hydrated[key] = items.slice(0, mid);
+          if (Buffer.byteLength(JSON.stringify(payload), "utf8") <= byteCeiling) lo = mid;
+          else hi = mid - 1;
+        }
+        hydrated[key] = items.slice(0, lo);
+        if (Buffer.byteLength(JSON.stringify(payload), "utf8") <= byteCeiling) break;
+      }
+    }
+    return payload;
   }
 
   /**
    * Import a prior export or plain message list as a read-only transcript.
    * Creates a new conversation with NULL native ids and no producer fence.
-   * Messages land in the snapshot projection (not the editable draft).
+   * Messages land in an immutable body (not the editable draft or a snapshot).
    */
   function importTranscript({
     projectId,
@@ -764,8 +806,8 @@ export function createNativeSessionPersistence(options) {
       throw new Error("importTranscript controller must be codex or claude");
     }
     if (!Array.isArray(messages)) throw new Error("importTranscript requires messages array");
-    if (messages.length > 500) {
-      throw new Error("importTranscript refuses more than 500 messages (explicit bound)");
+    if (messages.length > EXPORT_TURN_CEILING * 2) {
+      throw new Error("importTranscript refuses more than 20000 messages (explicit bound)");
     }
     const existing = store.transaction((tx) =>
       tx.get("SELECT conversation_id AS conversationId FROM imports WHERE source = ? AND source_key = ?", [
@@ -938,7 +980,7 @@ export function createNativeSessionPersistence(options) {
     // Import-only conversations have no event tip/snapshot; return the body.
     if (importedMessages.length > 0 && turnSummaries.length === 0) {
       const native = bindings.getNativeRef({ projectId, conversationId });
-      return {
+      return boundHydratedTranscript({
         conversationId,
         projectId,
         controller: conversation.controller,
@@ -959,7 +1001,7 @@ export function createNativeSessionPersistence(options) {
         historicalApprovals: [],
         imported: true,
         importBatchId: importRow.importBatchId,
-      };
+      });
     }
 
     /** @type {Map<string, string[]>} */
@@ -1088,7 +1130,7 @@ export function createNativeSessionPersistence(options) {
         })),
       };
     });
-    return {
+    return boundHydratedTranscript({
       conversationId,
       projectId,
       controller: conversation.controller,
@@ -1110,7 +1152,7 @@ export function createNativeSessionPersistence(options) {
       ...(importedMessages.length > 0
         ? { imported: true, importBatchId: importRow.importBatchId }
         : {}),
-    };
+    });
   }
 
   function scopeOf(meta, evidence) {

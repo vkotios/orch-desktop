@@ -38,6 +38,7 @@ export const SERVER_MODULES = [
   'session-store.mjs',
   'session-store-schema.mjs',
   'session-store-migrate.mjs',
+  'session-store-restore.mjs',
   'session-records.mjs',
   'session-bindings.mjs',
   'session-turns.mjs',

@@ -39,6 +39,27 @@ jobs:
         continue-on-error: true
         run: node orch/tools/release-scan.mjs
 
+  coordinator-contracts:
+    name: Coordinator contracts (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: orch/package-lock.json
+      - name: Install coordinator dependencies
+        run: npm ci
+        working-directory: orch
+      - name: Coordinator bridge and upstream regression checks
+        run: node --test --test-concurrency=1 orch/test/unit.test.mjs orch/test/adapter-claude.test.mjs orch/test/adapter-grok.test.mjs orch/test/adapters-p04b.test.mjs orch/test/mcp.test.mjs orch/test/run-orphan-inventory.test.mjs orch/test/darwin-process-evidence.test.mjs
+
   native-windows:
     name: Native host (Windows Rust)
     runs-on: windows-latest

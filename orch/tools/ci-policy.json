@@ -10,7 +10,9 @@
     "orch/src/lanescope.mjs",
     "orch/src/claims.mjs",
     "orch/src/exclusive.mjs",
-    "orch/src/helper-reconciliation.mjs"
+    "orch/src/helper-reconciliation.mjs",
+    "orch/src/darwin-processes.mjs",
+    "orch/native/**"
   ],
   "shared": [
     ".github/**",
@@ -60,7 +62,8 @@
         "orch/test/routing-p05a.test.mjs",
         "orch/test/portable.test.mjs",
         "orch/test/ci-policy.test.mjs",
-        "orch/test/ci-fixtures.test.mjs"
+        "orch/test/ci-fixtures.test.mjs",
+        "orch/test/darwin-process-evidence.test.mjs"
       ],
       "inputs": []
     },
@@ -145,6 +148,7 @@
       "execution": "serial",
       "files": [
         "orch/test/cleanup-p02.test.mjs",
+        "orch/test/run-orphan-inventory.test.mjs",
         "orch/test/retention-p03.test.mjs",
         "orch/test/retirement-p03c.test.mjs",
         "orch/test/retention-helpers-p03e.test.mjs"

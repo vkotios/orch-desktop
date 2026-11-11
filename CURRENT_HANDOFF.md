@@ -6,6 +6,10 @@ The product is still called **CHO Desktop** in source, package names and older d
 
 ## Start here
 
+Latest controller repair review: [2026-11-11](docs/reviews/CODEX-CURSOR-REVIEW-2026-11-11.md).
+It supersedes the earlier source candidate for local changes only; see
+[coordinator provenance](docs/COORDINATOR_UPSTREAM.md) for incorporated upstream fixes.
+
 Read the [product specification](docs/PRODUCT_SPEC.md),
 [implementation status](docs/IMPLEMENTATION_STATUS.md),
 [implementation plan](docs/IMPLEMENTATION_PLAN.md),

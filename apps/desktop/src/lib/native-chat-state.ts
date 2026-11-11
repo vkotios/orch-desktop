@@ -31,6 +31,7 @@ export interface NativeToolStep {
   id: string;
   title: string;
   status: string;
+  seq?: number;
 }
 
 export interface NativeChatMessage {
@@ -64,6 +65,7 @@ export interface NativeApprovalRequest {
 }
 
 export interface NativeUiSession {
+  history?: import("./history-window").HistoryWindow;
   id: string;
   controller: NativeController;
   title: string;
@@ -294,15 +296,15 @@ export function applyNativeUiEvent(
   const turnId = event.turnId;
   const message = session.messages.find((m) => m.id === turnId && m.role === "assistant");
   const isActiveTurn = session.activeTurnId === event.turnId;
-  // Durable text catch-up may arrive after live completion. Allow only
-  // message_delta for an existing assistant message — never resurrect
+  // Durable text/tool catch-up may arrive after live completion. Allow only
+  // transcript facts for an existing assistant message — never resurrect
   // approvals/clarifications or change terminal outcome.
-  const durableTextCatchup =
+  const durableTranscriptCatchup =
     !isActiveTurn &&
     event.source === "durable" &&
-    event.kind === "message_delta" &&
+    (event.kind === "message_delta" || event.kind === "tool_call") &&
     Boolean(message);
-  if (!isActiveTurn && !durableTextCatchup) {
+  if (!isActiveTurn && !durableTranscriptCatchup) {
     return session;
   }
   // Ignore durable terminals when the turn is already finished.
@@ -412,9 +414,15 @@ export function applyNativeUiEvent(
         id: event.toolCallId,
         title: event.toolTitle || "tool",
         status: event.toolStatus || "running",
+        ...(event.source === "durable" && typeof event.seq === "number" ? { seq: event.seq } : {}),
       };
       return updateAssistant(session, turnId, (m) => {
         const existing = m.tools.findIndex((t) => t.id === step.id);
+        const prior = m.tools[existing];
+        if (prior && event.source === "durable") {
+          if (typeof prior.seq === "number" && typeof step.seq === "number" && step.seq <= prior.seq) return m;
+          if (["completed", "failed"].includes(prior.status) && ["pending", "running"].includes(step.status)) return m;
+        }
         const tools =
           existing === -1
             ? [...m.tools, step]

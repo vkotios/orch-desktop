@@ -3,6 +3,7 @@ import { Dialog, Icon } from "./Chrome";
 import { FormattedMarkdown } from "./FormattedMarkdown";
 import { NativeClarificationCard } from "./NativeClarificationCard";
 import { OrchAgentsPanel } from "./OrchAgentsPanel";
+import { historyAtCeiling, nextHistoryWindow } from "../lib/history-window";
 import {
   nativeChatAcknowledgeStranded, nativeChatAnswer, nativeChatArchiveConversation, nativeChatCancel, nativeChatClose,
   nativeChatExportConversation, nativeChatGetDraft, nativeChatHydrateConversation,
@@ -51,6 +52,8 @@ function sessionFromHydrated(p: Project, hydrated: NativeHydratedConversation): 
   const base = createNativeUiSession(hydrated.conversationId, model, role, effort, controller);
   return {
     ...base,
+    history: { maxEventPages: 64, turnLimit: hydrated.turnLimit ?? 100,
+      hasMore: Boolean(hydrated.hasMoreEvents || hydrated.hasMoreTurns || hydrated.hasMoreBytes), byteCeiling: hydrated.hasMoreBytes },
     title: hydrated.title || base.title,
     messages: hydrated.messages.map((m) => ({
       id: m.id,
@@ -86,7 +89,6 @@ export function NativeChat() {
   const [selected, setSelected] = useState("");
   const [draft, setDraft] = useState("");
   const [chatSearch, setChatSearch] = useState("");
-  const [historyTruncated, setHistoryTruncated] = useState(false);
   const [loading, setLoading] = useState("");
   const [error, setError] = useState("");
   const [recoveryUnresolved, setRecoveryUnresolved] = useState<NativeRecoveryUnresolved[]>([]);
@@ -105,6 +107,7 @@ export function NativeChat() {
   const selectedRef = useRef(selected);
   selectedRef.current = selected;
   const current = sessions.find((s) => s.id === selected);
+  const historyTruncated = current?.history?.hasMore === true;
   const projectController = project?.controller ?? controller;
   const controllerName = labelController(projectController);
   const availableEfforts = modelEfforts(projectController, project?.models.find((m) => m.id === current?.model));
@@ -377,9 +380,8 @@ export function NativeChat() {
               const hydrated = await nativeChatHydrateConversation(p.generation, p.projectToken, entry.id);
               if (!hydrated.conversation) continue;
               const session = sessionFromHydrated(p, hydrated.conversation);
-              if (hydrated.conversation.hasMoreEvents || hydrated.conversation.hasMoreTurns) {
-                hydrateNotice = "Earlier transcript pages exist for one or more chats; only the recent window was loaded.";
-                if (mounted.current) setHistoryTruncated(true);
+              if (session.history?.hasMore) {
+                hydrateNotice = "More transcript history exists for one or more chats. Use Load more history to expand the loaded window.";
               }
               if (!hydrated.conversation.nativeThreadId && !hydrated.conversation.nativeSessionUuid && session.messages.length > 0) {
                 hydrateNotice = hydrateNotice || "A prior native session is unbound; continuing may start a new provider context. Prefer an explicit new chat if unsure.";
@@ -659,7 +661,7 @@ export function NativeChat() {
                     const payload = result.export && typeof result.export === "object"
                       ? result.export as {
                         truncated?: boolean;
-                        truncation?: { events?: boolean; turns?: boolean };
+                          truncation?: { events?: boolean; turns?: boolean; bytes?: boolean };
                       }
                       : null;
                     const blob = new Blob([JSON.stringify(result.export, null, 2)], { type: "application/json" });
@@ -673,6 +675,7 @@ export function NativeChat() {
                       const parts = [];
                       if (payload.truncation?.turns) parts.push("turns");
                       if (payload.truncation?.events) parts.push("events");
+                        if (payload.truncation?.bytes) parts.push("bytes");
                       const axis = parts.length > 0 ? parts.join(" and ") : "history";
                       setError(`Export downloaded, but ${axis} exceeded the export ceiling and were truncated.`);
                       setLoading("");
@@ -702,6 +705,7 @@ export function NativeChat() {
                   void file.text().then(async (raw) => {
                     const parsed = JSON.parse(raw) as {
                       format?: string;
+                      truncated?: boolean;
                       conversation?: { title?: string; controller?: string; messages?: Array<{ role?: string; text?: string }> };
                       messages?: Array<{ role?: string; text?: string }>;
                       title?: string;
@@ -716,7 +720,7 @@ export function NativeChat() {
                       generation: project.generation,
                       projectToken: project.projectToken,
                       source: "file-import",
-                      sourceKey: `${file.name}:${file.size}:${file.lastModified}`,
+                      sourceKey: `sha256:${Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(raw))), (b) => b.toString(16).padStart(2, "0")).join("")}`,
                       title: parsed.conversation?.title || parsed.title || file.name.replace(/\.json$/i, ""),
                       controller: (parsed.conversation?.controller === "claude" ? "claude" : controller),
                       messages,
@@ -728,8 +732,9 @@ export function NativeChat() {
                     );
                     if (!hydrated.conversation) throw new Error("Imported conversation could not be hydrated");
                     const session = sessionFromHydrated(project, hydrated.conversation);
-                    changeSessions((all) => [...all, session].slice(0, NATIVE_MAX_SESSIONS));
+                      changeSessions((all) => [session, ...all.filter((s) => s.id !== session.id)].slice(0, NATIVE_MAX_SESSIONS));
                     setSelected(session.id);
+                    setError(parsed.truncated ? "Imported a truncated export; its omitted history is not present in this file." : "");
                     setLoading(imported.created ? "Imported transcript." : "Opened previously imported transcript.");
                     setTimeout(() => { if (mounted.current) setLoading(""); }, 1500);
                   }).catch((err) => {
@@ -763,37 +768,32 @@ export function NativeChat() {
               <button
                 type="button"
                 className="native-button"
-                disabled={busy || Boolean(loading)}
+                disabled={busy || Boolean(loading) || historyAtCeiling(current?.history)}
                 onClick={() => {
                   if (!project || !selected) return;
                   setLoading("Loading more history…");
-                  // Full hydrate rebuild with maximum server caps (event pages +
-                  // paged listTurns). Not a cursor prepend — hydrate always
-                  // recomposes the conversation from durable state.
-                  void nativeChatHydrateConversation(project.generation, project.projectToken, selected, {
-                    maxEventPages: 512,
-                    turnLimit: 500,
-                  })
+                  const limits = nextHistoryWindow(current?.history);
+                  void nativeChatHydrateConversation(project.generation, project.projectToken, selected, limits)
                     .then((result) => {
                       if (!result.conversation) throw new Error("Conversation not found.");
                       const session = sessionFromHydrated(project, result.conversation);
+                      session.history = { ...limits, hasMore: Boolean(result.conversation.hasMoreEvents || result.conversation.hasMoreTurns || result.conversation.hasMoreBytes), byteCeiling: result.conversation.hasMoreBytes };
                       changeSessions((all) => all.map((s) => (s.id === selected ? session : s)));
                       if (result.conversation.eventCursor) {
                         cursorRef.current.set(selected, result.conversation.eventCursor);
                       }
                       const moreHistory = Boolean(
-                        result.conversation.hasMoreEvents || result.conversation.hasMoreTurns,
+                        session.history.hasMore,
                       );
-                      setHistoryTruncated(moreHistory);
-                      setError(moreHistory
-                        ? "Loaded the maximum UI history window; older turns or events may still remain. Export pages further (and warns if a ceiling is hit)."
+                      setError(moreHistory && historyAtCeiling(session.history)
+                        ? "History reached its turn, event-page or byte ceiling; more history remains. Export discloses its own ceilings."
                         : "");
                     })
                     .catch((err) => setError(errorText(err)))
                     .finally(() => { if (mounted.current) setLoading(""); });
                 }}
               >
-                Load more history
+                {historyAtCeiling(current?.history) ? "History ceiling reached" : "Load more history"}
               </button>
             ) : null}
             <button

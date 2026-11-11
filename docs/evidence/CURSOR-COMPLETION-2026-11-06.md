@@ -1,5 +1,10 @@
 # Cursor completion evidence — 2026-11-06 (candidate update 2026-11-08 evening)
 
+2026-11-11: this receipt is historical. Subsequent local repairs, upstream
+coordinator incorporation, checks and rebuilt installer hashes are recorded in
+[the controller review](../reviews/CODEX-CURSOR-REVIEW-2026-11-11.md) and
+[the new artifact receipt](CODEX-REPAIR-2026-11-11.json).
+
 Europe/London. Binary + tip candidate:
 `9302b87ba39545dd1fc5ca13701ff73d0d09d7f5` on `codex/cho-v01-foundation`
 (audited base `76076fb3cd6c82f3ca7d74220d226e34955521c4`). Docs commits after this

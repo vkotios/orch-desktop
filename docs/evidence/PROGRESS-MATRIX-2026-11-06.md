@@ -13,6 +13,13 @@ Status vocabulary:
 
 ## Controller review dispositions (R1–R10)
 
+2026-11-11 controller follow-up: see [review and repairs](../reviews/CODEX-CURSOR-REVIEW-2026-11-11.md)
+and [coordinator snapshot](../COORDINATOR_UPSTREAM.md). Offline new-path
+restore/clone with identity rotation is now implemented and locally checked;
+in-app restore and native restored-store qualification remain open. History
+expands beyond 500 turns and reports count/byte ceilings. The original `9302b87`
+binary receipt does not qualify this later working-tree source.
+
 | ID | Status | Notes |
 | --- | --- | --- |
 | R1 | Implemented + locally checked | Host module closure + staged-host import probe; installer rebuild+rehash recorded for `9302b87` |
