@@ -38,3 +38,31 @@ export page; export retains its 10k turn/event-page safety ceilings and reports
 those axes. This repair does not claim unlimited transfer. WebView rendering,
 live provider/worker journeys, clean-machine installation and release qualification
 remain separate. The owner authorized push and a PR, not merge or publication.
+
+## Focused Opus follow-up and controller corrections
+
+[Opus follow-up](OPUS-5.5-FOLLOWUP-2026-11-11.md), candidate `900a9a1`, run
+`20261111-233446-58fa2f`, independently passed 102 focused tests and confirmed
+all eleven original findings resolved in source. It requested these final fixes:
+
+- FU-01: confirmed independently by the real native build. The Rust command
+  allowlist now uses an inferred-length slice. Cargo's 12 tests and MSI/NSIS
+  rebuild pass after the correction.
+- FU-02: independently reproduced with a 60-turn export plus decision history.
+  The assembler now recovers complete approval/clarification metadata from a
+  later complete page; it preserves the warning only if none carries full
+  metadata. The expanded regression includes both an approval and clarification.
+- FU-03: evidence-preview cleanup now supplies its association id.
+- FU-04: repaired the comment encoding and normalized touched source line endings.
+
+The follow-up also noted two existing lifecycle gaps, now repaired: a dispatch
+exception/unsuccessful result after intent records `uncertain`, refusing silent
+relaunch, and integrated associations remain visible until explicit Finish.
+Host finish preserves the prior integration note and transitions to finished;
+Discard stays disabled after integration. Regression checks cover dispatch
+throw/retry refusal and integrated-to-finished persistence.
+
+The exact `900a9a1` desktop suite passed 787/787 and shared package 44/44.
+The final small corrections are undergoing a narrow independent delta review
+and final checks before the owner's authorized push/PR. Source review is still
+separate from installed-app and release qualification.

@@ -204,7 +204,7 @@ export function createNativeChatService(options) {
       signalError = err;
     }
     const code = signalError && typeof signalError === "object" ? signalError.code : null;
-    // ESRCH / missing process â†’ dead. EPERM/EACCES â†’ uncertain, not proof of death.
+    // ESRCH / missing process means dead. EPERM/EACCES is uncertain, not proof of death.
     if (code === "EPERM" || code === "EACCES") return false;
     if (code === "ESRCH") return true;
     // Unknown access failure is uncertain; do not steal the fence.

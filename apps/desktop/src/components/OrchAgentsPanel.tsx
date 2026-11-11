@@ -22,7 +22,7 @@ type Props = {
 };
 
 function isOpenDisposition(disposition: DelegationAssociation["disposition"]) {
-  return disposition === "none" || disposition === "accepted";
+  return disposition === "none" || disposition === "accepted" || disposition === "integrated";
 }
 
 export function OrchAgentsPanel({ repoPath, conversationId = null, disabled = false }: Props) {
@@ -84,6 +84,7 @@ export function OrchAgentsPanel({ repoPath, conversationId = null, disabled = fa
         }
         try {
           const cleanup = await callHost<OrchCommandResult>("orch_cleanup", {
+            associationId: item.id,
             wp: item.wp,
           });
           parts.push(`cleanup preview: ${cleanup.text || JSON.stringify(cleanup.output || {}).slice(0, 160)}`);
@@ -484,7 +485,7 @@ export function OrchAgentsPanel({ repoPath, conversationId = null, disabled = fa
                   >
                     Integrate
                   </button>
-                  <button type="button" className="native-button" disabled={busy} onClick={() => void onDiscard(item)}>
+                  <button type="button" className="native-button" disabled={busy || item.disposition === "integrated"} onClick={() => void onDiscard(item)}>
                     Discard
                   </button>
                 </div>

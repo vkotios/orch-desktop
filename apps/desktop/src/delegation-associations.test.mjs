@@ -42,7 +42,9 @@ describe("delegation associations", () => {
     expect(listed).toHaveLength(1);
     expect(listed[0].disposition).toBe("accepted");
 
-    const finished = store.setDisposition(created.id, "finished", "orch finish only");
+    const integrated = store.setDisposition(created.id, "integrated", "host recorded Git merge");
+    expect(integrated.disposition).toBe("integrated");
+    const finished = store.setDisposition(created.id, "finished", "orch finish after Git merge");
     expect(finished.disposition).toBe("finished");
     expect(() => store.setDisposition(created.id, "discarded")).toThrow(/cannot move/);
 

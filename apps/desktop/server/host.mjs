@@ -592,8 +592,9 @@ export async function runHost(options = {}) {
         return;
       }
       let data;
+      let admitted;
       try {
-        const admitted = await admitOrchArgs(env.command, env.args);
+        admitted = await admitOrchArgs(env.command, env.args);
         data = await dispatchFn(env.command, admitted);
         // Host-owned association resource updates after successful orch prep/launch.
         if (data && data.ok !== false) {
@@ -601,7 +602,7 @@ export async function runHost(options = {}) {
           if (associationId && env.command === 'orch_finish') {
             const store = await getDelegationStore();
             const prior = store.get(associationId);
-            if (prior?.disposition !== 'integrated') store.setDisposition(associationId, 'finished', 'Coordinator finish succeeded; Git integration remains separate.');
+            store.setDisposition(associationId, 'finished', `${prior?.note ?? ''}\nCoordinator finish succeeded; Git integration remains separate.`);
           }
           if (associationId && env.command === 'orch_review') {
             const reviewId = data.output?.review_id ?? data.output?.id;
@@ -637,8 +638,24 @@ export async function runHost(options = {}) {
             }
           }
         }
+        if (admitted.associationId && ['orch_run', 'orch_worktree_create'].includes(env.command)) {
+          const store = await getDelegationStore();
+          const association = store.get(admitted.associationId);
+          if (!data || data.ok === false || (env.command === 'orch_run' ? !association?.runId : !association?.worktreePath)) {
+            store.upsert({ id: admitted.associationId, stage: 'uncertain', note: 'Preparation/launch result was unsuccessful or lacked resource identity; inspect retained resources.' });
+          }
+        }
       }
-      catch (err) { await sendError(env.requestId, 'COMMAND_FAILED', err?.message ?? String(err)); return; }
+      catch (err) {
+        let message = err?.message ?? String(err);
+        if (admitted?.associationId && ['orch_run', 'orch_worktree_create'].includes(env.command)) {
+          try {
+            const store = await getDelegationStore();
+            store.upsert({ id: admitted.associationId, stage: 'uncertain', note: 'Dispatch threw after preparation intent; inspect retained resources before retrying.' });
+          } catch (receiptError) { message += `; could not persist uncertainty: ${receiptError?.message ?? receiptError}`; }
+        }
+        await sendError(env.requestId, 'COMMAND_FAILED', message); return;
+      }
       await sendResult(env.requestId, data);
     }
 

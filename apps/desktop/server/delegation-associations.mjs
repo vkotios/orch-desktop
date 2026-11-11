@@ -34,7 +34,7 @@ const DISPOSITION_TRANSITIONS = {
   accepted: new Set(["finished", "discarded", "integrated"]),
   finished: new Set(),
   discarded: new Set(),
-  integrated: new Set(),
+  integrated: new Set(["finished"]),
 };
 
 function defaultPath() {

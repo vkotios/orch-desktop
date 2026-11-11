@@ -19,16 +19,19 @@ function fixture() {
   const open = (birth = "ms:100", databasePath = path.join(dir, "sessions.sqlite3")) => {
     const p = createNativeSessionPersistence({ databasePath, hostGeneration: randomUUID(),
       livenessPath: path.join(dir, "liveness.json"), verifyOwnerEvidence: () => true,
+      verifyPendingApproval: () => true,
+      verifyPendingQuestion: () => true,
       processTable: () => [{ pid: process.pid, createdAt: birth, ppid: 0, name: "fixture" }] });
     stores.push(p); return p;
   };
   const p = open(), project = p.ensureProject({ pathCanonical: dir, name: "fixture" }), conversationId = randomUUID();
   p.ensureConversation({ projectId: project.id, conversationId, controller: "codex", evidence: {} });
   p.afterThreadStart({ conversationId, nativeThreadId: "thread-fixture", evidence: {} });
-  const write = (index, chunks) => {
+  const write = (index, chunks, observed = () => {}) => {
     const turnId = randomUUID(), operationId = randomUUID(), scope = { conversationId, turnId, operationId, evidence: {} };
     p.beginTurn({ ...scope, prompt: `q${index}` }); p.afterTurnWritten(scope);
     p.afterObserved({ ...scope, nativeIdentity: "thread-fixture", nativeTurnId: `native-${index}` });
+    observed(scope);
     for (const text of chunks) p.appendDelta({ ...scope, partId: randomUUID(), nativeMessageId: `m-${index}`, text });
     p.settleTurn({ ...scope, outcome: "completed", nativeIdentity: "thread-fixture", nativeTurnId: `native-${index}` });
   };
@@ -60,7 +63,15 @@ it("OPUS-01: hydrate/poll across the 2048-event boundary preserves every part on
 
 it("OPUS-02/03: byte windows retain complete recent turns, older pages and exports recover all history", { timeout: 30_000 }, async () => {
   const f = fixture();
-  for (let i = 0; i < 60; i++) f.write(i, [`${i}:` + "x".repeat(20_000)]);
+  for (let i = 0; i < 60; i++) f.write(i, [`${i}:` + "x".repeat(20_000)], (scope) => {
+    if (i === 59) {
+      f.p.registerApproval({ conversationId: f.conversationId, turnId: scope.turnId, approvalId: randomUUID(),
+        nativeRequestId: "request", connectionId: randomUUID(), nativeItemId: "item", approvalType: "command", decisions: ["accept", "decline"], evidence: {} });
+      f.p.registerClarification({ conversationId: f.conversationId, turnId: scope.turnId, clarificationId: randomUUID(),
+        route: "codex_request", connectionId: randomUUID(), nativeItemId: "question", nativeRequestId: 42,
+        questions: [{ id: "q", header: "Pick", question: "Which?", options: [{ label: "A", description: "first" }, { label: "B", description: "second" }], multiSelect: false, isOther: true }], evidence: {} });
+    }
+  });
   const scope = { projectId: f.projectId, conversationId: f.conversationId };
   let h = f.p.hydrateConversation(scope);
   expect(h.messages.at(-2).text).toBe("q59");
@@ -81,6 +92,8 @@ it("OPUS-02/03: byte windows retain complete recent turns, older pages and expor
   });
   expect(downloaded.truncated).toBe(false);
   expect(downloaded.conversation.messages).toHaveLength(120);
+  expect(downloaded.conversation.historicalApprovals).toHaveLength(1);
+  expect(downloaded.conversation.historicalClarifications).toHaveLength(1);
   expect(downloaded.conversation.messages[0].text).toBe("q0");
   expect(downloaded.conversation.messages.at(-2).text).toBe("q59");
 });
@@ -120,6 +133,7 @@ it("OPUS-04/05: real host enforces recovery transitions, immutable bindings and 
   const f = fixture(), file = path.join(f.dir, "delegations.json"), associationId = "a";
   const associations = createDelegationAssociations({ filePath: file });
   associations.upsert({ id: associationId, conversationId: f.conversationId, repoPath: f.dir, wp: "WP", slice: "s", cli: "codex", model: "fixture", stage: "uncertain", runId: "run-1", worktreePath: f.dir });
+  associations.upsert({ id: "launch", conversationId: f.conversationId, repoPath: f.dir, wp: "LAUNCH", slice: "s", cli: "codex", model: "fixture", stage: "worktree", worktreePath: f.dir });
   const input = new PassThrough(), output = new PassThrough(), error = new PassThrough(), chunks = [], dispatched = [];
   output.on("data", (b) => chunks.push(b));
   let wrongRun = false;
@@ -129,6 +143,7 @@ it("OPUS-04/05: real host enforces recovery transitions, immutable bindings and 
     } }),
     dispatch: async (command, args) => {
       dispatched.push({ command, args });
+      if (command === "orch_run") throw new Error("injected post-intent dispatch failure");
       return { runId: wrongRun ? "other" : "run-1", status: { id: "run-1", status: "running", dir: f.dir, wp: "WP" } };
     } });
   let n = 0;
@@ -152,8 +167,16 @@ it("OPUS-04/05: real host enforces recovery transitions, immutable bindings and 
     wrongRun = false;
     const adopted = await request("delegation_adopt", { id: "a" });
     expect(adopted.result.association.stage).toBe("running");
+    expect((await request("orch_cleanup", { associationId: "a", wp: "OTHER" })).type).toBe("result");
+    expect(dispatched.at(-1).args.wp).toBe("WP");
     expect((await request("delegation_upsert", { id: "a", stage: "uncertain" })).type).toBe("result");
     const abandoned = await request("delegation_abandon", { id: "a" });
     expect(abandoned.result.association).toMatchObject({ stage: "discarded", disposition: "discarded" });
+    expect((await request("orch_run", { associationId: "launch" })).type).toBe("error");
+    const list = await request("delegation_list", {});
+    expect(list.result.associations.find((a) => a.id === "launch").stage).toBe("uncertain");
+    const count = dispatched.length;
+    expect((await request("orch_run", { associationId: "launch" })).type).toBe("error");
+    expect(dispatched).toHaveLength(count);
   } finally { input.end(); await done; }
 });

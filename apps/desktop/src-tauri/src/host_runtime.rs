@@ -16,7 +16,7 @@ use tokio::time::{timeout, timeout_at, Instant};
 
 const MAX_HANDSHAKE: Duration = Duration::from_secs(10);
 const STDERR_TAIL_BYTES: usize = 4096;
-const NATIVE_COMMANDS: [&str; 47] = [
+const NATIVE_COMMANDS: &[&str] = &[
     "ping",
     "discover_harnesses",
     "orch_dashboard",
