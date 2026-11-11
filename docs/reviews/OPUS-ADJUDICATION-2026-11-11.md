@@ -66,3 +66,28 @@ The exact `900a9a1` desktop suite passed 787/787 and shared package 44/44.
 The final small corrections are undergoing a narrow independent delta review
 and final checks before the owner's authorized push/PR. Source review is still
 separate from installed-app and release qualification.
+
+## Final disposition — source ready for PR
+
+[Final Opus delta review](OPUS-5.5-FINAL-2026-11-11.md), candidate
+`d634157068af08f6a4f717903e7159dd4caa78c8`, run `20261111-235102-41838a`:
+FU-01–04 resolved; both lifecycle corrections sound; no remaining concrete
+ actionable regressions found. The independent recommendation is **ready to push
+as a PR**, with v0.1 release acceptance still open. Fresh-worktree scope passed;
+only the report was created. Requested/served model was `claude-opus-5-5`, medium.
+
+Final controller checks: **787 desktop + 44 shared = 831 package tests passed**;
+12 Rust tests passed; workspace typechecks, production web build and native build
+passed. EXE/MSI/NSIS were rebuilt, and all 113 staged application files match
+source. [Artifact/source receipt](../evidence/OPUS-REVIEW-2026-11-11.json) records
+the source commit, manifest digest and on-disk SHA-256 hashes. The earlier
+`9302b87` and controller-repair binaries are historical receipts.
+
+Provenance note: the first two reports used a retained audit worktree that the
+controller later fast-forwarded. Their late ledger statistics therefore include
+controller changes; they do not describe model-authored source edits. Initial
+scope was checked before that movement, and follow-up containment was checked
+against its actual candidate `900a9a1`. The final run uses a fresh worktree at
+`d634157`, with a clean recorded baseline/scope and exactly one report file.
+Reports, original transcripts and retained worktrees remain available locally.
+No source implementation is attributed to the report-only Opus runs.

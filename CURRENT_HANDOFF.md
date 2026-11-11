@@ -6,6 +6,14 @@ The product is still called **CHO Desktop** in source, package names and older d
 
 ## Start here
 
+Current reviewed source: **`d634157`**, branch `codex/cho-completion-reviewed`.
+[Final Opus 5.5 medium review](docs/reviews/OPUS-5.5-FINAL-2026-11-11.md) recommends
+pushing as a PR, with no remaining actionable findings in the final delta.
+Local checks: 787 desktop + 44 shared, Rust 12, typecheck, web/native builds;
+[rebuilt artifact/source hashes](docs/evidence/OPUS-REVIEW-2026-11-11.json).
+The earlier checkpoints below are historical. Live provider, WebView/scaling,
+clean-machine and signing/release qualification remain open.
+
 Latest controller repair review: [2026-11-11](docs/reviews/CODEX-CURSOR-REVIEW-2026-11-11.md).
 Independent [Opus review and adjudication](docs/reviews/OPUS-ADJUDICATION-2026-11-11.md)
 supersede its earlier completion claims. The owner authorized the Opus review,

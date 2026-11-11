@@ -13,6 +13,12 @@ Status vocabulary:
 
 ## Controller review dispositions (R1–R10)
 
+Final 2026-11-11 source assessment: [Opus final review](../reviews/OPUS-5.5-FINAL-2026-11-11.md)
+recommends PR readiness for `d634157`; all eleven original and four follow-up
+findings are closed in source. 831 package tests, Rust12, typechecks and native
+build pass. [Final artifact receipt](OPUS-REVIEW-2026-11-11.json) supersedes earlier
+binary receipts; installed/live/release acceptance remains open.
+
 2026-11-11 controller follow-up: see [review and repairs](../reviews/CODEX-CURSOR-REVIEW-2026-11-11.md)
 and [coordinator snapshot](../COORDINATOR_UPSTREAM.md). Offline new-path
 restore/clone with identity rotation is now implemented and locally checked;
