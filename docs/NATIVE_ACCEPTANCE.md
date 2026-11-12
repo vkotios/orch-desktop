@@ -6,6 +6,8 @@ turn, save a draft, stop/close the host, reopen with the same database and a
 fresh generation, then list/hydrate the conversation and draft and continue
 the native session without re-supplying the marker.
 
+Requires Node 24 (the probe imports the product TypeScript reducer using native type stripping).
+
 ## Invocation
 
 Default (no flags) refuses provider execution and starts nothing:
@@ -46,7 +48,7 @@ happens in this worktree without controller review and authorization.
 - Marker discipline: turn 1 asks for an exact single-line marker echo with no
   tools; turn 2 asks for the marker from the previous reply without
   supplying it again. Any approval event fails honestly (`APPROVAL_BLOCKED`)
-  and any observed `tool_call`/`tool_result` event fails honestly as
+  and any observed `tool_call`/`tool_result`/`clarification` event fails honestly as
   `TOOL_USED` (a read tool needs no approval, so tool use is rejected
   independently of approvals); the probe never auto-decides.
 - Identity: the native identity (`nativeThreadId`, or Claude

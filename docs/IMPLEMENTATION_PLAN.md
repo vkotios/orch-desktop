@@ -1,9 +1,22 @@
 # CHO Desktop v0.1 — Implementation Plan
 
 Date: 2026-10-30  
-Status: Foundation, native Codex/Claude debug conversations and clarification accepted locally; durable recovery and release qualification remain open
+Status: Completion candidate locally verified; final hosted CI and release acceptance remain open
 Product contract: [PRODUCT_SPEC.md](PRODUCT_SPEC.md), initially committed as `d9cc7ef`  
 Planning branch: `codex/cho-v01-plan`; implementation branch: `codex/cho-v01-foundation`
+
+## Current closeout amendment — 2026-11-12
+
+The completion candidate and measured checks are recorded in
+[evidence](evidence/COMPLETION-2026-11-12.json) and the
+[AC-01–15 acceptance ledger](evidence/ACCEPTANCE-2026-11-12.md).
+PR #2 is merged; current work is on `codex/cho-v01-acceptance-completion`.
+Current implementation slices are complete and reviewed. Run final hosted CI,
+repair concrete failures, then qualify the remaining real-user release journeys.
+Do not reopen historical inventories or expand scope for nonblocking test/doc
+follow-ups. Muse Spark 1.3 and Vibe GLM 5.3 Flash remain the approved workforce;
+DeepSeek is revoked. Product requirements and AC-01–15 remain unchanged.
+Signing, publication and merging the new completion PR require owner direction.
 
 ## Current execution amendment — 2026-11-05
 

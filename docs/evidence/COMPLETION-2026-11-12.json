@@ -1,0 +1,40 @@
+{
+  "date": "2026-11-12",
+  "sourceCommit": "be494183aee1eeac9947e53e0b8e204c6211b71f",
+  "branch": "codex/cho-v01-acceptance-completion",
+  "checks": {
+    "desktop": 843,
+    "shared": 44,
+    "browser": 80,
+    "rust": 15,
+    "coordinator": 106,
+    "typecheck": "pass",
+    "webBuild": "pass",
+    "releaseScanUnexpectedHits": 0,
+    "dependencyAuditVulnerabilities": 0,
+    "stagedSourceFiles": 116
+  },
+  "liveNativeProbes": {
+    "codex": {
+      "result": "pass",
+      "model": "gpt-6-sol",
+      "source": "be494183aee1eeac9947e53e0b8e204c6211b71f",
+      "sourceDirty": false,
+      "probeDigest": "a9dbd0b2f7679d37e6d1cb655ee744a17178dc950d1c5889a3977aaab2325cac",
+      "cases": 17,
+      "scope": "Owned source host-generation/native-client restart; not installed app process qualification"
+    },
+    "claude": {
+      "result": "pass",
+      "model": "sonnet",
+      "source": "be494183aee1eeac9947e53e0b8e204c6211b71f",
+      "sourceDirty": false,
+      "probeDigest": "a9dbd0b2f7679d37e6d1cb655ee744a17178dc950d1c5889a3977aaab2325cac",
+      "cases": 17,
+      "scope": "Owned source host-generation/native-client restart; not installed app process qualification"
+    }
+  },
+  "hostedCI": "pending",
+  "newInstallerQualification": "pending",
+  "releaseAccepted": false
+}

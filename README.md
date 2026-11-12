@@ -8,7 +8,7 @@ remaining work and implementation/review workflow.
 
 The product brings direct CLI conversations and the `orch` coordination dashboard into one desktop workspace. The current delivery is a Windows native Codex and Claude debug preview; product and release work continues:
 
-1. **Direct CLI conversations:** the native preview uses the installed Codex or Claude CLI and saved first-party sign-in. It supports streamed continuing conversations, tool status, once-only permissions, clarification answers and cancellation after project selection and trust. SQLite persistence supports history, drafts and recovery; live-provider restart qualification remains open.
+1. **Direct CLI conversations:** the native preview uses the installed Codex or Claude CLI and saved first-party sign-in. It supports streamed continuing conversations, tool status, once-only permissions, clarification answers and cancellation after project selection and trust. SQLite persistence supports history, drafts and recovery; owned source-host Codex/Claude restart probes pass; installed-provider qualification remains open.
 2. **Coordinator studio:** the native host admits selected conversation-bound delegation operations and provides explicit acceptance, integration and cleanup journeys. Local checks establish source behavior; live worker/reviewer and installed-app qualification remain open.
 
 The implementation builds on the existing coordinator and adapter code. Supported product behavior and release acceptance are tracked in the specification and status below.
@@ -18,6 +18,12 @@ Bundled coordinator provenance and the upstream update procedure are recorded in
 support does not qualify CHO Desktop on those platforms.
 
 ## Desktop implementation status
+
+Current completion candidate and its measured checks: [handoff](CURRENT_HANDOFF.md) and
+[acceptance ledger](docs/evidence/ACCEPTANCE-2026-11-12.md). PR #2 is merged;
+the follow-on candidate adds 80 rendered checks and private Windows candidate CI.
+The dated runtime observations below are historical, not final release acceptance.
+
 
 The Windows x64 debug executable and its bundled Node runtime build successfully. Actual runtime fixtures cover continuing Codex and Claude turns, approved reads, rejected writes, explicit clarification answers and interruption followed by continuation. The built native window also passes rendered conversation checks: visible streamed text, context retained across turns, Stop reaching an interrupted outcome and successful continuation afterward. Durable recovery, installer/upgrade and clean-machine release acceptance remain open. The shared clarification card also passes the built Codex window's answer, Stop and recovery check. The browser preview retains prototype workflows. See the [product specification](docs/PRODUCT_SPEC.md) and [verified implementation status](docs/IMPLEMENTATION_STATUS.md) for the current boundary.
 

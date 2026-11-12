@@ -35,3 +35,12 @@ The initial two slices have disjoint scope and isolated implementation worktrees
 Controller checks the whole diff and required tests, records findings, obtains
 independent model review and integrates only converged changes. Preserve earlier
 review reports and artifact receipts as historical evidence.
+
+## Closeout checkpoint — 2026-11-12
+
+Current slices are implemented and reviewed; source `be49418` passes the
+combined checks in [evidence](../evidence/COMPLETION-2026-11-12.json).
+Both native Codex/Claude owned restart probes pass. Next: hosted candidate CI,
+repair real failures, and the [remaining release acceptance](../evidence/ACCEPTANCE-2026-11-12.md).
+Retain isolated implementation and incident evidence until PR disposition;
+no active DeepSeek run remains and it must not be relaunched.
