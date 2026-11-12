@@ -1,5 +1,32 @@
 # CHO Desktop implementation status
 
+## Current delivery assessment — 2026-11-12
+
+The complete committed application tree, Cursor delivery/corrections, controller
+repairs and incorporated coordinator fixes are pushed in
+[PR #2](https://github.com/vkotios/orch-desktop/pull/2). Product source at
+`d634157` received the final clean Opus 5.5 medium review; the later test/CI
+changes received a separate clean review. These establish reviewed source and
+local build readiness, not completion of every implementation-plan exit.
+
+Latest local evidence: 831 package tests, 12 Rust tests at the unchanged product
+source, successful EXE/MSI/NSIS builds, 113 staged files matching source, and zero
+findings in both dependency audits. See the [current handoff](../CURRENT_HANDOFF.md)
+and [artifact receipts](evidence/CI-FOLLOWUP-2026-11-12.json).
+
+Hosted desktop, native Rust and focused coordinator jobs passed at `d75c34c`.
+The broader coordinator commit matrix failed because the discovery fixture
+omitted Grok, which production discovery already supports. The fixture now
+configures all eight harnesses and asserts the inventory matches, avoiding
+machine-dependent discovery. Fresh hosted results are required after this fix.
+
+**The v0.1 implementation plan remains open.** Required remaining acceptance:
+live provider resume/approval and delegated implement/review/integrate journeys;
+actual WebView keyboard/layout/scaling checks; clean Windows install, upgrade
+and uninstall; final-candidate CI and distribution qualification. Offline
+restore is a maintenance API, not an in-app restore wizard. Earlier dated
+sections below are historical checkpoints and do not override this assessment.
+
 Updated: 2026-11-06. Integration branch: `codex/cho-v01-foundation`. Native Codex/Claude conversations and the clarification source milestone are accepted locally; source checkpoint `926110a` is verified by controller checks and independent GLM review.
 
 Product contract: [specification](PRODUCT_SPEC.md). Sequence: [plan](IMPLEMENTATION_PLAN.md). Sonnet findings: [validated dispositions](reviews/FINDINGS_DISPOSITION.md). Current package: [CHO-03 durable sessions](work-packages/CHO-03.md). Native Codex and Claude runtime and focused rendered conversation checks pass; broader [CHO-04 qualification](work-packages/CHO-04.md) remains open.

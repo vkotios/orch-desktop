@@ -36,3 +36,9 @@ synthetic test identifiers and retained audit provenance. Unknown or changed
 content still fails, malformed policy fails a control, and secret-detection
 positive controls remain mandatory. This is a desktop-specific addition, not an
 upstream claim or public-release approval. Desktop CI now enforces the scan too.
+
+CI fixture repair (2026-11-12): discovery already supports Grok, but the inherited
+native executable-permission test configured only seven harnesses. Configure all
+eight explicitly, restore their environment overrides and assert the discovered
+inventory. This removes dependence on the runner's installed CLIs without
+changing production discovery or skipping its permission checks.

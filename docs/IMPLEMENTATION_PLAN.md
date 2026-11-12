@@ -7,6 +7,14 @@ Planning branch: `codex/cho-v01-plan`; implementation branch: `codex/cho-v01-fou
 
 ## Current execution amendment — 2026-11-05
 
+Current delivery assessment (2026-11-12): see
+[implementation status](IMPLEMENTATION_STATUS.md#current-delivery-assessment--2026-11-12)
+and [PR #2](https://github.com/vkotios/orch-desktop/pull/2). Cursor's source
+delivery and controller repairs are pushed and independently reviewed. The
+remaining live, rendered, clean-machine and final CI acceptance requirements
+below remain in force; the full plan has not been declared complete. Older
+candidate SHAs and authorization observations in this amendment are historical.
+
 This amendment takes precedence over older execution assignments and checkpoint
 descriptions below. The product scope and AC-01–AC-15 remain unchanged.
 
