@@ -70,3 +70,13 @@ rows below; source review does not establish live delegated-change acceptance.
 2. **Clean Windows environment** — MSI/NSIS install/upgrade/uninstall.
 3. **Independent review** — approved orch reviewer availability.
 4. **Owner authority** — push, tag, signing, public visibility.
+
+## Post-PR CI follow-up (2026-11-12)
+
+Test/CI candidate `3a618a7`: exact-content scanner exceptions independently
+reviewed by Opus 5.5 medium; no blocking findings. Vitest 4.1.12: 831 package
+tests pass; both dependency audits report zero vulnerabilities. See
+[CI review](../reviews/OPUS-CI-REVIEW-2026-11-12.md) and
+[latest artifact receipts](CI-FOLLOWUP-2026-11-12.json).
+Hosted CI is a separate status on PR #2. Existing live-provider, rendered
+WebView, clean-machine and release qualification gates remain open.

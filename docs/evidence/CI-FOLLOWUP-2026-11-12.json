@@ -1,0 +1,60 @@
+{
+  "recordedAtUtc": "2026-11-12T00:17:03.790760+00:00",
+  "sourceCommit": "3a618a769626160c42c6836b0b460e3141897d01",
+  "productReviewedCommit": "d634157068af08f6a4f717903e7159dd4caa78c8",
+  "sourceFileCount": 317,
+  "sourceManifestSha256": "E4E28FBD733E2A6F6710B0763172B72D53FB764FABFD020FD6B91B043B8437FF",
+  "stagedFilesChecked": 113,
+  "stagedMismatches": [],
+  "checks": {
+    "desktop": 787,
+    "shared": 44,
+    "rust": "12 passed at unchanged product source d634157",
+    "typecheck": "passed",
+    "webBuild": "passed",
+    "nativeBuild": "passed, exit 0",
+    "releaseScan": "0 unexpected; all controls passed",
+    "scannerTests": 3
+  },
+  "dependencyAudits": {
+    "root": {
+      "info": 0,
+      "low": 0,
+      "moderate": 0,
+      "high": 0,
+      "critical": 0,
+      "total": 0
+    },
+    "orch": {
+      "info": 0,
+      "low": 0,
+      "moderate": 0,
+      "high": 0,
+      "critical": 0,
+      "total": 0
+    }
+  },
+  "artifacts": [
+    {
+      "path": "apps/desktop/src-tauri/target/release/cho-desktop.exe",
+      "sha256": "934AB8A3E550782D6DED41913E2028121F132902DB28DF26B1946DA3763305E5"
+    },
+    {
+      "path": "apps/desktop/src-tauri/target/release/bundle/msi/CHO Desktop_0.1.0_x64_en-US.msi",
+      "sha256": "CD71AF60FC93ED5DBA484BC243A86517B88CA062BB86300EF41DD0345EE20708"
+    },
+    {
+      "path": "apps/desktop/src-tauri/target/release/bundle/nsis/CHO Desktop_0.1.0_x64-setup.exe",
+      "sha256": "DED8F357D458D43F163C2C34BD5F1552257441EBD43B674665D0D7913CC156F1"
+    }
+  ],
+  "independentCiReview": {
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "candidate": "3a618a769626160c42c6836b0b460e3141897d01",
+    "report": "docs/reviews/OPUS-CI-REVIEW-2026-11-12.md",
+    "scope": "pass; report only",
+    "recommendation": "no blocking findings"
+  },
+  "qualification": "Local build evidence; live-provider, rendered WebView, clean-machine, signing and release remain open"
+}

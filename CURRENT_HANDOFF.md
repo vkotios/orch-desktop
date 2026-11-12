@@ -1,16 +1,21 @@
 # orch-desktop handoff
 
-Updated: 2026-11-05. Repository: [vkotios/orch-desktop](https://github.com/vkotios/orch-desktop) (private).
+Updated: 2026-11-12. Repository: [vkotios/orch-desktop](https://github.com/vkotios/orch-desktop) (private).
 Development/default branch: `codex/cho-v01-foundation`.
 The product is still called **CHO Desktop** in source, package names and older documents.
 
 ## Start here
 
-Current reviewed source: **`d634157`**, branch `codex/cho-completion-reviewed`.
+Current source: **`3a618a7`**, branch `codex/cho-completion-reviewed`.
 [Final Opus 5.5 medium review](docs/reviews/OPUS-5.5-FINAL-2026-11-11.md) recommends
 pushing as a PR, with no remaining actionable findings in the final delta.
 Local checks: 787 desktop + 44 shared, Rust 12, typecheck, web/native builds;
 [rebuilt artifact/source hashes](docs/evidence/OPUS-REVIEW-2026-11-11.json).
+The CI/dependency follow-up at `3a618a7` has a separate clean
+[Opus review](docs/reviews/OPUS-CI-REVIEW-2026-11-12.md), 831 passing package
+tests and zero findings in both dependency audits. Latest installer receipts:
+[CI follow-up evidence](docs/evidence/CI-FOLLOWUP-2026-11-12.json).
+[PR #2](https://github.com/vkotios/orch-desktop/pull/2) contains this delivery.
 The earlier checkpoints below are historical. Live provider, WebView/scaling,
 clean-machine and signing/release qualification remain open.
 
