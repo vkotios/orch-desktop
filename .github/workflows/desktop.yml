@@ -34,3 +34,51 @@ jobs:
         run: npm test
       - name: Build
         run: npm run build
+      - name: Public-tree release scan
+        # Exact reviewed fixture/provenance exceptions; new or changed hits fail.
+        run: node orch/tools/release-scan.mjs
+
+  coordinator-contracts:
+    name: Coordinator contracts (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: orch/package-lock.json
+      - name: Install coordinator dependencies
+        run: npm ci
+        working-directory: orch
+      - name: Coordinator bridge and upstream regression checks
+        run: node --test --test-concurrency=1 orch/test/unit.test.mjs orch/test/adapter-claude.test.mjs orch/test/adapter-grok.test.mjs orch/test/adapters-p04b.test.mjs orch/test/mcp.test.mjs orch/test/run-orphan-inventory.test.mjs orch/test/darwin-process-evidence.test.mjs
+
+  native-windows:
+    name: Native host (Windows Rust)
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Set up Node.js 24
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install workspace dependencies
+        run: npm ci
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+      - name: Stage pinned runtime
+        run: node apps/desktop/scripts/prepare-runtime.mjs
+      - name: Cargo test (offline when possible)
+        working-directory: apps/desktop/src-tauri
+        run: cargo test --locked
+

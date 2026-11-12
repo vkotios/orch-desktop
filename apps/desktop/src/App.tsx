@@ -164,9 +164,9 @@ function BrowserApp() {
     return [
       {
         id: "session-default",
-        title: "CHO-desktop Orchestrator",
-        repoPath: "C:\\dev\\CHO-desktop",
-        repoName: "CHO-desktop",
+        title: "CHO Desktop",
+        repoPath: "",
+        repoName: "Select a repository",
         orchestratorHarness: "agy",
         orchestratorModel: "gemini-4-argon-high",
         effort: "high",
@@ -387,7 +387,11 @@ function BrowserApp() {
       repoPath ||
       activeSession?.repoPath ||
       dashboard?.repoRoot ||
-      "C:\\dev\\CHO-desktop";
+      "";
+    if (!targetRepo.trim()) {
+      setShowRepoPicker(true);
+      return;
+    }
     const repoName =
       targetRepo.split(/[\\/]/).filter(Boolean).pop() || targetRepo;
     const defaultHarness =
@@ -649,8 +653,8 @@ function BrowserApp() {
       repositories.find(
         (r) => r.path.toLowerCase() === activeSession?.repoPath.toLowerCase(),
       ) || {
-        path: activeSession?.repoPath || "C:\\dev\\CHO-desktop",
-        name: activeSession?.repoName || "CHO-desktop",
+        path: activeSession?.repoPath || "",
+        name: activeSession?.repoName || "Select a repository",
         branch: "",
         adopted: false,
       }
@@ -1504,7 +1508,7 @@ function BrowserApp() {
             <div>
               <input
                 id="project-path"
-                placeholder="C:\dev\your-project"
+                placeholder="Absolute path to a git repository"
                 value={customRepoInput}
                 onChange={(e) => setCustomRepoInput(e.target.value)}
               />

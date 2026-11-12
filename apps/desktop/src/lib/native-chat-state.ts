@@ -31,9 +31,12 @@ export interface NativeToolStep {
   id: string;
   title: string;
   status: string;
+  seq?: number;
 }
 
 export interface NativeChatMessage {
+  imported?: boolean;
+  importIndex?: number;
   id: string;
   role: "user" | "assistant";
   text: string;
@@ -50,6 +53,8 @@ export interface NativeChatMessage {
   nativeMessageId?: string;
   requestedNativeSessionId?: string;
   requestedNativeUserMessageId?: string;
+  /** Retained after turn completion so durable catch-up can fill missing parts. */
+  parts?: Array<{ partId: string; text: string; seq: number | null; order: number }>;
 }
 
 export interface NativeApprovalRequest {
@@ -62,6 +67,7 @@ export interface NativeApprovalRequest {
 }
 
 export interface NativeUiSession {
+  history?: import("./history-window").HistoryWindow;
   id: string;
   controller: NativeController;
   title: string;
@@ -81,6 +87,14 @@ export interface NativeUiSession {
   /** Model/role lock once the native thread exists (first send). */
   threadStarted: boolean;
   unavailable: boolean;
+  /** True once any live (non-durable) event has advanced the active turn. */
+  liveTurnProgress: boolean;
+  /**
+   * Ordered assistant parts for the active turn. Rebuild text by durable seq
+   * when present, otherwise by live arrival order — never append recovered
+   * middle chunks to the end.
+   */
+  appliedParts: Array<{ partId: string; text: string; seq: number | null; order: number }>;
 }
 
 export function defaultNativeModel(models: NativeModelInfo[]): string {
@@ -113,7 +127,21 @@ export function createNativeUiSession(
     requestedNativeSessionId: null,
     threadStarted: false,
     unavailable: false,
+    liveTurnProgress: false,
+    appliedParts: [],
   };
+}
+
+function rebuildAssistantText(
+  parts: Array<{ partId: string; text: string; seq: number | null; order: number }>,
+): string {
+  const sorted = [...parts].sort((a, b) => {
+    const aSeq = typeof a.seq === "number" ? a.seq : Number.POSITIVE_INFINITY;
+    const bSeq = typeof b.seq === "number" ? b.seq : Number.POSITIVE_INFINITY;
+    if (aSeq !== bSeq) return aSeq - bSeq;
+    return a.order - b.order;
+  });
+  return sorted.map((p) => p.text).join("");
 }
 
 /** Records the user prompt plus an assistant placeholder for a fresh UI turn. */
@@ -139,6 +167,8 @@ export function beginNativeTurn(
     busy: true,
     cancelling: false,
     nativeTurnId: null,
+    liveTurnProgress: false,
+    appliedParts: [],
   };
 }
 
@@ -161,6 +191,7 @@ function finishTurn(
   isError: boolean,
 ): NativeUiSession {
   const { index } = assistantByTurn(session, turnId);
+  const retainedParts = session.appliedParts;
   const messages =
     index === -1
       ? session.messages
@@ -173,6 +204,9 @@ function finishTurn(
                 outcome,
                 outcomeNote: note || undefined,
                 isError: m.isError || isError,
+                // Keep ordered parts so durable catch-up can recover missing text
+                // after live completion without resurrecting the turn.
+                parts: retainedParts.length > 0 ? retainedParts : m.parts,
               }
             : m,
         );
@@ -185,6 +219,8 @@ function finishTurn(
     busy: false,
     cancelling: false,
     nativeTurnId: null,
+    liveTurnProgress: false,
+    appliedParts: [],
   };
 }
 
@@ -256,22 +292,31 @@ export function applyNativeUiEvent(
   event: NativePollEvent,
   generation: string,
 ): NativeUiSession {
-  if (event.generation !== generation || event.sessionId !== session.id ||
-      !event.turnId || session.activeTurnId !== event.turnId) {
-    return session;
-  }
-  // Durable catch-up is recovery-only for the active turn. While busy, the live
-  // mailbox owns the whole turn (text, tools, and completion). Applying durable
-  // completion first would clear activeTurnId and drop later live text.
-  if (event.source === "durable" && session.busy && session.activeTurnId === event.turnId) {
-    return session;
-  }
-  if (event.source === "durable" && (event.kind === "turn_complete" || event.kind === "error" || event.nativeOutcome) && !session.busy) {
+  if (event.generation !== generation || event.sessionId !== session.id || !event.turnId) {
     return session;
   }
   const turnId = event.turnId;
   const message = session.messages.find((m) => m.id === turnId && m.role === "assistant");
+  const isActiveTurn = session.activeTurnId === event.turnId;
+  // Durable text/tool catch-up may arrive after live completion. Allow only
+  // transcript facts for an existing assistant message — never resurrect
+  // approvals/clarifications or change terminal outcome.
+  const durableTranscriptCatchup =
+    !isActiveTurn &&
+    event.source === "durable" &&
+    (event.kind === "message_delta" || event.kind === "tool_call") &&
+    Boolean(message);
+  if (!isActiveTurn && !durableTranscriptCatchup) {
+    return session;
+  }
+  // Ignore durable terminals when the turn is already finished.
+  if (event.source === "durable" && (event.kind === "turn_complete" || event.kind === "error" || event.nativeOutcome) && !session.busy) {
+    return session;
+  }
   if (!message) return session;
+  if (event.source !== "durable" && isActiveTurn) {
+    session = { ...session, liveTurnProgress: true };
+  }
   const controller = event.controller ?? "codex";
   if (controller !== session.controller) return markNativeUnavailable(session, "Conflicting native controller.");
   if (controller === "claude") {
@@ -320,10 +365,50 @@ export function applyNativeUiEvent(
   switch (event.kind) {
     case "message_delta": {
       if (!event.text) return session;
-      return updateAssistant(session, turnId, (m) => ({
-        ...m,
-        text: m.text + (event.text as string),
-      }));
+      const partId = typeof event.partId === "string" && event.partId.length > 0
+        ? event.partId
+        : null;
+      const seq = typeof event.seq === "number" && Number.isSafeInteger(event.seq)
+        ? event.seq
+        : null;
+      const isActive = session.activeTurnId === turnId;
+      let parts = isActive
+        ? session.appliedParts
+        : (message.parts ? [...message.parts] : []);
+      if (partId) {
+        const existing = parts.findIndex((p) => p.partId === partId);
+        if (existing >= 0) {
+          // Same identity: optionally learn durable seq, never duplicate text.
+          const prior = parts[existing];
+          if (seq != null && prior.seq == null) {
+            parts = parts.map((p, i) => (i === existing ? { ...p, seq } : p));
+          } else {
+            return session;
+          }
+        } else {
+          parts = [
+            ...parts,
+            { partId, text: event.text as string, seq, order: parts.length },
+          ];
+        }
+      } else if (isActive) {
+        // No part identity: append once in arrival order (legacy live path).
+        parts = [
+          ...parts,
+          {
+            partId: `anon-${parts.length}`,
+            text: event.text as string,
+            seq,
+            order: parts.length,
+          },
+        ];
+      } else {
+        return session;
+      }
+      const text = rebuildAssistantText(parts);
+      let next = updateAssistant(session, turnId, (m) => ({ ...m, text, parts }));
+      if (isActive) next = { ...next, appliedParts: parts };
+      return next;
     }
     case "tool_call": {
       if (!event.toolCallId) return session;
@@ -331,9 +416,15 @@ export function applyNativeUiEvent(
         id: event.toolCallId,
         title: event.toolTitle || "tool",
         status: event.toolStatus || "running",
+        ...(event.source === "durable" && typeof event.seq === "number" ? { seq: event.seq } : {}),
       };
       return updateAssistant(session, turnId, (m) => {
         const existing = m.tools.findIndex((t) => t.id === step.id);
+        const prior = m.tools[existing];
+        if (prior && event.source === "durable") {
+          if (typeof prior.seq === "number" && typeof step.seq === "number" && step.seq <= prior.seq) return m;
+          if (["completed", "failed"].includes(prior.status) && ["pending", "running"].includes(step.status)) return m;
+        }
         const tools =
           existing === -1
             ? [...m.tools, step]

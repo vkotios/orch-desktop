@@ -8,7 +8,194 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { PROTOCOL_VERSION, MAX_FRAME_BYTES, encodeFrame, decodeFrame } from './protocol.mjs';
+import { integrateAssociationWorktree } from './delegation-integrate.mjs';
+import {
+  deriveGateInspection,
+  deriveReviewInspection,
+  deriveRunInspection,
+} from './delegation-integrate-evidence.mjs';
+import {
+  admitOrchRunArgs,
+  admitOrchWorktreeCreateArgs,
+  stripPrivilegedOrchFlags,
+} from './delegation-admit.mjs';
+
+const execFileAsync = promisify(execFile);
+
+/**
+ * Resolve a repository-relative file reference under an owned project root.
+ * Read-only — never opens an editor or mutates Git.
+ */
+function resolveProjectPath(args) {
+  const repoPath = typeof args?.repoPath === 'string' ? args.repoPath : null;
+  const relPath = typeof args?.path === 'string' ? args.path : null;
+  if (!repoPath || !relPath) throw new Error('project_resolve_path requires repoPath and path');
+  if (relPath.includes('\0') || relPath.length > 1024) throw new Error('path is invalid');
+  const normalized = relPath.replace(/\\/g, '/');
+  if (normalized.startsWith('/') || /^[A-Za-z]:/.test(normalized) || normalized.split('/').includes('..')) {
+    throw new Error('path must be repository-relative without .. segments');
+  }
+  const repoRoot = path.resolve(repoPath);
+  const resolved = path.resolve(repoRoot, normalized);
+  const rel = path.relative(repoRoot, resolved);
+  if (rel.startsWith('..') || path.isAbsolute(rel)) {
+    throw new Error('resolved path is outside the repository');
+  }
+  return {
+    repoPath: repoRoot,
+    path: rel.replace(/\\/g, '/'),
+    absolutePath: resolved,
+    exists: fs.existsSync(resolved),
+    readOnly: true,
+  };
+}
+
+/**
+ * Read-only changed-file / unified-diff surface for an owned association.
+ * Display only — never mutates Git, accepts, integrates or cleans up.
+ */
+async function readAssociationWorktreeDiff(store, args) {
+  const associationId = typeof args?.id === 'string' ? args.id : null;
+  if (!associationId) throw new Error('delegation_worktree_diff requires id');
+  const association = store.get(associationId);
+  if (!association) throw new Error('association not found');
+  const worktreePath = association.worktreePath;
+  if (typeof worktreePath !== 'string' || worktreePath.length === 0) {
+    throw new Error('association has no worktree path yet');
+  }
+  const resolved = path.resolve(worktreePath);
+  if (!fs.existsSync(resolved)) throw new Error('worktree path does not exist');
+  const repoRoot = path.resolve(association.repoPath);
+  const rel = path.relative(repoRoot, resolved);
+  if (rel.startsWith('..') || path.isAbsolute(rel)) {
+    throw new Error('worktree path is outside the associated repository');
+  }
+  async function git(cwd, gitArgs) {
+    try {
+      const { stdout } = await execFileAsync('git', gitArgs, {
+        cwd,
+        encoding: 'utf8',
+        maxBuffer: 2 * 1024 * 1024,
+        windowsHide: true,
+      });
+      return stdout;
+    } catch (err) {
+      const stderr = err && typeof err === 'object' ? err.stderr : '';
+      throw new Error(`git ${gitArgs[0]} failed: ${String(stderr || err?.message || err).slice(0, 400)}`);
+    }
+  }
+  // Prefer committed worker changes vs the integration baseline (merge-base with
+  // the current repo HEAD). Fall back to worktree dirty status when needed.
+  const branch = await git(resolved, ['rev-parse', '--abbrev-ref', 'HEAD']);
+  let baseline = null;
+  try {
+    baseline = (await git(repoRoot, ['merge-base', 'HEAD', branch])).trim();
+  } catch {
+    baseline = null;
+  }
+  let files = [];
+  let patch = null;
+  const focus = typeof args.path === 'string' && args.path.length > 0 && args.path.length <= 1024
+    ? args.path.replace(/\\/g, '/')
+    : null;
+  if (focus && (focus.includes('..') || path.isAbsolute(focus))) {
+    throw new Error('diff path must be repository-relative');
+  }
+  function parsePorcelain(statusOut) {
+    return statusOut
+      .split(/\r?\n/)
+      .map((line) => line.trimEnd())
+      .filter((line) => line.length > 0)
+      .map((line) => {
+        const status = line.slice(0, 2);
+        const filePath = line.slice(3).replace(/\\/g, '/');
+        return { status, path: filePath, dirty: true };
+      })
+      .filter((entry) => entry.path);
+  }
+
+  let dirtyFiles = [];
+  let dirtyPatch = null;
+  const statusOut = await git(resolved, ['status', '--porcelain', '--untracked-files=all']);
+  dirtyFiles = parsePorcelain(statusOut).slice(0, 200);
+  if (focus) {
+    try {
+      const raw = await git(resolved, ['diff', '--no-ext-diff', '--', focus]);
+      const untracked = dirtyFiles.some((f) => f.path === focus && f.status.includes('?'));
+      dirtyPatch = raw.length > 0
+        ? (raw.length > 200_000 ? `${raw.slice(0, 200_000)}\n... truncated` : raw)
+        : (untracked ? `(untracked) ${focus}\n` : null);
+    } catch {
+      dirtyPatch = null;
+    }
+  } else if (dirtyFiles.length > 0) {
+    try {
+      const raw = await git(resolved, ['diff', '--no-ext-diff']);
+      dirtyPatch = raw.length > 200_000 ? `${raw.slice(0, 200_000)}\n... truncated` : raw;
+    } catch {
+      dirtyPatch = null;
+    }
+  }
+
+  if (baseline) {
+    const nameStatus = await git(repoRoot, [
+      'diff', '--name-status', '--no-ext-diff', `${baseline}...${branch}`,
+    ]);
+    files = nameStatus
+      .split(/\r?\n/)
+      .map((line) => line.trimEnd())
+      .filter((line) => line.length > 0)
+      .map((line) => {
+        const parts = line.split(/\t/);
+        return { status: parts[0] || 'M', path: (parts[parts.length - 1] || '').replace(/\\/g, '/'), dirty: false };
+      })
+      .filter((entry) => entry.path)
+      .slice(0, 200);
+    // Overlay in-progress dirty/untracked worktree paths not already listed.
+    const seen = new Set(files.map((f) => f.path));
+    for (const dirty of dirtyFiles) {
+      if (!seen.has(dirty.path)) {
+        files.push(dirty);
+        seen.add(dirty.path);
+      } else {
+        const idx = files.findIndex((f) => f.path === dirty.path);
+        if (idx >= 0) files[idx] = { ...files[idx], dirty: true, worktreeStatus: dirty.status };
+      }
+    }
+    files = files.slice(0, 200);
+    if (focus) {
+      const raw = await git(repoRoot, [
+        'diff', '--no-ext-diff', `${baseline}...${branch}`, '--', focus,
+      ]);
+      const committed = raw.length > 200_000 ? `${raw.slice(0, 200_000)}\n... truncated` : raw;
+      patch = [committed, dirtyPatch].filter((p) => typeof p === 'string' && p.length > 0).join('\n') || null;
+    } else if (files.length > 0) {
+      const raw = await git(repoRoot, [
+        'diff', '--no-ext-diff', `${baseline}...${branch}`,
+      ]);
+      const committed = raw.length > 200_000 ? `${raw.slice(0, 200_000)}\n... truncated` : raw;
+      patch = [committed, dirtyPatch].filter((p) => typeof p === 'string' && p.length > 0).join('\n') || null;
+    }
+  } else {
+    files = dirtyFiles;
+    patch = dirtyPatch;
+  }
+  return {
+    associationId,
+    worktreePath: resolved,
+    repoPath: repoRoot,
+    branch,
+    baseline,
+    files,
+    dirtyCount: dirtyFiles.length,
+    path: focus,
+    patch,
+    readOnly: true,
+  };
+}
 
 function resolveSessionDatabasePath(explicit) {
   if (typeof explicit === 'string' && explicit.length > 0) return explicit;
@@ -31,10 +218,18 @@ const NATIVE_COMMANDS = new Set([
   'native_chat_answer',
   'direct_chat_cancel',
   'native_chat_close',
+    'native_chat_forget_session',
   'native_chat_list_conversations',
   'native_chat_hydrate_conversation',
   'native_chat_save_draft',
   'native_chat_get_draft',
+  'native_chat_list_draft_conflicts',
+  'native_chat_resolve_draft_conflict',
+  'native_chat_rename_conversation',
+  'native_chat_archive_conversation',
+  'native_chat_export_conversation',
+  'native_chat_import_transcript',
+  'native_chat_acknowledge_stranded',
 ]);
 const ORCH_COMMANDS = [
   'orch_dashboard',
@@ -47,6 +242,7 @@ const ORCH_COMMANDS = [
   'orch_cancel',
   'orch_scope',
   'orch_review',
+  'orch_review_evidence',
   'orch_review_finish',
   'orch_gate_status',
   'orch_gate_record',
@@ -61,6 +257,11 @@ const DELEGATION_COMMANDS = new Set([
   'delegation_list',
   'delegation_upsert',
   'delegation_set_disposition',
+  'delegation_worktree_diff',
+  'delegation_integrate',
+  'delegation_adopt',
+  'delegation_abandon',
+  'project_resolve_path',
 ]);
 const ALLOWED_COMMANDS = new Set([
   'ping',
@@ -91,7 +292,7 @@ function parseSenderId(requestId) {
 export async function runHost(options = {}) {
   const { input = process.stdin, output = process.stdout, error = process.stderr,
     generation = crypto.randomUUID(), dispatch, serviceFactory, openClient, onFatal,
-    databasePath } = options ?? {};
+    databasePath, delegationFilePath } = options ?? {};
   const sessionDatabasePath = resolveSessionDatabasePath(databasePath);
   const dispatchFn = dispatch
     ?? ((command, args) => import('./bridge.mjs').then((mod) => mod.handleBridgeCommand(command, args)));
@@ -99,7 +300,7 @@ export async function runHost(options = {}) {
   async function getDelegationStore() {
     if (delegationStore) return delegationStore;
     const mod = await import('./delegation-associations.mjs');
-    delegationStore = mod.createDelegationAssociations();
+    delegationStore = mod.createDelegationAssociations({ filePath: delegationFilePath });
     return delegationStore;
   }
 
@@ -273,11 +474,113 @@ export async function runHost(options = {}) {
           if (env.command === 'delegation_list') {
             data = { associations: store.list(args) };
           } else if (env.command === 'delegation_upsert') {
-            data = { association: store.upsert(args) };
+            // Renderer may not invent terminal dispositions or relocate resources.
+            const admitted = { ...args };
+            if (admitted.disposition && admitted.disposition !== 'none') {
+              delete admitted.disposition;
+            }
+            const prior = typeof admitted.id === 'string' ? store.get(admitted.id) : null;
+            if (prior) {
+              if (prior.stage === 'uncertain' && admitted.stage && admitted.stage !== 'uncertain') throw new Error('Use Adopt or Abandon to resolve uncertain work');
+              for (const key of ['conversationId', 'repoPath', 'wp', 'slice', 'cli', 'model', 'reviewId']) {
+                if (key in admitted && admitted[key] !== prior[key]) throw new Error(`association ${key} is host-owned and immutable`);
+              }
+              const service = await getNativeService();
+              await service.authorizeDelegationAssociation(prior);
+              // Existing associations: repo/worktree/run identity are host-owned.
+              delete admitted.repoPath;
+              delete admitted.worktreePath;
+              delete admitted.runId;
+              if (admitted.stage === 'running' || admitted.stage === 'launching') {
+                delete admitted.stage;
+              }
+            } else if (admitted.worktreePath || admitted.runId) {
+              throw new Error('new associations cannot invent worktreePath or runId');
+            } else {
+              const service = await getNativeService();
+              Object.assign(admitted, await service.authorizeDelegationAssociation(admitted));
+              delete admitted.reviewId;
+              admitted.stage = 'intent_claim';
+            }
+            data = { association: store.upsert(admitted) };
+          } else if (env.command === 'delegation_adopt' || env.command === 'delegation_abandon') {
+            const association = store.get(args.id);
+            if (!association || association.stage !== 'uncertain' || association.disposition !== 'none') throw new Error('Recovery requires an open uncertain association');
+            const service = await getNativeService();
+            await service.authorizeDelegationAssociation(association);
+            if (env.command === 'delegation_abandon') {
+              data = { association: store.setDisposition(args.id, 'discarded', 'Explicitly abandoned; recorded resources remain retained.') };
+            } else {
+              if (!association.runId || !association.worktreePath) throw new Error('No recorded run/worktree to adopt');
+              const detail = await dispatchFn('orch_run_detail', { runId: association.runId, by: 'owner' });
+              const body = detail?.output ?? detail;
+              const status = typeof body?.status === 'object' ? body.status : body;
+              const observedId = body?.runId ?? status?.id;
+              if (detail?.ok === false || observedId !== association.runId || typeof status?.dir !== 'string'
+                || fs.realpathSync(status.dir) !== fs.realpathSync(association.worktreePath)) throw new Error('Recorded run does not match the association worktree');
+              if (status.wp && status.wp !== association.wp) throw new Error('Recorded run work package does not match');
+              const inspection = deriveRunInspection(detail);
+              if (!inspection.status || inspection.status === 'unknown') throw new Error('Run identity/state remains uncertain');
+              data = { association: store.upsert({ id: association.id, stage: inspection.terminal ? 'recorded' : 'running', note: 'Adopted recorded identity; execution was not relaunched.' }) };
+            }
           } else if (env.command === 'delegation_set_disposition') {
+            const association = store.get(args.id);
+            if (!association) throw new Error('association not found');
+            const service = await getNativeService();
+            await service.authorizeDelegationAssociation(association);
+            if (['integrated', 'finished'].includes(args.disposition) && association.disposition !== args.disposition) throw new Error('Completion dispositions require a host operation receipt');
             data = {
               association: store.setDisposition(args.id, args.disposition, args.note ?? null),
             };
+          } else if (env.command === 'delegation_worktree_diff') {
+            data = await readAssociationWorktreeDiff(store, args);
+          } else if (env.command === 'delegation_integrate') {
+            const association = store.get(args.id);
+            if (!association) throw new Error('association not found');
+            const service = await getNativeService();
+            await service.authorizeDelegationAssociation(association);
+            data = await integrateAssociationWorktree(store, args, {
+              inspectRun: async (runId) => {
+                const detail = await dispatchFn('orch_run_detail', { runId, by: 'owner' });
+                return deriveRunInspection(detail);
+              },
+              inspectGate: async (association) => {
+                const gate = await dispatchFn('orch_gate_status', {
+                  wp: association.wp,
+                  slice: association.slice,
+                  by: 'owner',
+                });
+                return deriveGateInspection(gate);
+              },
+                            inspectReview: async (association, ctx = {}) => {
+                // Read-only finished evidence — never orch_review (launch).
+                // sourceSha must be the Git-resolved candidate from integrate.
+                const sourceSha = typeof ctx.sourceSha === 'string' ? ctx.sourceSha : null;
+                if (!sourceSha) {
+                  return {
+                    ok: false,
+                    clean: false,
+                    text: 'Integrate review requires the Git-resolved source SHA',
+                  };
+                }
+                const evidence = await dispatchFn('orch_review_evidence', {
+                  wp: association.wp,
+                  reviewId: association.reviewId,
+                  runId: association.runId,
+                  by: 'owner',
+                });
+                return deriveReviewInspection(evidence, {
+                  wp: association.wp,
+                  runId: association.runId,
+                  reviewId: association.reviewId,
+                  slice: association.slice,
+                  sourceSha,
+                });
+              },
+
+            });
+          } else if (env.command === 'project_resolve_path') {
+            data = resolveProjectPath(args);
           } else {
             throw new Error(`unknown delegation command ${env.command}`);
           }
@@ -289,9 +592,130 @@ export async function runHost(options = {}) {
         return;
       }
       let data;
-      try { data = await dispatchFn(env.command, env.args); }
-      catch (err) { await sendError(env.requestId, 'COMMAND_FAILED', err?.message ?? String(err)); return; }
+      let admitted;
+      try {
+        admitted = await admitOrchArgs(env.command, env.args);
+        data = await dispatchFn(env.command, admitted);
+        // Host-owned association resource updates after successful orch prep/launch.
+        if (data && data.ok !== false) {
+          const associationId = typeof admitted.associationId === 'string' ? admitted.associationId : null;
+          if (associationId && env.command === 'orch_finish') {
+            const store = await getDelegationStore();
+            const prior = store.get(associationId);
+            store.setDisposition(associationId, 'finished', `${prior?.note ?? ''}\nCoordinator finish succeeded; Git integration remains separate.`);
+          }
+          if (associationId && env.command === 'orch_review') {
+            const reviewId = data.output?.review_id ?? data.output?.id;
+            if (typeof reviewId === 'string') {
+              const store = await getDelegationStore();
+              store.upsert({ id: associationId, reviewId });
+            }
+          }
+          if (associationId && (env.command === 'orch_worktree_create' || env.command === 'orch_run')) {
+            const store = await getDelegationStore();
+            if (env.command === 'orch_worktree_create') {
+              const worktreePath = data.output?.path ?? data.path ?? null;
+              if (typeof worktreePath === 'string' && worktreePath.length > 0) {
+                store.upsert({
+                  id: associationId,
+                  stage: 'worktree',
+                  worktreePath: path.resolve(worktreePath),
+                });
+              }
+            } else if (env.command === 'orch_run') {
+              const runId = typeof data.output?.id === 'string'
+                ? data.output.id
+                : typeof data.output?.run_id === 'string'
+                  ? data.output.run_id
+                  : null;
+              if (runId) {
+                store.upsert({
+                  id: associationId,
+                  stage: 'running',
+                  runId,
+                });
+              }
+            }
+          }
+        }
+        if (admitted.associationId && ['orch_run', 'orch_worktree_create'].includes(env.command)) {
+          const store = await getDelegationStore();
+          const association = store.get(admitted.associationId);
+          if (!data || data.ok === false || (env.command === 'orch_run' ? !association?.runId : !association?.worktreePath)) {
+            store.upsert({ id: admitted.associationId, stage: 'uncertain', note: 'Preparation/launch result was unsuccessful or lacked resource identity; inspect retained resources.' });
+          }
+        }
+      }
+      catch (err) {
+        let message = err?.message ?? String(err);
+        if (admitted?.associationId && ['orch_run', 'orch_worktree_create'].includes(env.command)) {
+          try {
+            const store = await getDelegationStore();
+            store.upsert({ id: admitted.associationId, stage: 'uncertain', note: 'Dispatch threw after preparation intent; inspect retained resources before retrying.' });
+          } catch (receiptError) { message += `; could not persist uncertainty: ${receiptError?.message ?? receiptError}`; }
+        }
+        await sendError(env.requestId, 'COMMAND_FAILED', message); return;
+      }
       await sendResult(env.requestId, data);
+    }
+
+    /**
+     * Host-owned admission for orch mutations (ORCH-09). Renderer flags never
+     * self-authorize models, force release, or choose execution directories.
+     */
+    async function admitOrchArgs(command, rawArgs) {
+      const args = stripPrivilegedOrchFlags(rawArgs);
+      // Claimant is always the host-backed owner principal for desktop mutations.
+      if (command === 'orch_run') {
+        const associationId = typeof args.associationId === 'string' ? args.associationId : null;
+        if (!associationId) {
+          throw new Error('orch_run requires a host associationId so dir/claimant can be derived');
+        }
+        const store = await getDelegationStore();
+        const association = store.get(associationId);
+          if (association?.runId || association?.stage === 'uncertain' || association?.stage === 'launching') throw new Error('Recorded or uncertain launch cannot be relaunched');
+          const service = await getNativeService();
+          await service.authorizeDelegationAssociation(association);
+          const admitted = admitOrchRunArgs(association, args);
+          store.upsert({ id: associationId, stage: 'launching' });
+          return admitted;
+      }
+      if (command === 'orch_worktree_create') {
+        const associationId = typeof args.associationId === 'string' ? args.associationId : null;
+        if (!associationId) {
+          throw new Error('orch_worktree_create requires a host associationId');
+        }
+        const store = await getDelegationStore();
+          const association = store.get(associationId);
+          const service = await getNativeService();
+          await service.authorizeDelegationAssociation(association);
+          return admitOrchWorktreeCreateArgs(association, args);
+      }
+        if (['orch_release', 'orch_cleanup', 'orch_finish', 'orch_claim', 'orch_cancel', 'orch_record', 'orch_review', 'orch_review_finish', 'orch_gate_record', 'orch_adopt'].includes(command)) {
+          if (args.force === true) throw new Error('Renderer cannot force coordinator ownership changes');
+        delete args.force;
+        args.by = 'owner';
+        const associationId = typeof args.associationId === 'string' ? args.associationId : null;
+          if (!associationId) throw new Error(`${command} requires associationId`);
+          const store = await getDelegationStore();
+          const association = store.get(associationId);
+          if (!association) throw new Error(`${command} association not found`);
+          const service = await getNativeService();
+          await service.authorizeDelegationAssociation(association);
+          args.wp = association.wp;
+          args.repo = association.repoPath;
+          if ('dir' in args) args.dir = association.worktreePath ?? association.repoPath;
+          if (args.runId && args.runId !== association.runId) throw new Error('runId does not match association');
+          if (association.runId) args.runId = association.runId;
+          if (command === 'orch_review_finish') {
+            if (!association.reviewId) throw new Error('No recorded review to finish');
+            if (args.reviewId && args.reviewId !== association.reviewId) throw new Error('reviewId does not match association');
+            args.reviewId = association.reviewId;
+          }
+        return args;
+      }
+      delete args.force;
+      return args;
     }
 
     // Handles exactly one complete frame (including its LF) from parse to

@@ -75,4 +75,8 @@
 .native-orch-handoff textarea { min-height: 72px; resize: vertical; }
 .native-orch-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .native-orch-runs ul { margin: 0; padding-left: 16px; color: var(--secondary); font-size: 12px; line-height: 1.5; }
+.native-orch-diff { display: grid; gap: 8px; margin-top: 8px; }
+.native-orch-diff-body { max-height: 280px; overflow: auto; margin: 0; padding: 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap; }
+.native-search { display: grid; margin: 8px 0; }
+.native-search input { width: 100%; border: 1px solid var(--border); border-radius: 6px; padding: 7px 9px; background: var(--surface); color: var(--text); font: inherit; }
 @media (max-width: 700px) { .native-sidebar { width: 155px; flex-basis: 155px; padding: 16px 10px; } .native-brand { flex-wrap: wrap; } .native-brand span { margin-left: 0; } .native-content { width: calc(100% - 24px); } .native-header { padding: 14px; } .native-composer-actions span { display: none; } }

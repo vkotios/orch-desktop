@@ -17,7 +17,9 @@
     "@cho-desktop/acp-client": "*",
     "@tauri-apps/api": "^2.2.0",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "react-markdown": "^9.1.0",
+    "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.2.0",
@@ -27,6 +29,6 @@
     "@vitejs/plugin-react": "^4.3.4",
     "typescript": "^5.7.3",
     "vite": "^6.0.7",
-    "vitest": "^3.0.7"
+    "vitest": "4.1.12"
   }
 }

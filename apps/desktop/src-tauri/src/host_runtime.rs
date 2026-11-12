@@ -16,7 +16,7 @@ use tokio::time::{timeout, timeout_at, Instant};
 
 const MAX_HANDSHAKE: Duration = Duration::from_secs(10);
 const STDERR_TAIL_BYTES: usize = 4096;
-const NATIVE_COMMANDS: [&str; 36] = [
+const NATIVE_COMMANDS: &[&str] = &[
     "ping",
     "discover_harnesses",
     "orch_dashboard",
@@ -29,6 +29,7 @@ const NATIVE_COMMANDS: [&str; 36] = [
     "orch_cancel",
     "orch_scope",
     "orch_review",
+    "orch_review_evidence",
     "orch_review_finish",
     "orch_gate_status",
     "orch_gate_record",
@@ -41,6 +42,11 @@ const NATIVE_COMMANDS: [&str; 36] = [
     "delegation_list",
     "delegation_upsert",
     "delegation_set_disposition",
+    "delegation_worktree_diff",
+    "delegation_integrate",
+    "delegation_adopt",
+    "delegation_abandon",
+    "project_resolve_path",
     "native_chat_validate_project",
     "native_chat_prepare_project",
     "direct_chat_send",
@@ -49,10 +55,18 @@ const NATIVE_COMMANDS: [&str; 36] = [
     "native_chat_answer",
     "direct_chat_cancel",
     "native_chat_close",
+    "native_chat_forget_session",
     "native_chat_list_conversations",
     "native_chat_hydrate_conversation",
     "native_chat_save_draft",
     "native_chat_get_draft",
+    "native_chat_list_draft_conflicts",
+    "native_chat_resolve_draft_conflict",
+    "native_chat_rename_conversation",
+    "native_chat_archive_conversation",
+    "native_chat_export_conversation",
+    "native_chat_import_transcript",
+    "native_chat_acknowledge_stranded",
 ];
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;

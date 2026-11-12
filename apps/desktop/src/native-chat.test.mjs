@@ -1334,6 +1334,40 @@ describe("Claude durable dual-write", () => {
 });
 
 describe("Codex durable dual-write", () => {
+  it("OPUS-07: pages/searches archived chats and evicts idle metadata before opening a ninth", { timeout: 30_000 }, async () => {
+    const dir = tempDir(), generation = randomUUID(), client = new FakeClient();
+    const svc = createNativeChatService({ generation, databasePath: join(dir, "history.sqlite3"), onFatal: () => {},
+      openClient: async (opts) => { client.handlers = opts; return client; } });
+    const validated = await svc.handle("native_chat_validate_project", { path: dir });
+    await svc.handle("native_chat_prepare_project", { projectToken: validated.projectToken, trusted: true });
+    const args = { generation, projectToken: validated.projectToken }, ids = [];
+    try {
+      for (let i = 0; i < 13; i++) {
+        const r = await svc.handle("native_chat_import_transcript", { ...args, source: "history", sourceKey: `${i}`, title: `history-${i}`, messages: [{ role: "user", text: `${i}` }] });
+        ids.push(r.conversationId);
+      }
+      await svc.handle("native_chat_archive_conversation", { ...args, conversationId: ids[0], archived: true });
+      const all = [];
+      for (let offset = 0; ; offset += 5) {
+        const page = await svc.handle("native_chat_list_conversations", { ...args, includeArchived: true, limit: 5, offset });
+        all.push(...page.conversations);
+        if (!page.hasMore) break;
+      }
+      expect(new Set(all.map((c) => c.id)).size).toBe(13);
+      expect(all.some((c) => c.id === ids[0] && c.archived)).toBe(true);
+      const search = await svc.handle("native_chat_list_conversations", { ...args, query: "history-12" });
+      expect(search.conversations.map((c) => c.id)).toEqual([ids[12]]);
+      for (const id of ids.slice(0, 8)) await svc.handle("native_chat_hydrate_conversation", { ...args, conversationId: id });
+      await svc.handle("native_chat_forget_session", { ...args, sessionId: ids[0] });
+      await svc.handle("native_chat_hydrate_conversation", { ...args, conversationId: ids[8] });
+      await svc.handle("native_chat_forget_session", { ...args, sessionId: ids[1] });
+      const ack = await svc.handle("direct_chat_send", { ...sendFor(validated.projectToken), ...args, sessionId: randomUUID(), turnId: randomUUID() });
+      expect(ack.nativeThreadId).toBeTruthy();
+      completeTurn(client, ack.nativeThreadId, ack.nativeTurnId, "completed");
+      const retained = await svc.handle("native_chat_hydrate_conversation", { ...args, conversationId: ids[0] });
+      expect(retained.conversation.messages[0].text).toBe("0");
+    } finally { await svc.close(); }
+  });
   it("journals deltas and outcomes into SQLite while the mailbox still drains", async () => {
     const dir = tempDir();
     const dbPath = join(dir, "sessions.sqlite3");
@@ -1419,5 +1453,253 @@ describe("Codex durable dual-write", () => {
     } finally {
       store.close();
     }
+  });
+
+  it("settles in-flight turns as unknown on close even after interrupt was requested", async () => {
+    const dir = tempDir();
+    const dbPath = join(dir, "sessions.sqlite3");
+    const generation = randomUUID();
+    const sessionId = randomUUID();
+    const turnId = randomUUID();
+    const client = new FakeClient();
+    const svc = createNativeChatService({
+      generation,
+      onFatal: () => {},
+      openClient: async (opts) => { client.handlers = opts; return client; },
+      databasePath: dbPath,
+    });
+    const validated = await svc.handle("native_chat_validate_project", { path: dir });
+    await svc.handle("native_chat_prepare_project", {
+      projectToken: validated.projectToken,
+      trusted: true,
+    });
+    const ack = await svc.handle("direct_chat_send", {
+      generation,
+      projectToken: validated.projectToken,
+      sessionId,
+      turnId,
+      model: "gpt-test",
+      prompt: "still running",
+      role: "implement",
+      effort: "medium",
+    });
+    client.note("turn/started", { threadId: "th-1", turn: { id: ack.nativeTurnId } });
+    await svc.handle("direct_chat_cancel", {
+      generation,
+      projectToken: validated.projectToken,
+      sessionId,
+      turnId,
+    });
+    await svc.close();
+
+    const store = openSessionStore({ databasePath: dbPath });
+    try {
+      const rows = store.transaction((tx) =>
+        tx.all("SELECT outcome FROM turns WHERE id = ?", turnId),
+      );
+      expect(rows).toHaveLength(1);
+      expect(rows[0].outcome).toBe("unknown");
+    } finally {
+      store.close();
+    }
+  });
+
+  it.each([false, true])("always closes the native client when durable settle throws (close failure: %s)", async (closeFails) => {
+    const dir = tempDir();
+    const client = new FakeClient();
+    const generation = randomUUID();
+    let settleCalls = 0;
+    const persistence = {
+      ensureProject: () => ({ id: randomUUID() }),
+      ensureConversation: () => ({}),
+      beginTurn: () => ({}),
+      afterThreadStart: () => ({}),
+      afterTurnWritten: () => ({}),
+      afterObserved: () => ({}),
+      appendDelta: () => ({}),
+      appendToolFact: () => ({}),
+      settleTurn: () => {
+        settleCalls += 1;
+        throw new Error("injected storage write failure");
+      },
+      releaseAllProducers: () => {},
+      listConversations: () => [],
+      hydrateConversation: () => null,
+      pollUiCatchup: () => ({ events: [], cursor: null, tip: 0, hasMore: false }),
+      close: () => {},
+    };
+    const svc = createNativeChatService({
+      generation,
+      onFatal: () => {},
+      openClient: async (opts) => { client.handlers = opts; return client; },
+      persistence,
+    });
+    const validated = await svc.handle("native_chat_validate_project", { path: dir });
+    await svc.handle("native_chat_prepare_project", {
+      projectToken: validated.projectToken,
+      trusted: true,
+    });
+    const sessionId = randomUUID();
+    const turnId = randomUUID();
+    const ack = await svc.handle("direct_chat_send", {
+      generation,
+      projectToken: validated.projectToken,
+      sessionId,
+      turnId,
+      model: "gpt-test",
+      prompt: "close settle",
+      role: "implement",
+      effort: "medium",
+    });
+    client.note("turn/started", { threadId: "th-1", turn: { id: ack.nativeTurnId } });
+    if (closeFails) client.closeImpl = async () => { throw new Error("injected client close failure"); };
+    const failure = await svc.close().then(() => null, (err) => err);
+    expect(failure?.message).toMatch(/injected storage write failure/);
+    if (closeFails) {
+      expect(failure).toBeInstanceOf(AggregateError);
+      expect(failure.errors.some((err) => err.message.includes("injected client close failure"))).toBe(true);
+    }
+    expect(settleCalls).toBeGreaterThan(0);
+    expect(client.closes).toBeGreaterThanOrEqual(1);
+  });
+
+  it("draft conflict list/resolve and restart keep drafts without replaying live approvals", async () => {
+    const dir = tempDir();
+    const dbPath = join(dir, "sessions.sqlite3");
+    const generation = randomUUID();
+    const sessionId = randomUUID();
+    const client = new FakeClient();
+    const svc = createNativeChatService({
+      generation,
+      onFatal: () => {},
+      openClient: async (opts) => { client.handlers = opts; return client; },
+      databasePath: dbPath,
+    });
+    const validated = await svc.handle("native_chat_validate_project", { path: dir });
+    await svc.handle("native_chat_prepare_project", {
+      projectToken: validated.projectToken,
+      trusted: true,
+    });
+
+    const saveA = randomUUID();
+    const saveB = randomUUID();
+    await svc.handle("native_chat_save_draft", {
+      generation,
+      projectToken: validated.projectToken,
+      conversationId: sessionId,
+      saveId: saveA,
+      expectedVersion: 0,
+      text: "local draft",
+      modelRequested: "gpt-test",
+      effort: "medium",
+      role: "implement",
+    });
+    await svc.handle("native_chat_save_draft", {
+      generation,
+      projectToken: validated.projectToken,
+      conversationId: sessionId,
+      saveId: saveB,
+      expectedVersion: 0,
+      text: "conflicting save",
+      modelRequested: "gpt-test",
+      effort: "medium",
+      role: "implement",
+    });
+    const listed = await svc.handle("native_chat_list_draft_conflicts", {
+      generation,
+      projectToken: validated.projectToken,
+      conversationId: sessionId,
+    });
+    const open = listed.conflicts.filter((c) => c.resolution === "open" || !c.resolution);
+    expect(open.length).toBeGreaterThanOrEqual(1);
+    const conflict = open[0];
+    await svc.handle("native_chat_resolve_draft_conflict", {
+      generation,
+      projectToken: validated.projectToken,
+      conversationId: sessionId,
+      conflictId: conflict.saveId,
+      resolutionId: randomUUID(),
+      expectedVersion: conflict.baseVersion,
+      action: "kept",
+      text: "local draft kept",
+    });
+    const draft = await svc.handle("native_chat_get_draft", {
+      generation,
+      projectToken: validated.projectToken,
+      conversationId: sessionId,
+    });
+    expect(draft.draft?.text).toMatch(/local draft/);
+
+    // Complete one durable turn so hydrate/restart has conversation history.
+    const turnId = randomUUID();
+    client.deferTurns = true;
+    const sendPromise = svc.handle("direct_chat_send", {
+      generation,
+      projectToken: validated.projectToken,
+      sessionId,
+      turnId,
+      model: "gpt-test",
+      prompt: "after draft",
+      role: "implement",
+      effort: "medium",
+    });
+    sendPromise.catch(() => {});
+    await tick();
+    client.note("turn/started", { threadId: "th-1", turn: { id: "tu-1" } });
+    client.resolveTurn("tu-1");
+    await expect(sendPromise).resolves.toMatchObject({ nativeTurnId: "tu-1" });
+    client.note("item/agentMessage/delta", {
+      threadId: "th-1",
+      turnId: "tu-1",
+      itemId: "item-1",
+      delta: "ok",
+    });
+    completeTurn(client, "th-1", "tu-1", "completed");
+    await tick();
+    await svc.close();
+
+    // New host generation: draft + history survive; live approval mailbox is empty
+    // so durable history cannot authorize a decision replay.
+    const generation2 = randomUUID();
+    const client2 = new FakeClient();
+    const svc2 = createNativeChatService({
+      generation: generation2,
+      onFatal: () => {},
+      openClient: async (opts) => { client2.handlers = opts; return client2; },
+      databasePath: dbPath,
+    });
+    const validated2 = await svc2.handle("native_chat_validate_project", { path: dir });
+    await svc2.handle("native_chat_prepare_project", {
+      projectToken: validated2.projectToken,
+      trusted: true,
+    });
+    const draftAfter = await svc2.handle("native_chat_get_draft", {
+      generation: generation2,
+      projectToken: validated2.projectToken,
+      conversationId: sessionId,
+    });
+    expect(draftAfter.draft?.text).toMatch(/local draft/);
+    const hydrated = await svc2.handle("native_chat_hydrate_conversation", {
+      generation: generation2,
+      projectToken: validated2.projectToken,
+      conversationId: sessionId,
+    });
+    expect(hydrated.conversation?.messages?.length).toBeGreaterThanOrEqual(2);
+    const poll2 = await svc2.handle("native_chat_poll", {
+      generation: generation2,
+      projectToken: validated2.projectToken,
+    });
+    expect(poll2.events.some((e) => e.kind === "approval")).toBe(false);
+    await expect(
+      svc2.handle("native_chat_respond", {
+        generation: generation2,
+        projectToken: validated2.projectToken,
+        sessionId,
+        turnId,
+        approvalId: randomUUID(),
+        decision: "accept",
+      }),
+    ).rejects.toThrow(/unknown|not found|no pending|approval/i);
+    await svc2.close();
   });
 });

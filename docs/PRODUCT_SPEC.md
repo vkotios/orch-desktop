@@ -1,8 +1,42 @@
 # CHO Desktop — Product and Release Specification
 
-Version: 0.2 — validated-review revision  
-Date: 2026-10-30  
+Version: 0.3 — recovery acceptance clarifications
+
+Date: 2026-11-05
+
 Target: Windows-first public v0.1 release
+
+## Implementation clarifications — 2026-11-05
+
+These clarify existing requirements and session contracts; they do not expand
+v0.1 or reduce AC-01–AC-15. The implementation plan's current execution amendment
+and owner-supplied Cursor instruction govern the next delivery sequence.
+
+- **RUN-02/04:** a cursor counts as recovery only when missed display events can
+  actually be applied once, including after a lost poll response. Persisted rows
+  plus an advanced cursor or an ignored durable event are insufficient. Execution
+  commands and permission decisions must never be replayed to reconstruct display.
+- **RUN-05/06/07:** Stop request/ACK, transport loss and window close do not prove a
+  native interrupted outcome or stopped process. Use the contracts' `unknown`
+  state where the outcome is unproven. Owned client cleanup must run even when
+  durable settlement fails, with both failures reported rather than hidden.
+- **SESSION-02/03/05:** drafts, body text and tool activity must preserve exact
+  Unicode across byte chunks, concurrent saves and restart. History bounds require
+  reachable pagination or an explicit recoverable limit; do not silently hide
+  earlier chats or replace native context with a new session. Surface draft
+  conflicts through deliberate resolution, using the existing storage contracts.
+- **ORCH-01/02/03/09:** host-owned admission and persisted stages must reconcile
+  claims/worktrees/runs before and after side effects. Ambiguous results are not
+  authority to launch again. Renderer-supplied identities/flags alone are not host
+  authorization. Keep all recovered resources with their actual conversation/repo.
+- **ORCH-04/05/06/07:** acceptance, Git integration, coordinator finish and cleanup
+  remain separate. Show actual verification/review and resource-retention evidence;
+  explain effects, including possible worktree removal. A disabled Integrate action
+  is an honest interim gate, not completion of the integration acceptance journey.
+
+Passing source checks, native protocol fixtures, installed-shell journeys and
+clean-machine release acceptance are distinct evidence levels. Preserve those
+distinctions in completion claims and the advertised support matrix.
 
 ## 1. Product intent
 

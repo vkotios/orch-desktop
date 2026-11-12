@@ -1,0 +1,185 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "file": "apps/desktop/src/claude-client.test.ts",
+      "pattern": "uuid (session/thread id)",
+      "lineSha256": "30d4016f2f62b173eec994575c07db6eac74e35ff4cab0ae03b58d658f4a10c5",
+      "reason": "Synthetic protocol or negative-test identifier"
+    },
+    {
+      "file": "apps/desktop/src/claude-client.test.ts",
+      "pattern": "uuid (session/thread id)",
+      "lineSha256": "9b20e87010d539bed54c2d97c280bb4cf2450c46e2df23689bf4274cb5fac3cf",
+      "reason": "Synthetic protocol or negative-test identifier"
+    },
+    {
+      "file": "apps/desktop/src/delegation-admit.test.mjs",
+      "pattern": "uuid (session/thread id)",
+      "lineSha256": "71d8b6d8bc7cc4576e473f14d3b2d42017a0ee81f0c24cc517757beb25620b12",
+      "reason": "Synthetic protocol or negative-test identifier"
+    },
+    {
+      "file": "apps/desktop/src/delegation-admit.test.mjs",
+      "pattern": "uuid (session/thread id)",
+      "lineSha256": "a26caabfcdc05ca5a7b9f8525efbb2ef2affa9f9e49380de65554e3a6e6c1cf4",
+      "reason": "Synthetic protocol or negative-test identifier"
+    },
+    {
+      "file": "apps/desktop/src/delegation-admit.test.mjs",
+      "pattern": "uuid (session/thread id)",
+      "lineSha256": "b81ae904ebf8ebab3283ca7c2d49af1d250eb45a23c48abc61a487ccc6705b75",
+      "reason": "Synthetic protocol or negative-test identifier"
+    },
+    {
+      "file": "apps/desktop/src/delegation-admit.test.mjs",
+      "pattern": "uuid (session/thread id)",
+      "lineSha256": "44132ff8391003c95fe3efbc86361fc462c875c8866403d08e5ac6895bf52fb6",
+      "reason": "Synthetic protocol or negative-test identifier"
+    },
+    {
+      "file": "apps/desktop/src/delegation-admit.test.mjs",
+      "pattern": "uuid (session/thread id)",
+      "lineSha256": "f8e8655fa17e8b895c9b97808025165327b66980d24c6234df8b6352b5df0517",
+      "reason": "Synthetic protocol or negative-test identifier"
+    },
+    {
+      "file": "apps/desktop/src/delegation-associations.test.mjs",
+      "pattern": "uuid (session/thread id)",
+      "lineSha256": "3d4aca7e66f117f100f76cd1878d98b20c4394156afacaca122ff0f48b6fe8bc",
+      "reason": "Synthetic protocol or negative-test identifier"
+    },
+    {
+      "file": "apps/desktop/src/native-clarification.test.mjs",
+      "pattern": "assigned-secret",
+      "lineSha256": "e258fb835e6004e5f486eade5d416cb61f95504b22b10b67b355c47a802b9c8c",
+      "reason": "Synthetic answer value used to verify private answer handling"
+    },
+    {
+      "file": "apps/desktop/src/session-bindings.test.mjs",
+      "pattern": "uuid (session/thread id)",
+      "lineSha256": "f6714089a5f6430f6f17353dffd7161f8e11a3bd507b045304c29af02a1b383e",
+      "reason": "Synthetic protocol or negative-test identifier"
+    },
+    {
+      "file": "apps/desktop/src/session-records.test.mjs",
+      "pattern": "uuid (session/thread id)",
+      "lineSha256": "e44fbbe741e74996349ac2a90ca5be2abbb4f69599ae7124a560e0e1f22dd640",
+      "reason": "Synthetic protocol or negative-test identifier"
+    },
+    {
+      "file": "apps/desktop/src/session-store-migrate.test.mjs",
+      "pattern": "uuid (session/thread id)",
+      "lineSha256": "06d5f6513c17502023207641b6ad2594ac65d523741058cecd4c346630e43870",
+      "reason": "Synthetic protocol or negative-test identifier"
+    },
+    {
+      "file": "apps/desktop/src/session-store.test.mjs",
+      "pattern": "uuid (session/thread id)",
+      "lineSha256": "9db4706d105e7e29567ade95c423d5a9b03c3daba7c4fafa4f39a05270e2a739",
+      "reason": "Synthetic protocol or negative-test identifier"
+    },
+    {
+      "file": "apps/desktop/src/session-store.test.mjs",
+      "pattern": "uuid (session/thread id)",
+      "lineSha256": "b3d933f6c0328bdf0d0401e07f61897d65a82fcc27b3e2b7b718474a57e27a38",
+      "reason": "Synthetic protocol or negative-test identifier"
+    },
+    {
+      "file": "apps/desktop/src/session-store.test.mjs",
+      "pattern": "uuid (session/thread id)",
+      "lineSha256": "6508b326cfd1ee1633ca19f1d7436cf56194e960c916008fd5982e59a6097e78",
+      "reason": "Synthetic protocol or negative-test identifier"
+    },
+    {
+      "file": "apps/desktop/src/session-store.test.mjs",
+      "pattern": "uuid (session/thread id)",
+      "lineSha256": "246fb258158c068670c8ac705e0961a16e93ec7a58cad057650092bdc9b39452",
+      "reason": "Synthetic protocol or negative-test identifier"
+    },
+    {
+      "file": "CURRENT_HANDOFF.md",
+      "pattern": "dev-drive-path",
+      "lineSha256": "85cb2cfd254c509fe0b7d5015b9401699d738d54e2e99b67260404e5b1250001",
+      "reason": "Documented source checkout path in retained audit provenance"
+    },
+    {
+      "file": "docs/evidence/OPUS-REVIEW-2026-11-11.json",
+      "pattern": "run-id",
+      "lineSha256": "cbea58fcf41885da75577415474fbc316172e57f06ce3927ca04b1959a872900",
+      "reason": "Published audit correlation id; not a credential"
+    },
+    {
+      "file": "docs/evidence/OPUS-REVIEW-2026-11-11.json",
+      "pattern": "run-id",
+      "lineSha256": "942a1a53220902fe98d30c7a0a8c94f67507127fc526972ee5614fcf99c58665",
+      "reason": "Published audit correlation id; not a credential"
+    },
+    {
+      "file": "docs/evidence/OPUS-REVIEW-2026-11-11.json",
+      "pattern": "run-id",
+      "lineSha256": "8c53a5cf5b543e6786e5b65e2292a63e2b11b7eb68ad451552e77fba8331737e",
+      "reason": "Published audit correlation id; not a credential"
+    },
+    {
+      "file": "docs/reviews/CURSOR-DELIVERY-REVIEW-2026-11-05.md",
+      "pattern": "dev-drive-path",
+      "lineSha256": "c08e21aede84a3be0860be5d9e9cd3880cb6c54b7d94cc5a1c50b282feea3f38",
+      "reason": "Documented source checkout path in retained audit provenance"
+    },
+    {
+      "file": "docs/reviews/CURSOR-DELIVERY-REVIEW-2026-11-05.md",
+      "pattern": "dev-drive-path",
+      "lineSha256": "5643054823c0ee5a000430f8aa092a423ecd4c859c025b67a0b4d67046298922",
+      "reason": "Documented source checkout path in retained audit provenance"
+    },
+    {
+      "file": "docs/reviews/CURSOR-DELIVERY-REVIEW-2026-11-05.md",
+      "pattern": "dev-drive-path",
+      "lineSha256": "7addc1636ec44f6a7be8a8d04f05a2f5e5211632a53be181c146cee69bd647fc",
+      "reason": "Documented source checkout path in retained audit provenance"
+    },
+    {
+      "file": "docs/reviews/CURSOR-DELIVERY-REVIEW-2026-11-05.md",
+      "pattern": "dev-drive-path",
+      "lineSha256": "f5347a642758156f2affb085d8379b185e92d7fb747360cbb33df0c81d87ccbf",
+      "reason": "Documented source checkout path in retained audit provenance"
+    },
+    {
+      "file": "docs/reviews/OPUS-ADJUDICATION-2026-11-11.md",
+      "pattern": "run-id",
+      "lineSha256": "d503cc90ac31ddab2065567c9009f60ee7aa547914b92c00be2b8bacc964db20",
+      "reason": "Published audit correlation id; not a credential"
+    },
+    {
+      "file": "docs/reviews/OPUS-ADJUDICATION-2026-11-11.md",
+      "pattern": "run-id",
+      "lineSha256": "b0ae951325d7c9c1e836ec2206938301b164068bb3150a8562b4976984b4d162",
+      "reason": "Published audit correlation id; not a credential"
+    },
+    {
+      "file": "docs/reviews/OPUS-ADJUDICATION-2026-11-11.md",
+      "pattern": "run-id",
+      "lineSha256": "e250cd38be10ac715b18a70aa6602a8f1f5c9613cdb6c1845000a9eecc30df0b",
+      "reason": "Published audit correlation id; not a credential"
+    },
+    {
+      "file": "docs/reviews/SONNET-DESIGN-PLAN-REVIEW-NOTES.md",
+      "pattern": "run-id",
+      "lineSha256": "61693a47179811c9acf1e8f4da4fb9937e35103f540030257aa289553c545266",
+      "reason": "Published audit correlation id; not a credential"
+    },
+    {
+      "file": "docs/reviews/SONNET-DESIGN-PLAN-REVIEW.md",
+      "pattern": "dev-drive-path",
+      "lineSha256": "9f1b66d20aa658cfc2992a240b5e592fe1e8e88a81b922c05c821303229f6484",
+      "reason": "Documented source checkout path in retained audit provenance"
+    },
+    {
+      "file": "docs/reviews/SONNET-DESIGN-PLAN-REVIEW.md",
+      "pattern": "dev-drive-path",
+      "lineSha256": "e3bcf175d2f3d9cd76b6d9123827d5c55c827ceacc2f80050f02314fcb71d48b",
+      "reason": "Documented source checkout path in retained audit provenance"
+    }
+  ]
+}

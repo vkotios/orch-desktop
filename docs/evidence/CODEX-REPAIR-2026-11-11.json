@@ -1,0 +1,23 @@
+{
+  "date": "2026-11-11",
+  "baseCommit": "a242de6bd240b831e586a9a23c57f8a32b118446",
+  "uncommittedRepairs": true,
+  "sourceFileCount": 314,
+  "sourceManifestSha256": "1FC0E378B1AE626FA5E3C11B498A48861A7F38CB9DF808BFC90131A8BD7094EE",
+  "stagedFilesChecked": 113,
+  "stagedMismatches": [],
+  "artifacts": [
+    {
+      "path": "apps/desktop/src-tauri/target/release/cho-desktop.exe",
+      "sha256": "4EE52C1ADFBF3C4D78DB978785B3D3D5E99516FED68249AFC023F68E3EB4D4DB"
+    },
+    {
+      "path": "apps/desktop/src-tauri/target/release/bundle/msi/CHO Desktop_0.1.0_x64_en-US.msi",
+      "sha256": "08D7196420F57E5283751CB34D8E50A23336F52CB8AE25525E751C0CF5744EB4"
+    },
+    {
+      "path": "apps/desktop/src-tauri/target/release/bundle/nsis/CHO Desktop_0.1.0_x64-setup.exe",
+      "sha256": "46B869A6543DE46AFD9E7A5A8310F846A241AE870849A9919AF58082E1FA4A3C"
+    }
+  ]
+}

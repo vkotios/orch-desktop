@@ -8,6 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
 import { execFile, execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { KIT, ORCH_BIN, TEST_ROSTER, makeCase, orch } from './helpers.mjs';
 import { assertSupportedPlatform } from '../src/platform.mjs';
@@ -60,26 +61,29 @@ function runNode(args, env) {
 
 /* ------------------------------------------------------------ platform -- */
 
-test('P1: the platform guard supports Windows and Linux, and clearly refuses unsupported platforms', () => {
+test('P1: the platform guard supports Windows, Linux and macOS, and clearly refuses unsupported platforms', () => {
   assert.doesNotThrow(() => assertSupportedPlatform('win32'));
   assert.doesNotThrow(() => assertSupportedPlatform('linux'));
-  for (const p of ['darwin', 'freebsd']) {
-    assert.throws(() => assertSupportedPlatform(p), (/** @type {any} */ e) => e.code === 'unsupported-platform' && /not supported yet/.test(e.message) && e.message.includes(p));
+  assert.doesNotThrow(() => assertSupportedPlatform('darwin'));
+  for (const p of ['freebsd']) {
+    assert.throws(() => assertSupportedPlatform(p), (/** @type {any} */ e) => e.code === 'unsupported-platform' && /not supported/.test(e.message) && e.message.includes(p));
   }
 });
 
 test('P1: unsupported platforms fail closed while simulated Linux can run the CLI', { timeout: 120000 }, async () => {
   const pre = pathToFileURL(FAKE_PLATFORM).href;
   for (const args of [['--help'], ['adopt', '--repo', '.', '--dry-run'], ['mcp'], ['status', '--all']]) {
-    const r = await runNode(['--import', pre, ORCH_BIN, ...args], { ...process.env, ORCH_FAKE_PLATFORM: 'darwin' });
+    const r = await runNode(['--import', pre, ORCH_BIN, ...args], { ...process.env, ORCH_FAKE_PLATFORM: 'freebsd' });
     assert.equal(r.code, 2, `${args.join(' ')}: ${r.stderr}`);
-    assert.match(r.stderr, /supports Windows and Linux/);
-    assert.ok(r.stderr.includes('this platform: darwin'), r.stderr);
+    assert.match(r.stderr, /supports Windows, Linux and macOS/);
+    assert.ok(r.stderr.includes('this platform: freebsd'), r.stderr);
     assert.equal(r.stdout, '', 'nothing is printed on stdout');
   }
-  const linux = await runNode(['--import', pre, ORCH_BIN, '--help'], { ...process.env, ORCH_FAKE_PLATFORM: 'linux' });
-  assert.equal(linux.code, 0, linux.stderr);
-  assert.match(linux.stdout, /orch run --cli/);
+  for (const platform of ['linux', 'darwin']) {
+    const result = await runNode(['--import', pre, ORCH_BIN, '--help'], { ...process.env, ORCH_FAKE_PLATFORM: platform });
+    assert.equal(result.code, 0, result.stderr);
+    assert.match(result.stdout, /orch run --cli/);
+  }
 });
 
 /* -------------------------------------------------------- configuration -- */
@@ -347,6 +351,30 @@ test('P5: bench-gateway runs models one at a time against a local fake gateway a
 });
 
 /* ---------------------------------------------------------- release scan -- */
+
+test('P6: exact reviewed exceptions reopen when content changes and never hide new secrets', (t) => {
+  const dir = tmpDir(t, 'scan-exact');
+  execFileSync('git', ['init', '-q'], { cwd: dir, windowsHide: true });
+  fs.writeFileSync(path.join(dir, 'LICENSE'), `Copyright (c) 2026 ${SCAN_PATTERNS['owner-name'].sample} Example\n`);
+  const text = SCAN_PATTERNS['uuid (session/thread id)'].sample;
+  fs.writeFileSync(path.join(dir, 'fixture.txt'), text + '\n');
+  fs.mkdirSync(path.join(dir, 'orch', 'tools'), { recursive: true });
+  const policyPath = path.join(dir, 'orch', 'tools', 'release-scan-expected.json');
+  fs.writeFileSync(policyPath, JSON.stringify({ version: 1, entries: [{ file: 'fixture.txt', pattern: 'uuid (session/thread id)',
+    lineSha256: createHash('sha256').update(text).digest('hex'), reason: 'synthetic fixture' }] }));
+  let result = releaseScan(dir);
+  assert.equal(result.unexpected.length, 0);
+  assert.ok(result.controls.every((c) => c.ok));
+  fs.writeFileSync(path.join(dir, 'fixture.txt'), text + ' changed\n');
+  fs.writeFileSync(path.join(dir, 'new.txt'), SCAN_PATTERNS['assigned-secret'].sample + '\n');
+  result = releaseScan(dir);
+  assert.ok(result.unexpected.some((h) => h.file === 'fixture.txt'));
+  assert.ok(result.unexpected.some((h) => h.file === 'new.txt' && h.pattern === 'assigned-secret'));
+  fs.writeFileSync(policyPath, '{invalid');
+  result = releaseScan(dir);
+  assert.equal(result.controls.find((c) => c.control === 'reviewed exception manifest valid').ok, false);
+  assert.ok(result.unexpected.some((h) => h.file === 'new.txt'));
+});
 
 test('P6: release-scan scans exactly the files git would commit; git-ignored files are not reported', (t) => {
   const repo = tmpDir(t, 'scan-git');

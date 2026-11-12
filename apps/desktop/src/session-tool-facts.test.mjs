@@ -7,6 +7,49 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
+import { spawn } from "node:child_process";
+import { fileURLToPath, pathToFileURL } from "node:url";
+
+const S3D_TEST_DIR = fileURLToPath(new URL(".", import.meta.url));
+
+function runChild(script, argv, { allowFail = false } = {}) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ["--input-type=module", "-e", script, ...argv], {
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => { stdout += chunk; });
+    child.stderr.on("data", (chunk) => { stderr += chunk; });
+    const timer = setTimeout(() => {
+      try { child.kill(); } catch { /* ignore */ }
+      reject(new Error(`child timed out: ${stderr}`));
+    }, 15_000);
+    child.on("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      let parsed = null;
+      try {
+        parsed = JSON.parse(stdout.trim().split("\n").at(-1) || "");
+      } catch {
+        parsed = null;
+      }
+      if (!parsed || typeof parsed !== "object") {
+        reject(new Error(`unparseable child output (exit ${code}): ${stdout} ${stderr}`));
+        return;
+      }
+      if (!allowFail && (code !== 0 || parsed.ok !== true)) {
+        reject(new Error(`child failed (exit ${code}): ${JSON.stringify(parsed)} ${stderr}`));
+        return;
+      }
+      resolve(parsed);
+    });
+  });
+}
 
 import { openSessionStore } from "../server/session-store.mjs";
 import { createSessionRecords } from "../server/session-records.mjs";
@@ -1265,5 +1308,96 @@ describe("S3d reopen, lineage, regressions", () => {
     assert.equal(r2.created, true);
     const keys = rawRows(fx.store, "events").map((e) => e.event_key).sort();
     assert.deepEqual(keys, [`tool_fact:${f1}`, `tool_fact:${f2}`].sort());
+  });
+});
+
+describe("S3d installed-Node child-process probes", () => {
+  it("reopen in a child process preserves the tool_fact event", async () => {
+    const fx = makeCodexFixture();
+    const tools = createSessionToolFacts({
+      store: fx.store, verifyOwnerEvidence: () => true, now: () => 2000,
+    });
+    const factId = randomUUID();
+    tools.appendToolFact(baseToolArgs(fx, {
+      factId,
+      phase: "completed",
+      toolStatus: "completed",
+      summaryText: "child-reopen",
+    }));
+    fx.store.close();
+    const idx = ownedStores.indexOf(fx.store);
+    if (idx >= 0) ownedStores.splice(idx, 1);
+
+    const moduleUrl = pathToFileURL(join(S3D_TEST_DIR, "../server/session-tool-facts.mjs")).href;
+    const storeUrl = pathToFileURL(join(S3D_TEST_DIR, "../server/session-store.mjs")).href;
+    const childScript = [
+      `import { openSessionStore } from ${JSON.stringify(storeUrl)};`,
+      `import { createSessionToolFacts } from ${JSON.stringify(moduleUrl)};`,
+      "const store = openSessionStore({ databasePath: process.argv[1] });",
+      "try {",
+      "  const tools = createSessionToolFacts({ store, verifyOwnerEvidence: () => true });",
+      "  const row = store.transaction((tx) => tx.get('SELECT event_key FROM events WHERE event_key = ?', [`tool_fact:${process.argv[2]}`]));",
+      "  console.log(JSON.stringify({ ok: true, key: row?.event_key ?? null }));",
+      "  store.close();",
+      "} catch (error) {",
+      '  console.log(JSON.stringify({ ok: false, message: String(error?.message || error) }));',
+      "  try { store.close(); } catch {}",
+      "  process.exitCode = 1;",
+      "}",
+    ].join("\n");
+
+    const parsed = await runChild(childScript, [fx.path, factId]);
+    assert.equal(parsed.ok, true);
+    assert.equal(parsed.key, `tool_fact:${factId}`);
+  });
+
+  it("two racing child appenders produce exactly one winner for the same factId", async () => {
+    const fx = makeCodexFixture();
+    const factId = randomUUID();
+    const args = baseToolArgs(fx, {
+      factId,
+      phase: "completed",
+      toolStatus: "completed",
+      summaryText: "race",
+    });
+    fx.store.close();
+    const idx = ownedStores.indexOf(fx.store);
+    if (idx >= 0) ownedStores.splice(idx, 1);
+
+    const moduleUrl = pathToFileURL(join(S3D_TEST_DIR, "../server/session-tool-facts.mjs")).href;
+    const storeUrl = pathToFileURL(join(S3D_TEST_DIR, "../server/session-store.mjs")).href;
+    const childScript = [
+      `import { openSessionStore } from ${JSON.stringify(storeUrl)};`,
+      `import { createSessionToolFacts } from ${JSON.stringify(moduleUrl)};`,
+      "const payload = JSON.parse(process.argv[2]);",
+      "let store;",
+      "try {",
+      "  store = openSessionStore({ databasePath: process.argv[1] });",
+      "  const tools = createSessionToolFacts({ store, verifyOwnerEvidence: () => true });",
+      "  const result = tools.appendToolFact(payload);",
+      "  console.log(JSON.stringify({ ok: true, created: result.created }));",
+      "  store.close();",
+      "} catch (error) {",
+      '  console.log(JSON.stringify({ ok: false, code: error?.code ?? null, message: String(error?.message || error) }));',
+      "  try { store?.close?.(); } catch {}",
+      "  process.exitCode = 1;",
+      "}",
+    ].join("\n");
+
+    const [a, b] = await Promise.all([
+      runChild(childScript, [fx.path, JSON.stringify(args)], { allowFail: true }),
+      runChild(childScript, [fx.path, JSON.stringify(args)], { allowFail: true }),
+    ]);
+    const successes = [a, b].filter((r) => r.ok);
+    assert.ok(successes.length >= 1, "at least one child must succeed");
+    const createdCount = successes.filter((r) => r.created === true).length;
+    assert.ok(createdCount <= 1, "exact factId race must not create two fresh rows");
+
+    const store = openSessionStore({ databasePath: fx.path });
+    ownedStores.push(store);
+    const rows = store.transaction((tx) =>
+      tx.all("SELECT event_key FROM events WHERE event_key = ?", [`tool_fact:${factId}`]),
+    );
+    assert.equal(rows.length, 1);
   });
 });

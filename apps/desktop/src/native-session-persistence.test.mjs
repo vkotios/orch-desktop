@@ -268,4 +268,474 @@ describe("native-session-persistence Codex dual-write", () => {
       expect.objectContaining({ role: "assistant", text: "pong", outcome: "completed" }),
     ]);
   });
+
+  it("preserves a multibyte character split across the 16 KiB body chunk boundary", () => {
+    const { persistence, evidence } = makePersistence();
+    const project = persistence.ensureProject({
+      pathCanonical: "C:/synthetic/unicode-boundary",
+      name: "unicode-boundary",
+    });
+    const conversationId = randomUUID();
+    const turnId = randomUUID();
+    const operationId = randomUUID();
+    persistence.ensureConversation({
+      projectId: project.id,
+      conversationId,
+      controller: "codex",
+      modelRequested: "gpt-test",
+      effort: "low",
+      role: "implement",
+      evidence,
+    });
+    persistence.beginTurn({
+      conversationId, turnId, operationId, prompt: "unicode", effort: "low", evidence,
+    });
+    persistence.afterThreadStart({ conversationId, nativeThreadId: "thread-u", evidence });
+    persistence.afterTurnWritten({ conversationId, turnId, operationId, evidence });
+    persistence.afterObserved({
+      conversationId, turnId, operationId,
+      nativeIdentity: "thread-u", nativeTurnId: "native-u", evidence,
+    });
+    const text = `${"a".repeat(16383)}€ tail`;
+    persistence.appendDelta({
+      conversationId, turnId, operationId, partId: randomUUID(),
+      nativeMessageId: "i-u", text, evidence,
+    });
+    persistence.settleTurn({
+      conversationId, turnId, operationId, outcome: "completed",
+      nativeIdentity: "thread-u", nativeTurnId: "native-u", evidence,
+    });
+    const hydrated = persistence.hydrateConversation({
+      projectId: project.id,
+      conversationId,
+    });
+    expect(hydrated?.messages[1]?.text).toBe(text);
+    expect(hydrated?.messages[1]?.text.length).toBe(16389);
+  });
+
+  it("imports a transcript into large_bodies and hydrates without event-store tip-0 snapshots", () => {
+    const { persistence } = makePersistence();
+    const project = persistence.ensureProject({
+      pathCanonical: "C:/synthetic/import",
+      name: "import",
+    });
+    const imported = persistence.importTranscript({
+      projectId: project.id,
+      source: "test-fixture",
+      sourceKey: "fixture-1",
+      title: "Imported chat",
+      controller: "codex",
+      messages: [
+        { role: "user", text: "hello import" },
+        { role: "assistant", text: "imported reply" },
+      ],
+    });
+    expect(imported.created).toBe(true);
+    expect(imported.conversationId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+    );
+
+    const hydrated = persistence.hydrateConversation({
+      projectId: project.id,
+      conversationId: imported.conversationId,
+    });
+    expect(hydrated?.imported).toBe(true);
+    expect(hydrated?.messages).toEqual([
+      expect.objectContaining({ role: "user", text: "hello import", imported: true }),
+      expect.objectContaining({ role: "assistant", text: "imported reply", imported: true }),
+    ]);
+
+    // Idempotent receipt: same source/key returns the same conversation.
+    const again = persistence.importTranscript({
+      projectId: project.id,
+      source: "test-fixture",
+      sourceKey: "fixture-1",
+      messages: [{ role: "user", text: "ignored" }],
+    });
+    expect(again).toEqual({
+      created: false,
+      conversationId: imported.conversationId,
+      importBatchId: null,
+    });
+  });
+
+  it("reconciles stranded turns for the current host without labeling them prior-owner", () => {
+    const { persistence, evidence } = makePersistence();
+    const project = persistence.ensureProject({
+      pathCanonical: "C:/synthetic/reconcile",
+      name: "reconcile",
+    });
+    const conversationId = randomUUID();
+    const turnId = randomUUID();
+    const operationId = randomUUID();
+    persistence.ensureConversation({
+      projectId: project.id,
+      conversationId,
+      controller: "codex",
+      modelRequested: "gpt-test",
+      effort: "low",
+      role: "implement",
+      evidence,
+    });
+    persistence.beginTurn({
+      conversationId, turnId, operationId, prompt: "stranded", effort: "low", evidence,
+    });
+    persistence.afterThreadStart({ conversationId, nativeThreadId: "thread-r", evidence });
+    persistence.afterTurnWritten({ conversationId, turnId, operationId, evidence });
+    persistence.afterObserved({
+      conversationId, turnId, operationId,
+      nativeIdentity: "thread-r", nativeTurnId: "native-r", evidence,
+    });
+
+    const result = persistence.reconcileStrandedTurns({
+      projectId: project.id,
+      evidence,
+    });
+    expect(result.unresolved).toEqual([]);
+    expect(result.settled).toEqual([
+      expect.objectContaining({ conversationId, turnId, operationId }),
+    ]);
+  });
+
+  it("acknowledges prior-host stranded turns without adopting their hostGeneration", { timeout: 20_000 }, () => {
+    const first = makePersistence();
+    const project = first.persistence.ensureProject({
+      pathCanonical: "C:/synthetic/prior-ack",
+      name: "prior-ack",
+    });
+    const conversationId = randomUUID();
+    const turnId = randomUUID();
+    const operationId = randomUUID();
+    first.persistence.ensureConversation({
+      projectId: project.id,
+      conversationId,
+      controller: "codex",
+      modelRequested: "gpt-test",
+      effort: "low",
+      role: "implement",
+      evidence: first.evidence,
+    });
+    first.persistence.beginTurn({
+      conversationId, turnId, operationId, prompt: "prior stranded", effort: "low", evidence: first.evidence,
+    });
+    first.persistence.afterThreadStart({ conversationId, nativeThreadId: "thread-p", evidence: first.evidence });
+    first.persistence.afterTurnWritten({ conversationId, turnId, operationId, evidence: first.evidence });
+    first.persistence.releaseProducer({ conversationId, evidence: first.evidence });
+    first.persistence.close();
+
+    const connectionId = randomUUID();
+    const second = createNativeSessionPersistence({
+      databasePath: join(first.dir, "sessions.sqlite3"),
+      hostGeneration: randomUUID(),
+      livenessPath: join(first.dir, "liveness-2.json"),
+      verifyOwnerEvidence: (facts) => facts?.evidence?.connectionId === connectionId,
+    });
+    owned.push(second);
+    const evidence = { connectionId };
+    second.ensureConversation({
+      projectId: project.id,
+      conversationId,
+      controller: "codex",
+      modelRequested: "gpt-test",
+      effort: "low",
+      role: "implement",
+      evidence,
+    });
+    const reconciled = second.reconcileStrandedTurns({ projectId: project.id, evidence });
+    expect(reconciled.settled).toEqual([]);
+    expect(reconciled.unresolved).toEqual([
+      expect.objectContaining({ conversationId, turnId, operationId }),
+    ]);
+    const ack = second.acknowledgePriorOwnerTurn({
+      conversationId, turnId, operationId, evidence,
+    });
+    expect(ack).toMatchObject({ acknowledged: true, turnId, operationId });
+    const after = second.reconcileStrandedTurns({ projectId: project.id, evidence });
+    expect(after.unresolved).toEqual([]);
+    expect(after.settled).toEqual([]);
+    const hydrated = second.hydrateConversation({ projectId: project.id, conversationId });
+    expect(hydrated?.messages.some((m) => m.role === "assistant" && m.outcome === "unknown")).toBe(true);
+  });
+
+  it("refuses prior-owner acknowledgement when current owner proof is rejected", { timeout: 20_000 }, () => {
+    const first = makePersistence();
+    const project = first.persistence.ensureProject({
+      pathCanonical: "C:/synthetic/prior-deny",
+      name: "prior-deny",
+    });
+    const conversationId = randomUUID();
+    const turnId = randomUUID();
+    const operationId = randomUUID();
+    first.persistence.ensureConversation({
+      projectId: project.id,
+      conversationId,
+      controller: "codex",
+      modelRequested: "gpt-test",
+      effort: "low",
+      role: "implement",
+      evidence: first.evidence,
+    });
+    first.persistence.beginTurn({
+      conversationId, turnId, operationId, prompt: "deny me", effort: "low", evidence: first.evidence,
+    });
+    first.persistence.afterThreadStart({ conversationId, nativeThreadId: "thread-d", evidence: first.evidence });
+    first.persistence.afterTurnWritten({ conversationId, turnId, operationId, evidence: first.evidence });
+    first.persistence.releaseProducer({ conversationId, evidence: first.evidence });
+    first.persistence.close();
+
+    let allow = true;
+    const connectionId = randomUUID();
+    const second = createNativeSessionPersistence({
+      databasePath: join(first.dir, "sessions.sqlite3"),
+      hostGeneration: randomUUID(),
+      livenessPath: join(first.dir, "liveness-deny.json"),
+      verifyOwnerEvidence: (facts) => allow && facts?.evidence?.connectionId === connectionId,
+    });
+    owned.push(second);
+    const evidence = { connectionId };
+    second.ensureConversation({
+      projectId: project.id,
+      conversationId,
+      controller: "codex",
+      modelRequested: "gpt-test",
+      effort: "low",
+      role: "implement",
+      evidence,
+    });
+    allow = false;
+    expect(() =>
+      second.acknowledgePriorOwnerTurn({
+        conversationId, turnId, operationId, evidence: { connectionId: "revoked" },
+      }),
+    ).toThrow(/not verified|ERR_OWNER_UNVERIFIED|ownership/i);
+  });
+
+  it("hydrates imported history plus later native turns on the same conversation", { timeout: 20_000 }, () => {
+    const { persistence, evidence } = makePersistence();
+    const project = persistence.ensureProject({
+      pathCanonical: "C:/synthetic/import-continue",
+      name: "import-continue",
+    });
+    const imported = persistence.importTranscript({
+      projectId: project.id,
+      source: "continue-fixture",
+      sourceKey: "continue-1",
+      title: "Continued import",
+      controller: "codex",
+      messages: [
+        { role: "user", text: "imported q" },
+        { role: "assistant", text: "imported a" },
+      ],
+    });
+    const turnId = randomUUID();
+    const operationId = randomUUID();
+    persistence.ensureConversation({
+      projectId: project.id,
+      conversationId: imported.conversationId,
+      controller: "codex",
+      modelRequested: "gpt-test",
+      effort: "low",
+      role: "implement",
+      evidence,
+    });
+    persistence.beginTurn({
+      conversationId: imported.conversationId,
+      turnId,
+      operationId,
+      prompt: "new question",
+      effort: "low",
+      evidence,
+    });
+    persistence.afterThreadStart({
+      conversationId: imported.conversationId,
+      nativeThreadId: "thread-import-cont",
+      evidence,
+    });
+    persistence.afterTurnWritten({
+      conversationId: imported.conversationId, turnId, operationId, evidence,
+    });
+    persistence.afterObserved({
+      conversationId: imported.conversationId, turnId, operationId,
+      nativeIdentity: "thread-import-cont", nativeTurnId: "native-import-cont", evidence,
+    });
+    persistence.appendDelta({
+      conversationId: imported.conversationId, turnId, operationId, partId: randomUUID(),
+      nativeMessageId: "i-cont", text: "new answer", evidence,
+    });
+    persistence.settleTurn({
+      conversationId: imported.conversationId, turnId, operationId, outcome: "completed",
+      nativeIdentity: "thread-import-cont", nativeTurnId: "native-import-cont", evidence,
+    });
+
+    const hydrated = persistence.hydrateConversation({
+      projectId: project.id,
+      conversationId: imported.conversationId,
+    });
+    expect(hydrated?.imported).toBe(true);
+    expect(hydrated?.messages).toEqual([
+      expect.objectContaining({ role: "user", text: "imported q", imported: true }),
+      expect.objectContaining({ role: "assistant", text: "imported a", imported: true }),
+      expect.objectContaining({ role: "user", text: "new question" }),
+      expect.objectContaining({ role: "assistant", text: "new answer", outcome: "completed" }),
+    ]);
+    const exported = persistence.exportConversation({
+      projectId: project.id,
+      conversationId: imported.conversationId,
+    });
+    expect(exported?.conversation.messages).toHaveLength(4);
+    expect(exported?.truncated).toBe(false);
+  });
+
+  it("exports with full hydrate caps and pages multi-turn history", { timeout: 30_000 }, () => {
+    const { persistence, evidence } = makePersistence();
+    const project = persistence.ensureProject({
+      pathCanonical: "C:/synthetic/paging-export",
+      name: "paging-export",
+    });
+    const conversationId = randomUUID();
+    persistence.ensureConversation({
+      projectId: project.id,
+      conversationId,
+      controller: "codex",
+      modelRequested: "gpt-test",
+      effort: "low",
+      role: "implement",
+      evidence,
+    });
+    persistence.afterThreadStart({ conversationId, nativeThreadId: "thread-page", evidence });
+    for (let i = 0; i < 5; i += 1) {
+      const turnId = randomUUID();
+      const operationId = randomUUID();
+      persistence.beginTurn({
+        conversationId, turnId, operationId, prompt: `q${i}`, effort: "low", evidence,
+      });
+      persistence.afterTurnWritten({ conversationId, turnId, operationId, evidence });
+      persistence.afterObserved({
+        conversationId, turnId, operationId,
+        nativeIdentity: "thread-page", nativeTurnId: `native-${i}`, evidence,
+      });
+      persistence.appendDelta({
+        conversationId, turnId, operationId, partId: randomUUID(),
+        nativeMessageId: `m-${i}`, text: `a${i}`, evidence,
+      });
+      persistence.settleTurn({
+        conversationId, turnId, operationId, outcome: "completed",
+        nativeIdentity: "thread-page", nativeTurnId: `native-${i}`, evidence,
+      });
+    }
+    const narrow = persistence.hydrateConversation({
+      projectId: project.id,
+      conversationId,
+      maxEventPages: 1,
+      turnLimit: 2,
+    });
+    expect(narrow?.messages.length).toBeLessThanOrEqual(4);
+    expect(narrow?.hasMoreTurns).toBe(true);
+    expect(narrow?.turnsLoaded).toBe(2);
+    const exported = persistence.exportConversation({
+      projectId: project.id,
+      conversationId,
+    });
+    expect(exported?.conversation.messages.length).toBe(10);
+    expect(exported?.truncated).toBe(false);
+    expect(exported?.truncation).toEqual({ events: false, turns: false });
+
+  });
+
+  it("discloses byte truncation before a large export exceeds the IPC frame", () => {
+    const { persistence } = makePersistence();
+    const project = persistence.ensureProject({ pathCanonical: "C:/synthetic/byte-export", name: "byte-export" });
+    const imported = persistence.importTranscript({
+      projectId: project.id, source: "fixture", sourceKey: "large",
+      messages: Array.from({ length: 5 }, (_, i) => ({ role: "assistant", text: `${i}${"x".repeat(189_999)}` })),
+    });
+    const exported = persistence.exportConversation({ projectId: project.id, conversationId: imported.conversationId });
+    expect(exported.truncated).toBe(true);
+    expect(exported.truncation.bytes).toBe(true);
+    expect(Buffer.byteLength(JSON.stringify({ type: "response", result: { export: exported } }))).toBeLessThan(1024 * 1024);
+    expect(exported.conversation.messages.length).toBeLessThan(5);
+    expect(exported.conversation.messages[0].text.startsWith("0")).toBe(true);
+    // Truncating the transport projection must not delete stored history.
+    const hydrated = persistence.hydrateConversation({ projectId: project.id, conversationId: imported.conversationId });
+    expect(hydrated.hasMoreBytes).toBe(true);
+    expect(hydrated.messages[0].text.startsWith("1")).toBe(true);
+    expect(hydrated.messages.at(-1).text.startsWith("4")).toBe(true);
+    expect(Buffer.byteLength(JSON.stringify(hydrated))).toBeLessThan(1024 * 1024);
+    const again = persistence.importTranscript({ projectId: project.id, source: "fixture", sourceKey: "large", messages: [] });
+    expect(again.conversationId).toBe(imported.conversationId);
+  });
+
+  it("exports all turns past the UI 500-turn window and discloses turn-cap truncation on hydrate", {
+    timeout: 180_000,
+  }, () => {
+    const { persistence, evidence } = makePersistence();
+    const project = persistence.ensureProject({
+      pathCanonical: "C:/synthetic/export-501",
+      name: "export-501",
+    });
+    const conversationId = randomUUID();
+    persistence.ensureConversation({
+      projectId: project.id,
+      conversationId,
+      controller: "codex",
+      modelRequested: "gpt-test",
+      effort: "low",
+      role: "implement",
+      evidence,
+    });
+    persistence.afterThreadStart({ conversationId, nativeThreadId: "thread-501", evidence });
+    const turnCount = 501;
+    for (let i = 0; i < turnCount; i += 1) {
+      const turnId = randomUUID();
+      const operationId = randomUUID();
+      persistence.beginTurn({
+        conversationId, turnId, operationId, prompt: `q${i}`, effort: "low", evidence,
+      });
+      persistence.afterTurnWritten({ conversationId, turnId, operationId, evidence });
+      persistence.afterObserved({
+        conversationId, turnId, operationId,
+        nativeIdentity: "thread-501", nativeTurnId: `native-${i}`, evidence,
+      });
+      persistence.appendDelta({
+        conversationId, turnId, operationId, partId: randomUUID(),
+        nativeMessageId: `m-${i}`, text: `a${i}`, evidence,
+      });
+      persistence.settleTurn({
+        conversationId, turnId, operationId, outcome: "completed",
+        nativeIdentity: "thread-501", nativeTurnId: `native-${i}`, evidence,
+      });
+    }
+
+    const uiWindow = persistence.hydrateConversation({
+      projectId: project.id,
+      conversationId,
+      maxEventPages: 512,
+      turnLimit: 500,
+    });
+    expect(uiWindow?.turnsLoaded).toBe(500);
+    expect(uiWindow?.hasMoreTurns).toBe(true);
+    expect(uiWindow.messages[0].text).toBe("q1");
+    expect(uiWindow.messages.at(-1).text).toBe("a500");
+    const reopened = persistence.hydrateConversation({ projectId: project.id, conversationId });
+    expect(reopened.messages[0].text).toBe("q401");
+    expect(reopened.messages.at(-1).text).toBe("a500");
+    // UI hydrate previously claimed truncated:false when only the turn axis was hit.
+    expect(uiWindow?.hasMoreEvents === true || uiWindow?.hasMoreTurns === true).toBe(true);
+
+    const exported = persistence.exportConversation({
+      projectId: project.id,
+      conversationId,
+    });
+    expect(exported?.conversation.turnsLoaded).toBe(501);
+    expect(exported?.conversation.hasMoreTurns).toBe(false);
+    expect(exported?.conversation.messages.length).toBe(turnCount * 2);
+    expect(exported?.truncated).toBe(false);
+    expect(exported?.truncation).toEqual({ events: false, turns: false });
+    const imported = persistence.importTranscript({
+      projectId: project.id, source: "export-roundtrip", sourceKey: "501-turns",
+      messages: exported.conversation.messages,
+    });
+    const roundtrip = persistence.hydrateConversation({ projectId: project.id, conversationId: imported.conversationId });
+    expect(roundtrip.messages.map((m) => m.text)).toEqual(exported.conversation.messages.map((m) => m.text));
+  });
 });

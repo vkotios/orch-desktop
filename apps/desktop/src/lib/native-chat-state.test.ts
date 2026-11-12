@@ -11,6 +11,17 @@ const ack = (extra: Partial<NativeCodexSendAck> = {}): NativeCodexSendAck =>
 const started = () => beginNativeTurn(createNativeUiSession("s1", "model"), "t1", "hello");
 
 describe("native conversation state", () => {
+  it("recovers durable tool facts after live completion without reviving a turn or regressing tool progress", () => {
+    let s = applyNativeAck(started(), ack(), generation);
+    s = applyNativeUiEvent(s, event("turn_complete", { nativeOutcome: "completed", nativeThreadId: "thread", nativeTurnId: "turn" }), generation);
+    s = applyNativeUiEvent(s, event("tool_call", { source: "durable", seq: 4, toolCallId: "tool", toolTitle: "Read", toolStatus: "completed" }), generation);
+    expect(s.messages[1].tools).toMatchObject([{ id: "tool", status: "completed" }]);
+    s = applyNativeUiEvent(s, event("tool_call", { source: "durable", seq: 3, toolCallId: "tool", toolStatus: "running" }), generation);
+    expect(s.messages[1].tools[0].status).toBe("completed");
+    expect(s.busy).toBe(false);
+    expect(s.activeTurnId).toBeNull();
+    expect(s.messages[1].outcome).toBe("completed");
+  });
   it("keeps one native thread across two terminal turns", () => {
     let s = applyNativeAck(started(), ack(), generation);
     s = applyNativeUiEvent(s, event("turn_complete", { nativeOutcome: "completed", nativeThreadId: "thread", nativeTurnId: "turn" }), generation);
@@ -44,19 +55,65 @@ describe("native conversation state", () => {
     expect(s.messages[1]).toMatchObject({ statusText: "stopping", isStreaming: true, tools: [] });
   });
 
-  it("ignores all durable events for the active turn while busy so live text is not dropped", () => {
-    let s = applyNativeUiEvent(started(), event("message_delta", { text: "live" }), generation);
-    s = applyNativeUiEvent(s, event("message_delta", { source: "durable", text: "dup" }), generation);
-    expect(s.messages[1].text).toBe("live");
-    // Durable completion must not clear the turn while live text may still arrive.
-    expect(applyNativeUiEvent(s, event("turn_complete", { source: "durable", nativeOutcome: "completed" }), generation)).toBe(s);
-    expect(s.busy).toBe(true);
-    s = applyNativeUiEvent(s, event("message_delta", { text: " more" }), generation);
-    expect(s.messages[1].text).toBe("live more");
-    s = applyNativeUiEvent(s, event("turn_complete", { nativeOutcome: "completed" }), generation);
+  it("dedupes by partId across live and durable delivery without text equality", () => {
+    let s = applyNativeUiEvent(started(), event("message_delta", { text: "a", partId: "p1" }), generation);
+    s = applyNativeUiEvent(s, event("message_delta", { text: "b", partId: "p2" }), generation);
+    expect(s.messages[1].text).toBe("ab");
+    // Durable catch-up with the same part ids must not duplicate.
+    s = applyNativeUiEvent(s, event("message_delta", { source: "durable", text: "a", partId: "p1", seq: 1 }), generation);
+    s = applyNativeUiEvent(s, event("message_delta", { source: "durable", text: "b", partId: "p2", seq: 2 }), generation);
+    expect(s.messages[1].text).toBe("ab");
+    // A later durable-only part still appends.
+    s = applyNativeUiEvent(s, event("message_delta", { source: "durable", text: "c", partId: "p3", seq: 3 }), generation);
+    expect(s.messages[1].text).toBe("abc");
+    s = applyNativeUiEvent(s, event("turn_complete", { source: "durable", nativeOutcome: "completed" }), generation);
     expect(s.busy).toBe(false);
+    expect(s.messages[1]).toMatchObject({ text: "abc", outcome: "completed" });
     const finished = s;
     expect(applyNativeUiEvent(finished, event("turn_complete", { source: "durable", nativeOutcome: "failed" }), generation)).toBe(finished);
+  });
+
+  it("restores missing middle parts in durable sequence order (abc not acb)", () => {
+    let s = applyNativeUiEvent(started(), event("message_delta", { text: "a", partId: "p1" }), generation);
+    s = applyNativeUiEvent(s, event("message_delta", { text: "c", partId: "p3" }), generation);
+    expect(s.messages[1].text).toBe("ac");
+    s = applyNativeUiEvent(s, event("message_delta", { source: "durable", text: "a", partId: "p1", seq: 10 }), generation);
+    s = applyNativeUiEvent(s, event("message_delta", { source: "durable", text: "b", partId: "p2", seq: 11 }), generation);
+    s = applyNativeUiEvent(s, event("message_delta", { source: "durable", text: "c", partId: "p3", seq: 12 }), generation);
+    expect(s.messages[1].text).toBe("abc");
+    s = applyNativeUiEvent(s, event("turn_complete", { source: "durable", nativeOutcome: "completed" }), generation);
+    expect(s.messages[1]).toMatchObject({ text: "abc", outcome: "completed" });
+  });
+
+  it("recovers a missing middle part after live completion without resurrecting the turn", () => {
+    let s = applyNativeUiEvent(started(), event("message_delta", { text: "a", partId: "p1" }), generation);
+    s = applyNativeUiEvent(s, event("message_delta", { text: "c", partId: "p3" }), generation);
+    s = applyNativeUiEvent(s, event("turn_complete", { nativeOutcome: "completed" }), generation);
+    expect(s.busy).toBe(false);
+    expect(s.activeTurnId).toBeNull();
+    expect(s.messages[1]).toMatchObject({ text: "ac", outcome: "completed" });
+    // Durable catch-up arrives after live completion (allowed transport sequence).
+    s = applyNativeUiEvent(s, event("message_delta", { source: "durable", text: "a", partId: "p1", seq: 1 }), generation);
+    s = applyNativeUiEvent(s, event("message_delta", { source: "durable", text: "b", partId: "p2", seq: 2 }), generation);
+    s = applyNativeUiEvent(s, event("message_delta", { source: "durable", text: "c", partId: "p3", seq: 3 }), generation);
+    expect(s.busy).toBe(false);
+    expect(s.activeTurnId).toBeNull();
+    expect(s.approvals).toEqual([]);
+    expect(s.messages[1]).toMatchObject({ text: "abc", outcome: "completed", isStreaming: false });
+    // Durable terminal after finish must not change outcome.
+    const finished = s;
+    expect(applyNativeUiEvent(finished, event("turn_complete", { source: "durable", nativeOutcome: "failed" }), generation)).toBe(finished);
+  });
+
+  it("recovers text and completion from durable events when live progress was lost", () => {
+    let s = started();
+    s = applyNativeUiEvent(s, event("message_delta", { source: "durable", text: "recovered", partId: "p1" }), generation);
+    expect(s.messages[1].text).toBe("recovered");
+    s = applyNativeUiEvent(s, event("message_delta", { source: "durable", text: " again", partId: "p1" }), generation);
+    expect(s.messages[1].text).toBe("recovered");
+    s = applyNativeUiEvent(s, event("turn_complete", { source: "durable", nativeOutcome: "completed" }), generation);
+    expect(s.busy).toBe(false);
+    expect(s.messages[1].outcome).toBe("completed");
   });
 
   it("binds an early delta and rejects a conflicting acknowledgement", () => {

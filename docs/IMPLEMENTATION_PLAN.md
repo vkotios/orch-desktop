@@ -5,6 +5,45 @@ Status: Foundation, native Codex/Claude debug conversations and clarification ac
 Product contract: [PRODUCT_SPEC.md](PRODUCT_SPEC.md), initially committed as `d9cc7ef`  
 Planning branch: `codex/cho-v01-plan`; implementation branch: `codex/cho-v01-foundation`
 
+## Current execution amendment — 2026-11-05
+
+Current delivery assessment (2026-11-12): see
+[implementation status](IMPLEMENTATION_STATUS.md#current-delivery-assessment--2026-11-12)
+and [PR #2](https://github.com/vkotios/orch-desktop/pull/2). Cursor's source
+delivery and controller repairs are pushed and independently reviewed. The
+remaining live, rendered, clean-machine and final CI acceptance requirements
+below remain in force; the full plan has not been declared complete. Older
+candidate SHAs and authorization observations in this amendment are historical.
+
+This amendment takes precedence over older execution assignments and checkpoint
+descriptions below. The product scope and AC-01–AC-15 remain unchanged.
+
+- Current audited source: `76076fb3cd6c82f3ca7d74220d226e34955521c4`.
+  [Sonnet audit and controller verification](reviews/CURSOR-DELIVERY-REVIEW-2026-11-05.md)
+  establish passing source checks, not completion of CHO-03/05 or M2/M3.
+- The next execution entry point is the owner-supplied
+  [Cursor completion instruction](CURSOR_COMPLETION_INSTRUCTIONS.md). When supplied
+  by the owner, Cursor may implement and control its own completion work directly;
+  the historical Codex-only/Muse-Aider assignments do not prevent those edits.
+  Actual child CLI launches still use orch and retain ownership, scope, approved
+  routes and applicable independent-review rules. No new paid-route substitution,
+  push, public visibility change or release publication is authorized by this file.
+- Order: truthful close/failure/ownership and lossless replay/body/draft/history
+  consumers (CHO-03); host admission and reconciled delegation (CHO-04/05);
+  complete product journeys/diffs (CHO-06); native/release readiness and full
+  acceptance (CHO-01/02/04/07/08). Repair the reviewed defects before calling the
+  next slice cosmetic polish. The instruction names checks and existing-code reuse.
+- Preserve the report's refutations, evidence limits and controller addendum C-01.
+  Do not implement every reviewer suggestion mechanically or weaken the contracts
+  to accommodate a defect. Record an evidence-bound disposition for each finding.
+- Track every package exit and AC result against the actual candidate/artifact.
+  An inaccessible clean machine or account is a recorded qualification blocker,
+  not permission to call the release complete. Continue independent work.
+
+Earlier environment/remote/workforce observations are dated history. In particular,
+`origin` is now the private orch-desktop remote (see CURRENT_HANDOFF); do not use
+the old coordinator-remote snapshot as a current configuration instruction.
+
 ## 1. Delivery approach
 
 Build the native application around the existing graphite interface and coordinator. Establish one installable, recoverable controller conversation first, then add the second controller and the full implementation/review journey. Package early so native integration problems are discovered before the product is otherwise finished.

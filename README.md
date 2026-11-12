@@ -8,10 +8,14 @@ remaining work and implementation/review workflow.
 
 The product brings direct CLI conversations and the `orch` coordination dashboard into one desktop workspace. The current delivery is a Windows native Codex and Claude debug preview; product and release work continues:
 
-1. **Direct CLI conversations:** the native preview uses the installed Codex or Claude CLI and saved first-party sign-in. It supports streamed continuing conversations, tool status, once-only permissions, explicit clarification answers and cancellation after project selection and trust. Chats remain in memory while the window is open.
-2. **Coordinator studio:** the browser prototype exposes orchestration workflows. The native host supports discovery and dashboard reads, while the native conversation view supports Codex and Claude. Mutating coordinator commands remain outside the admitted native route.
+1. **Direct CLI conversations:** the native preview uses the installed Codex or Claude CLI and saved first-party sign-in. It supports streamed continuing conversations, tool status, once-only permissions, clarification answers and cancellation after project selection and trust. SQLite persistence supports history, drafts and recovery; live-provider restart qualification remains open.
+2. **Coordinator studio:** the native host admits selected conversation-bound delegation operations and provides explicit acceptance, integration and cleanup journeys. Local checks establish source behavior; live worker/reviewer and installed-app qualification remain open.
 
 The implementation builds on the existing coordinator and adapter code. Supported product behavior and release acceptance are tracked in the specification and status below.
+
+Bundled coordinator provenance and the upstream update procedure are recorded in
+[COORDINATOR_UPSTREAM.md](docs/COORDINATOR_UPSTREAM.md). Its additional platform
+support does not qualify CHO Desktop on those platforms.
 
 ## Desktop implementation status
 

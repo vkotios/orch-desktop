@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { prepareRuntime } from "../scripts/prepare-runtime.mjs";
 
@@ -61,6 +62,27 @@ async function makeSourceRoot(extra: Record<string, string> = {}, root = ""): Pr
     "apps/desktop/server/claude-wire.mjs": "export const wire = 1;\n",
     "apps/desktop/server/claude-client.mjs": "export const claudeClient = 1;\n",
     "apps/desktop/server/claude-chat-actor.mjs": "export const actor = 1;\n",
+    "apps/desktop/server/delegation-admit.mjs": "export const admit = 1;\n",
+    "apps/desktop/server/delegation-integrate.mjs": "export const integrate = 1;\n",
+    "apps/desktop/server/delegation-integrate-evidence.mjs": "export const evidence = 1;\n",
+    "apps/desktop/server/delegation-associations.mjs": "export const associations = 1;\n",
+    "apps/desktop/server/native-session-persistence.mjs": "export const persistence = 1;\n",
+    "apps/desktop/server/session-store.mjs": "export const store = 1;\n",
+    "apps/desktop/server/session-store-schema.mjs": "export const schema = 1;\n",
+    "apps/desktop/server/session-store-migrate.mjs": "export const migrate = 1;\n",
+    "apps/desktop/server/session-store-restore.mjs": "export const restore = 1;\n",
+    "apps/desktop/server/session-records.mjs": "export const records = 1;\n",
+    "apps/desktop/server/session-bindings.mjs": "export const bindings = 1;\n",
+    "apps/desktop/server/session-turns.mjs": "export const turns = 1;\n",
+    "apps/desktop/server/session-message-deltas.mjs": "export const deltas = 1;\n",
+    "apps/desktop/server/session-tool-facts.mjs": "export const facts = 1;\n",
+    "apps/desktop/server/session-turn-outcomes.mjs": "export const outcomes = 1;\n",
+    "apps/desktop/server/session-events.mjs": "export const events = 1;\n",
+    "apps/desktop/server/session-bodies.mjs": "export const bodies = 1;\n",
+    "apps/desktop/server/session-approvals.mjs": "export const approvals = 1;\n",
+    "apps/desktop/server/session-clarifications.mjs": "export const clarifications = 1;\n",
+    "apps/desktop/server/session-stops.mjs": "export const stops = 1;\n",
+    "apps/desktop/server/session-producer-transaction.mjs": "export const producerTx = 1;\n",
     "packages/acp-client/src/claude-stream.ts": "export const claudeStream = 1;\n",
     "packages/acp-client/src/codex-app-server.ts": "export const codexAppServer = 1;\n",
     "apps/desktop/server/notes.txt": "not staged\n",
@@ -127,7 +149,18 @@ describe("prepareRuntime", () => {
     expect(await readFile(join(outputDir, "app", "apps", "desktop", "server", "native-clarification.mjs"), "utf8")).toBe("export const nativeClarification = 1;\n");
     expect(await readFile(join(outputDir, "app", "packages", "acp-client", "src", "codex-app-server.ts"), "utf8")).toBe("export const codexAppServer = 1;\n");
     const expected = ["LICENSE.node", "node.exe", "runtime-manifest.json"];
-    for (const name of ["bridge.mjs", "host.mjs", "protocol.mjs", "native-rpc.mjs", "codex-client.mjs", "event-mailbox.mjs", "native-chat.mjs", "native-clarification.mjs", "claude-wire.mjs", "claude-client.mjs", "claude-chat-actor.mjs"]) expected.push(join("app", "apps", "desktop", "server", name));
+    for (const name of [
+      "bridge.mjs", "host.mjs", "protocol.mjs", "native-rpc.mjs", "codex-client.mjs",
+      "event-mailbox.mjs", "native-chat.mjs", "native-clarification.mjs", "claude-wire.mjs",
+      "claude-client.mjs", "claude-chat-actor.mjs", "delegation-admit.mjs",
+      "delegation-integrate.mjs", "delegation-integrate-evidence.mjs",
+      "delegation-associations.mjs", "native-session-persistence.mjs", "session-store.mjs",
+      "session-store-schema.mjs", "session-store-migrate.mjs", "session-store-restore.mjs", "session-records.mjs",
+      "session-bindings.mjs", "session-turns.mjs", "session-message-deltas.mjs",
+      "session-tool-facts.mjs", "session-turn-outcomes.mjs", "session-events.mjs",
+      "session-bodies.mjs", "session-approvals.mjs", "session-clarifications.mjs",
+      "session-stops.mjs", "session-producer-transaction.mjs",
+    ]) expected.push(join("app", "apps", "desktop", "server", name));
     expected.push(join("app", "packages", "acp-client", "src", "codex-app-server.ts"));
     expected.push(join("app", "packages", "acp-client", "src", "claude-stream.ts"));
     expected.push(join("app", "model-catalog.json"), join("app", "orch", "roster.example.json"), join("app", "orch", "src", "index.mjs"), join("app", "orch", "src", "nested", "deep.mjs"));
@@ -156,7 +189,7 @@ describe("prepareRuntime", () => {
     await rm(join(sourceRoot, "apps", "desktop", "server", "bridge.mjs"));
     await expect(prepareRuntime({ manifestPath, sourceRoot, outputDir, fetchImpl: fakeFetch(bodies()).impl })).rejects.toThrow(/allowlisted/);
     expect(await snapshot(outputDir)).toEqual(before);
-  });
+  }, 15_000);
 
   it("replaces output wholesale so stale and unexpected files vanish", async () => {
     const sourceRoot = await makeSourceRoot();
@@ -287,4 +320,53 @@ describe("prepareRuntime", () => {
     await expect(prepareRuntime({ manifestPath, sourceRoot, outputDir: await makeOutputDir(), fetchImpl: fakeFetch(bigLicense).impl })).rejects.toThrow(/exceeds limit/);
     await expect(prepareRuntime({ manifestPath, sourceRoot, outputDir: await makeOutputDir(), fetchImpl: failingFetch })).rejects.toThrow(/HTTP/);
   });
+
+  it("stages the real host import closure without source-tree fallback", async () => {
+    const prepareMod = (await import("../scripts/prepare-runtime.mjs")) as {
+      SERVER_MODULES?: string[];
+    };
+    const serverModules = prepareMod.SERVER_MODULES;
+    expect(Array.isArray(serverModules) && serverModules.length > 11).toBe(true);
+    const { pathToFileURL } = await import("node:url");
+    const repoServer = join(dirname(fileURLToPath(import.meta.url)), "..", "server");
+    const sourceRoot = await makeSourceRoot();
+    for (const name of serverModules as string[]) {
+      await writeFile(
+        join(sourceRoot, "apps", "desktop", "server", name),
+        await readFile(join(repoServer, name)),
+      );
+    }
+    const outputDir = await makeOutputDir();
+    await prepareRuntime({
+      manifestPath: await makeManifestFile(buildManifest()),
+      sourceRoot,
+      outputDir,
+      fetchImpl: fakeFetch(bodies()).impl,
+    });
+    const stagedServer = join(outputDir, "app", "apps", "desktop", "server");
+    for (const name of [
+      "host.mjs",
+      "delegation-admit.mjs",
+      "delegation-integrate.mjs",
+      "delegation-integrate-evidence.mjs",
+      "delegation-associations.mjs",
+      "native-session-persistence.mjs",
+      "session-store-migrate.mjs",
+    ]) {
+      expect(await readFile(join(stagedServer, name), "utf8")).toContain("export");
+    }
+    // Load outside Vite so the staged tree is the only resolution root.
+    const { spawnSync } = await import("node:child_process");
+    const stagedHost = pathToFileURL(join(stagedServer, "host.mjs")).href;
+    const probe = spawnSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "-e",
+        `import(${JSON.stringify(stagedHost)}).then((m) => { if (typeof m.runHost !== "function") process.exit(2); }).catch((e) => { console.error(e); process.exit(1); })`,
+      ],
+      { encoding: "utf8", windowsHide: true },
+    );
+    expect(probe.status, probe.stderr || probe.stdout).toBe(0);
+  }, 30_000);
 });

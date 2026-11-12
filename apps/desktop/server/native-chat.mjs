@@ -101,6 +101,8 @@ export function createNativeChatService(options) {
     claudeDurable: null,
     // True while close() is settling durable state before marking closed.
     shuttingDown: false,
+    recoveryNotice: null,
+    recoveryUnresolved: [],
   };
 
   function ownerEvidence() {
@@ -139,18 +141,75 @@ export function createNativeChatService(options) {
     }
     return evidence.connectionId === liveId;
   }
+  function verifyPendingApproval(facts) {
+    if (state.dead) return false;
+    if (state.closed && !state.shuttingDown) return false;
+    if (facts === null || typeof facts !== "object") return false;
+    const approvalId = facts.approvalId;
+    if (typeof approvalId !== "string" || approvalId.length === 0) return false;
+    const rec = state.approvals.get(approvalId);
+    if (rec === undefined) return false;
+    const request = facts.request;
+    if (request === null || typeof request !== "object") return false;
+    if (rec.connectionId !== request.connectionId) return false;
+    if (rec.nativeItemId !== request.nativeItemId) return false;
+    if (String(rec.requestId) !== String(request.nativeRequestId)) return false;
+    if (rec.sessionId !== facts.conversationId || rec.turnId !== facts.turnId) return false;
+    if (facts.action === "decide" || facts.action === "dispatch") {
+      if (typeof facts.decision !== "string" || !rec.decisions.includes(facts.decision)) return false;
+      if (rec.responding !== true && facts.action === "dispatch") return false;
+    }
+    return true;
+  }
+  function verifyPendingQuestion(facts) {
+    if (state.dead) return false;
+    if (state.closed && !state.shuttingDown) return false;
+    if (facts === null || typeof facts !== "object") return false;
+    const clarificationId = facts.clarificationId;
+    if (typeof clarificationId !== "string" || clarificationId.length === 0) return false;
+    const rec = state.clarifications.get(clarificationId);
+    if (rec === undefined) return false;
+    if (rec.sessionId !== facts.conversationId || rec.turnId !== facts.turnId) return false;
+    const request = facts.request;
+    if (request === null || typeof request !== "object") return false;
+    if (rec.connectionId !== request.connectionId) return false;
+    if (rec.parsed.nativeItemId !== request.nativeItemId) return false;
+    if (facts.action === "queue" || facts.action === "dispatch") {
+      if (rec.responding !== true && facts.action === "dispatch") return false;
+    }
+    return true;
+  }
   function evidenceProcessDead(evidence) {
     if (evidence === null || typeof evidence !== "object") return false;
     if (evidence.reason !== "host-reclaim") return false;
     const priorPid = evidence.priorPid;
     if (!Number.isSafeInteger(priorPid) || priorPid <= 0) return false;
-    if (priorPid === process.pid) return false;
+    if (priorPid === process.pid && evidence.identityVerdict !== "mismatch") return false;
+    let signalError = null;
     try {
       process.kill(priorPid, 0);
-      return false; // still alive
-    } catch {
-      return true; // ESRCH / access — treat as not a live owner we must defer to
+      // Signalable process: only treat as dead when recorded creation time proves PID reuse.
+      if (typeof evidence.priorCreatedAt === "string" && evidence.priorCreatedAt.length > 0) {
+        try {
+          // Lazy sync identity check via orch helper when available on evidence.
+          if (evidence.identityVerdict === "mismatch" || evidence.identityVerdict === "gone") {
+            return evidence.identityVerdict === "gone" || evidence.identityVerdict === "mismatch";
+          }
+        } catch {
+          /* fall through */
+        }
+      }
+      return false;
+    } catch (err) {
+      signalError = err;
     }
+    const code = signalError && typeof signalError === "object" ? signalError.code : null;
+    // ESRCH / missing process means dead. EPERM/EACCES is uncertain, not proof of death.
+    if (code === "EPERM" || code === "EACCES") return false;
+    if (code === "ESRCH") return true;
+    // Unknown access failure is uncertain; do not steal the fence.
+    if (signalError) return false;
+    return false;
   }
 
   // Optional CHO-03 dual-write. Unit tests omit databasePath; the host passes
@@ -167,11 +226,18 @@ export function createNativeChatService(options) {
     if (persistence !== null) return persistence;
     if (persistenceDatabasePath === null) return null;
     const { createNativeSessionPersistence } = await import("./native-session-persistence.mjs");
+    // Read native identities asynchronously once at the recovery boundary.
+    // The synchronous writer uses this immutable snapshot, never a shell probe.
+    const { readProcessTable } = await import("../../../orch/src/procs.mjs");
+    const processTable = await readProcessTable({ deadlineMs: 3000 });
     persistence = createNativeSessionPersistence({
       databasePath: persistenceDatabasePath,
       hostGeneration: generation,
       livenessPath: `${persistenceDatabasePath}.liveness.json`,
       verifyOwnerEvidence: verifyPersistenceOwner,
+      processTable: () => processTable,
+      verifyPendingApproval,
+      verifyPendingQuestion,
     });
     return persistence;
   }
@@ -202,8 +268,29 @@ export function createNativeChatService(options) {
   function fatalize(raw) {
     const error = raw instanceof Error ? raw : new Error(String(raw));
     if (state.dead || state.closed) return;
-    state.dead = true;
     const a = state.active;
+    // Settle stranded dispatched turns as unknown while ownership still verifies.
+    try {
+      if (a !== null) durableSettle(a, "unknown");
+      if (state.claudeDurable?.operationId) {
+        durablePersist("claude fatal settle", () => {
+          persistence.settleTurn({
+            conversationId: state.claudeDurable.sessionId,
+            turnId: state.claudeDurable.turnId,
+            operationId: state.claudeDurable.operationId,
+            outcome: "unknown",
+            nativeIdentity: state.claudeDurable.nativeSessionId ?? null,
+            nativeTurnId: null,
+            claudeInputUuid: state.claudeDurable.claudeInputUuid ?? null,
+            evidence: ownerEvidence(),
+          });
+        });
+        state.claudeDurable = null;
+      }
+    } catch (settleErr) {
+      notifyOwner(settleErr instanceof Error ? settleErr : new Error(String(settleErr)));
+    }
+    state.dead = true;
     state.active = null;
     clearTimer(a);
     clearLease(a);
@@ -262,9 +349,25 @@ export function createNativeChatService(options) {
   }
   // Invalidate every pending UI approval (single active turn owns them all):
   // retire the native request and queue one approval_resolved each.
+  // Durable history records unknown — never authority to replay the decision.
   function invalidateApprovals() {
     for (const [, rec] of state.approvals) {
       retireInbound(rec.requestId);
+      if (persistence) {
+        durablePersist("invalidate approval", () => {
+          try {
+            persistence.settleApproval({
+              conversationId: rec.sessionId,
+              turnId: rec.turnId,
+              approvalId: rec.approvalId,
+              outcome: "unknown",
+              evidence: ownerEvidence(),
+            });
+          } catch {
+            /* already terminal or never registered */
+          }
+        });
+      }
       enqueue({ kind: "approval_resolved", approvalId: rec.approvalId, generation, harness: "codex", sessionId: rec.sessionId, turnId: rec.turnId, nativeThreadId: rec.nativeThreadId, nativeTurnId: rec.nativeTurnId });
     }
     state.approvals.clear();
@@ -277,6 +380,20 @@ export function createNativeChatService(options) {
   function clearClarifications(emit = true) {
     for (const rec of state.clarifications.values()) {
       if (rec.requestId !== undefined) retireInbound(rec.requestId);
+      if (persistence) {
+        durablePersist("retire clarification", () => {
+          try {
+            persistence.retireClarification({
+              conversationId: rec.sessionId,
+              turnId: rec.turnId,
+              clarificationId: rec.clarificationId,
+              evidence: ownerEvidence(),
+            });
+          } catch {
+            /* already retired or never registered */
+          }
+        });
+      }
       if (emit) enqueue(clarificationEvent(rec, "clarification_resolved"));
     }
     state.clarifications.clear();
@@ -294,13 +411,56 @@ export function createNativeChatService(options) {
   function registerClarification(a, parsed, requestId) {
     if (state.clarifications.size >= MAX_PENDING_CLARIFICATIONS) throw new Error("too many pending native clarifications");
     const clarificationId = crypto.randomUUID();
-    const rec = { clarificationId, parsed, requestId, sessionId: a.sessionId, turnId: a.turnId,
-      connectionId: state.prepared.client.connectionId, responding: false };
+    const connectionId = state.prepared.client.connectionId;
+    const rec = {
+      clarificationId,
+      parsed,
+      requestId,
+      sessionId: a.sessionId,
+      turnId: a.turnId,
+      connectionId,
+      responding: false,
+      answerOperationId: null,
+    };
     state.clarifications.set(clarificationId, rec);
+    if (persistence && a.observed) {
+      try {
+        const questions = parsed.questions.map((q) => ({
+          id: q.id,
+          header: q.header,
+          question: q.question,
+          options: q.options === null
+            ? null
+            : q.options.map((o) => ({ label: o.label, description: o.description ?? "" })),
+          multiSelect: q.multiSelect === true,
+          isOther: q.isOther === true,
+        }));
+        durablePersist("register clarification", () => {
+          persistence.registerClarification({
+            conversationId: a.sessionId,
+            turnId: a.turnId,
+            clarificationId,
+            route: requestId === undefined ? "codex_async" : "codex_request",
+            connectionId,
+            nativeItemId: parsed.nativeItemId,
+            nativeRequestId: requestId === undefined ? null : requestId,
+            questions,
+            pendingEvidence: { clarificationId, requestId },
+            evidence: ownerEvidence(),
+          });
+        });
+      } catch (err) {
+        state.clarifications.delete(clarificationId);
+        throw err;
+      }
+    }
     enqueue({ ...clarificationEvent(rec, "clarification"), isBlocking: parsed.isBlocking, questions: parsed.questions });
   }
   // Only a known not-admitted failure may release the turn locally.
   function failActiveTurn(a, text) {
+    // Pre-observation / not-sent failures settle as unknown (not failed/not_sent).
+    try { durableSettle(a, "unknown"); }
+    catch (err) { notifyOwner(err instanceof Error ? err : new Error(String(err))); }
     if (state.active === a) state.active = null;
     clearTimer(a);
     clearLease(a);
@@ -319,7 +479,10 @@ export function createNativeChatService(options) {
     clearClarifications();
   }
   function durableSettle(a, outcome) {
-    if (!persistence || !a.operationId || !a.observed) return;
+    if (!persistence || !a.operationId) return;
+    // completed/interrupted require an observed native fact path elsewhere.
+    // Factless unknown is legal from any nonterminal dispatched state.
+    if (outcome !== "unknown" && !a.observed) return;
     durablePersist("settle", () => {
       persistence.settleTurn({
         conversationId: a.sessionId,
@@ -331,6 +494,17 @@ export function createNativeChatService(options) {
         evidence: ownerEvidence(),
       });
     });
+  }
+  // Stable factId per (toolCallId, phase) so exact retries hit store idempotency.
+  const toolFactIds = new Map();
+  function toolFactIdFor(toolCallId, phase) {
+    const key = `${toolCallId}\0${phase}`;
+    let id = toolFactIds.get(key);
+    if (id === undefined) {
+      id = crypto.randomUUID();
+      toolFactIds.set(key, id);
+    }
+    return id;
   }
   function normalizeToolStatus(raw) {
     if (raw === "inProgress" || raw === "in_progress" || raw === "running") return "inProgress";
@@ -353,7 +527,7 @@ export function createNativeChatService(options) {
       conversationId,
       turnId,
       operationId,
-      factId: crypto.randomUUID(),
+      factId: toolFactIdFor(toolCallId, phase),
       toolCallId,
       phase,
       toolTitle,
@@ -361,8 +535,8 @@ export function createNativeChatService(options) {
       evidence: ownerEvidence(),
     };
     if (typeof item.text === "string") args.summaryText = item.text;
+    // Claude message ids only; Codex item ids must not fill nativeMessageId.
     if (typeof item.nativeMessageId === "string") args.nativeMessageId = item.nativeMessageId;
-    else if (typeof item.nativeItemId === "string") args.nativeMessageId = item.nativeItemId;
     persistence.appendToolFact(args);
   }
   function deliverMapped(a, mapped) {
@@ -374,8 +548,9 @@ export function createNativeChatService(options) {
         terminal = true;
         terminalOutcome = item.nativeOutcome;
       }
+      let partId = null;
       if (item.kind === "message_delta" && persistence && a.operationId && a.observed) {
-        const partId = crypto.randomUUID();
+        partId = crypto.randomUUID();
         durablePersist("message delta", () => {
           persistence.appendDelta({
             conversationId: a.sessionId,
@@ -387,6 +562,9 @@ export function createNativeChatService(options) {
             evidence: ownerEvidence(),
           });
         });
+      } else if (item.kind === "message_delta") {
+        // Live mailbox still needs a stable identity for later durable catch-up.
+        partId = crypto.randomUUID();
       }
       if (
         (item.kind === "tool_call" || item.kind === "tool_result") &&
@@ -399,7 +577,12 @@ export function createNativeChatService(options) {
           persistMappedToolFact(a.sessionId, a.turnId, a.operationId, item);
         });
       }
-      enqueue({ ...item, generation, turnId: a.turnId });
+      enqueue({
+        ...item,
+        generation,
+        turnId: a.turnId,
+        ...(partId ? { partId } : {}),
+      });
     }
     if (terminal) {
       if (terminalOutcome) durableSettle(a, terminalOutcome);
@@ -529,8 +712,60 @@ export function createNativeChatService(options) {
       return;
     }
     const approvalId = crypto.randomUUID();
-    state.approvals.set(approvalId, { approvalId, sessionId: a.sessionId, turnId: a.turnId, nativeThreadId: params.threadId, nativeTurnId: params.turnId, nativeItemId: params.itemId, requestId: id, connectionId: state.prepared.client.connectionId, decisions, responding: false });
-    enqueue({ kind: "approval", approvalId, approvalType: method === "item/fileChange/requestApproval" ? "file" : "command", text: approvalText(params, params.itemId), decisions, nativeItemId: params.itemId, generation, harness: "codex", sessionId: a.sessionId, turnId: a.turnId, nativeThreadId: params.threadId, nativeTurnId: params.turnId });
+    const approvalType = method === "item/fileChange/requestApproval" ? "file" : "command";
+    const connectionId = state.prepared.client.connectionId;
+    state.approvals.set(approvalId, {
+      approvalId,
+      sessionId: a.sessionId,
+      turnId: a.turnId,
+      nativeThreadId: params.threadId,
+      nativeTurnId: params.turnId,
+      nativeItemId: params.itemId,
+      requestId: id,
+      connectionId,
+      decisions,
+      responding: false,
+      approvalType,
+    });
+    // Dual-write the observed pending request. History is not authority to
+    // replay a decision after restart — only the live mailbox can respond.
+    if (persistence && a.observed) {
+      try {
+        durablePersist("register approval", () => {
+          persistence.registerApproval({
+            conversationId: a.sessionId,
+            turnId: a.turnId,
+            approvalId,
+            nativeRequestId: id,
+            connectionId,
+            nativeItemId: params.itemId,
+            approvalType,
+            decisions,
+            pendingEvidence: { approvalId, requestId: id },
+            evidence: ownerEvidence(),
+          });
+        });
+      } catch (err) {
+        state.approvals.delete(approvalId);
+        retireInbound(id);
+        fatalize(new Error(`durable approval registration failed: ${messageOf(err)}`));
+        return;
+      }
+    }
+    enqueue({
+      kind: "approval",
+      approvalId,
+      approvalType,
+      text: approvalText(params, params.itemId),
+      decisions,
+      nativeItemId: params.itemId,
+      generation,
+      harness: "codex",
+      sessionId: a.sessionId,
+      turnId: a.turnId,
+      nativeThreadId: params.threadId,
+      nativeTurnId: params.turnId,
+    });
   }
   function handleUnsupportedRequest(id, method) {
     retireInbound(id);
@@ -650,6 +885,18 @@ export function createNativeChatService(options) {
         const durable = await ensurePersistence();
         if (durable) {
           state.durableProject = durable.ensureProject({ pathCanonical: canonical, name: pending.name });
+          try {
+            const reconciled = durable.reconcileStrandedTurns({
+              projectId: state.durableProject.id,
+              evidence: ownerEvidence(),
+            });
+            if (reconciled?.unresolved?.length) {
+              state.recoveryNotice = `${reconciled.unresolved.length} stranded turn(s) need explicit recovery (prior host provenance).`;
+              state.recoveryUnresolved = reconciled.unresolved;
+            }
+          } catch {
+            // Reconciliation is best-effort; prepare must still succeed.
+          }
         }
       } else {
         owned = await openClient({
@@ -666,11 +913,36 @@ export function createNativeChatService(options) {
         const durable = await ensurePersistence();
         if (durable) {
           state.durableProject = durable.ensureProject({ pathCanonical: canonical, name: pending.name });
+          try {
+            const reconciled = durable.reconcileStrandedTurns({
+              projectId: state.durableProject.id,
+              evidence: ownerEvidence(),
+            });
+            if (reconciled?.unresolved?.length) {
+              state.recoveryNotice = `${reconciled.unresolved.length} stranded turn(s) need explicit recovery (prior host provenance).`;
+              state.recoveryUnresolved = reconciled.unresolved;
+            }
+          } catch {
+            // Reconciliation is best-effort; prepare must still succeed.
+          }
         }
       }
       owned = null; // transferred to prepared project
       const models = state.prepared.models.map((m) => ({ ...m, ...(m.supportedEfforts ? { supportedEfforts: [...m.supportedEfforts] } : {}) }));
-      return { generation, controller: pending.controller, projectToken: pending.projectToken, path: canonical, name: pending.name, models };
+      return {
+        generation,
+        controller: pending.controller,
+        projectToken: pending.projectToken,
+        path: canonical,
+        name: pending.name,
+        models,
+        ...(typeof state.recoveryNotice === "string" && state.recoveryNotice.length > 0
+          ? {
+            recoveryNotice: state.recoveryNotice,
+            recoveryUnresolved: state.recoveryUnresolved,
+          }
+          : {}),
+      };
     } catch (err) {
       if (owned !== null) {
         try { await closeClient(owned); } catch (cleanupErr) { context.cleanupError = cleanupErr; state.dead = true; throw cleanupErr; }
@@ -725,19 +997,25 @@ export function createNativeChatService(options) {
         handle.nativeSessionId = nativeSessionId;
       }
     }
-    if (event.kind === "message_delta" && handle.observed) {
-      const partId = crypto.randomUUID();
-      durablePersist("claude message delta", () => {
-        persistence.appendDelta({
-          conversationId: handle.sessionId,
-          turnId: handle.turnId,
-          operationId: handle.operationId,
-          partId,
-          nativeMessageId: typeof event.nativeMessageId === "string" ? event.nativeMessageId : partId,
-          text: typeof event.text === "string" ? event.text : "",
-          evidence: ownerEvidence(),
+    if (event.kind === "message_delta") {
+      // Same stable partId for durable journal and live mailbox (B2).
+      if (typeof event.partId !== "string" || event.partId.length === 0) {
+        event.partId = crypto.randomUUID();
+      }
+      if (handle.observed) {
+        const partId = event.partId;
+        durablePersist("claude message delta", () => {
+          persistence.appendDelta({
+            conversationId: handle.sessionId,
+            turnId: handle.turnId,
+            operationId: handle.operationId,
+            partId,
+            nativeMessageId: typeof event.nativeMessageId === "string" ? event.nativeMessageId : partId,
+            text: typeof event.text === "string" ? event.text : "",
+            evidence: ownerEvidence(),
+          });
         });
-      });
+      }
     }
     if (
       (event.kind === "tool_call" || event.kind === "tool_result") &&
@@ -867,7 +1145,23 @@ export function createNativeChatService(options) {
       }
       return ack;
     } catch (err) {
-      if (state.claudeDurable?.operationId === operationId) state.claudeDurable = null;
+      if (state.claudeDurable?.operationId === operationId) {
+        // Not-sent / pre-observation failures settle as unknown while ownership verifies.
+        try {
+          durablePersist("claude send failure settle", () => {
+            persistence.settleTurn({
+              conversationId: state.claudeDurable.sessionId,
+              turnId: state.claudeDurable.turnId,
+              operationId: state.claudeDurable.operationId,
+              outcome: "unknown",
+              evidence: ownerEvidence(),
+            });
+          });
+        } catch (settleErr) {
+          notifyOwner(settleErr instanceof Error ? settleErr : new Error(String(settleErr)));
+        }
+        state.claudeDurable = null;
+      }
       throw err;
     }
   }
@@ -954,6 +1248,9 @@ export function createNativeChatService(options) {
       } else if (session.threadResumed !== true) {
         // Hydrated thread id must be reattached via thread/resume before turn/start.
         try {
+          // Installed Codex 0.156.1 ThreadResumeParams.excludeTurns: return
+          // metadata/live-resume state without replaying the full turn history
+          // CHO already hydrates from its durable store.
           await client.request("thread/resume", {
             threadId: session.nativeThreadId,
             model: args.model,
@@ -961,6 +1258,7 @@ export function createNativeChatService(options) {
             cwd: prepared.path,
             sandbox: args.role === "review" ? "read-only" : "workspace-write",
             approvalPolicy: "untrusted",
+            excludeTurns: true,
             config: { mcp_servers: {} },
           });
         } catch (err) {
@@ -1069,12 +1367,16 @@ export function createNativeChatService(options) {
       const durableOnly = catchup.events.filter(
         (event) => typeof event.turnId !== "string" || !liveTurnIds.has(event.turnId),
       );
+      // Do not advance the durable cursor past events withheld because live
+      // events for the same turn were present; a later empty live poll must
+      // still be able to recover those durable facts (RUN-04).
+      const withheld = catchup.events.length - durableOnly.length;
       return {
         generation,
         events: [...live, ...durableOnly],
-        cursor: catchup.cursor,
+        cursor: withheld > 0 ? (args.cursor ?? null) : catchup.cursor,
         tip: catchup.tip,
-        hasMore: catchup.hasMore,
+        hasMore: catchup.hasMore === true || withheld > 0,
         conversationId: args.conversationId,
       };
     }
@@ -1134,6 +1436,79 @@ export function createNativeChatService(options) {
     }
   }
 
+  async function cmdListDraftConflicts(args) {
+    requireLive();
+    requireGeneration(args);
+    requireToken(args);
+    if (!isValidId(args.conversationId)) throw new Error("native_chat_list_draft_conflicts requires conversationId");
+    const durable = await ensurePersistence();
+    if (!durable || !state.durableProject) return { generation, conflicts: [] };
+    const conflicts = durable.listDraftConflicts({
+      projectId: state.durableProject.id,
+      conversationId: args.conversationId,
+    });
+    return { generation, conflicts };
+  }
+
+  async function cmdResolveDraftConflict(args) {
+    requireLive();
+    requireGeneration(args);
+    requireToken(args);
+    if (!isValidId(args.conversationId)) throw new Error("native_chat_resolve_draft_conflict requires conversationId");
+    if (!isValidId(args.conflictId)) throw new Error("native_chat_resolve_draft_conflict requires conflictId");
+    if (!isValidId(args.resolutionId)) throw new Error("native_chat_resolve_draft_conflict requires resolutionId");
+    if (!Number.isSafeInteger(args.expectedVersion) || args.expectedVersion < 0) {
+      throw new Error("native_chat_resolve_draft_conflict requires expectedVersion");
+    }
+    if (args.action !== "kept" && args.action !== "dropped") {
+      throw new Error("native_chat_resolve_draft_conflict action must be kept or dropped");
+    }
+    const durable = await ensurePersistence();
+    if (!durable || !state.durableProject) throw new Error("draft conflict store unavailable");
+    const receipt = durable.resolveDraftConflict({
+      projectId: state.durableProject.id,
+      conversationId: args.conversationId,
+      conflictId: args.conflictId,
+      resolutionId: args.resolutionId,
+      expectedVersion: args.expectedVersion,
+      action: args.action,
+      ...(args.action === "kept" ? { text: args.text } : {}),
+    });
+    return { generation, receipt };
+  }
+
+  async function cmdRenameConversation(args) {
+    requireLive();
+    requireGeneration(args);
+    requireToken(args);
+    if (!isValidId(args.conversationId)) throw new Error("native_chat_rename_conversation requires conversationId");
+    if (typeof args.title !== "string") throw new Error("native_chat_rename_conversation requires title");
+    const durable = await ensurePersistence();
+    if (!durable || !state.durableProject) throw new Error("conversation store unavailable");
+    const conversation = durable.renameConversation({
+      projectId: state.durableProject.id,
+      conversationId: args.conversationId,
+      title: args.title,
+    });
+    return { generation, conversation };
+  }
+
+  async function cmdArchiveConversation(args) {
+    requireLive();
+    requireGeneration(args);
+    requireToken(args);
+    if (!isValidId(args.conversationId)) throw new Error("native_chat_archive_conversation requires conversationId");
+    if (typeof args.archived !== "boolean") throw new Error("native_chat_archive_conversation requires archived boolean");
+    const durable = await ensurePersistence();
+    if (!durable || !state.durableProject) throw new Error("conversation store unavailable");
+    const conversation = durable.setConversationArchived({
+      projectId: state.durableProject.id,
+      conversationId: args.conversationId,
+      archived: args.archived,
+    });
+    return { generation, conversation };
+  }
+
   async function cmdRespond(args) {
     requireLive();
     requireGeneration(args);
@@ -1149,10 +1524,48 @@ export function createNativeChatService(options) {
     if (rec.connectionId !== state.prepared.client.connectionId) throw new Error("approval belongs to a closed connection");
     if (!rec.decisions.includes(args.decision)) throw new Error(`decision ${args.decision} was not offered for this approval`);
     rec.responding = true; // consume once, but retain identity for retirement while queued
+    const durable = persistence;
+    if (durable) {
+      try {
+        durablePersist("decide approval", () => {
+          durable.decideApproval({
+            conversationId: args.sessionId,
+            turnId: args.turnId,
+            approvalId: args.approvalId,
+            decision: args.decision,
+            pendingEvidence: { approvalId: args.approvalId, requestId: rec.requestId },
+            evidence: ownerEvidence(),
+          });
+          durable.beginApprovalDispatch({
+            conversationId: args.sessionId,
+            turnId: args.turnId,
+            approvalId: args.approvalId,
+            pendingEvidence: { approvalId: args.approvalId, requestId: rec.requestId },
+            evidence: ownerEvidence(),
+          });
+        });
+      } catch (err) {
+        rec.responding = false;
+        throw new Error(`durable approval admission failed: ${messageOf(err)}`);
+      }
+    }
+    let wrote = false;
     try {
       await state.prepared.client.respond(rec.requestId, { decision: args.decision });
+      wrote = true;
     } finally {
       if (state.approvals.get(args.approvalId) === rec) state.approvals.delete(args.approvalId);
+      if (durable) {
+        durablePersist("settle approval", () => {
+          durable.settleApproval({
+            conversationId: args.sessionId,
+            turnId: args.turnId,
+            approvalId: args.approvalId,
+            outcome: wrote ? "written" : "unknown",
+            evidence: ownerEvidence(),
+          });
+        });
+      }
     }
     return { generation, approvalId: args.approvalId, acknowledged: true };
   }
@@ -1176,7 +1589,38 @@ export function createNativeChatService(options) {
     } catch (err) { return receipt(false, "invalid", messageOf(err)); }
     const client = state.prepared.client;
     rec.responding = true;
+    const durable = persistence;
+    const operationId = crypto.randomUUID();
+    rec.answerOperationId = operationId;
+    if (durable) {
+      try {
+        durablePersist("queue clarification answer", () => {
+          durable.queueClarificationAnswer({
+            conversationId: args.sessionId,
+            turnId: args.turnId,
+            clarificationId: args.clarificationId,
+            operationId,
+            answers: args.answers,
+            pendingEvidence: { clarificationId: args.clarificationId, requestId: rec.requestId },
+            evidence: ownerEvidence(),
+          });
+          durable.beginClarificationAnswerDispatch({
+            conversationId: args.sessionId,
+            turnId: args.turnId,
+            clarificationId: args.clarificationId,
+            operationId,
+            pendingEvidence: { clarificationId: args.clarificationId, requestId: rec.requestId },
+            evidence: ownerEvidence(),
+          });
+        });
+      } catch (err) {
+        rec.responding = false;
+        rec.answerOperationId = null;
+        return receipt(false, "invalid", messageOf(err));
+      }
+    }
     let pending;
+    let outcome = "unknown";
     try {
       if (rec.requestId === undefined) {
         const controller = new AbortController();
@@ -1186,8 +1630,10 @@ export function createNativeChatService(options) {
         const response = await client.request("turn/steer", { threadId: rec.parsed.nativeThreadId, expectedTurnId,
           input: [{ type: "text", text: encoded }] }, { signal: controller.signal });
         if (!isPlainObject(response) || response.turnId !== expectedTurnId) throw new Error("native steer ACK did not match the expected turn");
+        outcome = "acknowledged";
       } else {
         await client.respond(rec.requestId, encoded);
+        outcome = "written";
       }
       if (state.clarifications.get(rec.clarificationId) === rec) {
         state.clarifications.delete(rec.clarificationId);
@@ -1197,13 +1643,31 @@ export function createNativeChatService(options) {
     } catch (err) {
       const current = state.clarifications.get(rec.clarificationId) === rec && state.active === a && !state.dead && !state.closed;
       if (err?.code === "NOT_SENT") {
+        outcome = "not_sent";
         if (current) rec.responding = false;
         return receipt(false, current ? "not_sent" : "stale");
       }
+      outcome = "unknown";
       fatalize(new Error("native clarification response failed; outcome unknown"));
       throw new Error("native clarification response failed; outcome unknown");
     } finally {
       if (pending) state.pendingSteers.delete(pending);
+      if (durable && rec.answerOperationId === operationId) {
+        durablePersist("settle clarification answer", () => {
+          try {
+            durable.settleClarificationAnswer({
+              conversationId: args.sessionId,
+              turnId: args.turnId,
+              clarificationId: args.clarificationId,
+              operationId,
+              outcome,
+              evidence: ownerEvidence(),
+            });
+          } catch {
+            /* already settled or never queued */
+          }
+        });
+      }
     }
   }
 
@@ -1264,25 +1728,23 @@ export function createNativeChatService(options) {
   }
 
   function settleDurableForShutdown() {
-    const context = state.context;
-    const claudeAlreadyCancelling = context?.cancelled === true;
+    // Close is not proof of interruption. Only a previously persisted native
+    // interrupted outcome may use that name; otherwise settle unknown.
     if (state.active !== null) {
       const a = state.active;
-      const outcome = a.cancelPending || a.interruptSent ? "interrupted" : "unknown";
-      durableSettle(a, outcome);
+      durableSettle(a, "unknown");
       state.active = null;
       clearTimer(a);
       clearLease(a);
     }
-    if (state.claudeDurable && state.claudeDurable.operationId && state.claudeDurable.observed) {
+    if (state.claudeDurable && state.claudeDurable.operationId) {
       const handle = state.claudeDurable;
-      const outcome = claudeAlreadyCancelling ? "interrupted" : "unknown";
       durablePersist("claude close settle", () => {
         persistence.settleTurn({
           conversationId: handle.sessionId,
           turnId: handle.turnId,
           operationId: handle.operationId,
-          outcome,
+          outcome: "unknown",
           nativeIdentity: handle.nativeSessionId,
           nativeTurnId: null,
           claudeInputUuid: handle.claudeInputUuid,
@@ -1304,8 +1766,13 @@ export function createNativeChatService(options) {
     if (state.closing) return state.closing;
     const context = state.context;
     if (context) context.cancelled = true;
-    // Settle while ownership still verifies (caller may set shuttingDown).
-    settleDurableForShutdown();
+    // Settle while ownership still verifies; never skip native client close if settle fails.
+    let settleError = null;
+    try {
+      settleDurableForShutdown();
+    } catch (err) {
+      settleError = err instanceof Error ? err : new Error(String(err));
+    }
     clearClarifications(false);
     state.approvals.clear();
     state.sessions.clear();
@@ -1314,10 +1781,13 @@ export function createNativeChatService(options) {
     state.prepared = null;
     const closing = (async () => {
       try {
-        if (context) await context.done;
-        if (context?.cleanupError) throw context.cleanupError;
-        try { await closeClient(owned); } catch (err) { state.dead = true; throw err; }
+        const errors = settleError ? [settleError] : [];
+        try { if (context) await context.done; } catch (err) { errors.push(err); }
+        if (context?.cleanupError) errors.push(context.cleanupError);
+        try { await closeClient(owned); } catch (err) { state.dead = true; errors.push(err); }
         while (mailbox.size) mailbox.drain();
+        if (errors.length === 1) throw errors[0];
+        if (errors.length > 1) throw new AggregateError(errors, `Native close failed: ${errors.map((err) => err?.message ?? String(err)).join('; ')}`);
       } finally {
         if (state.context === context) state.context = null;
         state.closing = null;
@@ -1341,11 +1811,23 @@ export function createNativeChatService(options) {
     requireToken(args);
     const durable = await ensurePersistence();
     if (!durable || !state.durableProject) return { generation, conversations: [] };
-    const conversations = durable.listConversations({ projectId: state.durableProject.id });
+    const query = typeof args.query === "string" ? args.query.slice(0, 512) : "";
+    const offset = Number.isSafeInteger(args.offset) && args.offset >= 0 ? args.offset : 0;
+    const limit = Number.isSafeInteger(args.limit) ? Math.min(49, Math.max(1, args.limit)) : 20;
+    const conversations = durable.listConversations({
+      projectId: state.durableProject.id,
+      offset,
+      limit: limit + 1,
+      query,
+      includeArchived: args.includeArchived === true,
+    });
     return {
       generation,
       projectId: state.durableProject.id,
-      conversations: conversations.map((c) => ({
+      query,
+      hasMore: conversations.length > limit,
+      offset,
+      conversations: conversations.slice(0, limit).map((c) => ({
         id: c.id,
         controller: c.controller,
         title: c.title,
@@ -1353,7 +1835,101 @@ export function createNativeChatService(options) {
         role: c.role,
         effort: c.effort,
         updatedAtMs: c.updatedAtMs,
+        archived: c.archived === true,
       })),
+    };
+  }
+
+  async function cmdExportConversation(args) {
+    requireLive();
+    requireGeneration(args);
+    requireToken(args);
+    if (!isValidId(args.conversationId)) throw new Error("native_chat_export_conversation requires conversationId");
+    const durable = await ensurePersistence();
+    if (!durable || !state.durableProject) throw new Error("conversation store unavailable");
+    const exported = durable.exportConversation({
+      projectId: state.durableProject.id,
+      conversationId: args.conversationId,
+      messageOffset: args.messageOffset ?? 0,
+      expectedEventTip: args.expectedEventTip,
+    });
+    if (!exported) throw new Error("conversation not found");
+    return { generation, export: exported };
+  }
+
+  async function cmdImportTranscript(args) {
+    requireLive();
+    requireGeneration(args);
+    requireToken(args);
+    if (typeof args.source !== "string" || args.source.length === 0) {
+      throw new Error("native_chat_import_transcript requires source");
+    }
+    if (typeof args.sourceKey !== "string" || args.sourceKey.length === 0) {
+      throw new Error("native_chat_import_transcript requires sourceKey");
+    }
+    const durable = await ensurePersistence();
+    if (!durable || !state.durableProject) throw new Error("conversation store unavailable");
+    const result = durable.importTranscript({
+      projectId: state.durableProject.id,
+      source: args.source,
+      sourceKey: args.sourceKey,
+      title: typeof args.title === "string" ? args.title : "",
+      controller: args.controller === "claude" ? "claude" : "codex",
+      messages: Array.isArray(args.messages) ? args.messages : [],
+    });
+    return { generation, ...result };
+  }
+
+  async function cmdAcknowledgeStranded(args) {
+    requireLive();
+    requireGeneration(args);
+    requireToken(args);
+    if (!isValidId(args.conversationId)) {
+      throw new Error("native_chat_acknowledge_stranded requires conversationId");
+    }
+    if (!isValidId(args.turnId)) {
+      throw new Error("native_chat_acknowledge_stranded requires turnId");
+    }
+    if (!isValidId(args.operationId)) {
+      throw new Error("native_chat_acknowledge_stranded requires operationId");
+    }
+    const durable = await ensurePersistence();
+    if (!durable || !state.durableProject) throw new Error("conversation store unavailable");
+    const listed = durable.listConversations({
+      projectId: state.durableProject.id,
+      limit: 200,
+      includeArchived: true,
+    });
+    const conversation = listed.find((c) => c.id === args.conversationId);
+    if (!conversation) throw new Error("conversation not found");
+    // Claim under the current host before acknowledging (no prior-host adoption).
+    durable.ensureConversation({
+      projectId: state.durableProject.id,
+      conversationId: args.conversationId,
+      controller: conversation.controller === "claude" ? "claude" : "codex",
+      modelRequested: conversation.modelRequested ?? null,
+      effort: conversation.effort ?? null,
+      role: conversation.role === "review" ? "review" : "implement",
+      evidence: ownerEvidence(),
+    });
+    const ack = durable.acknowledgePriorOwnerTurn({
+      conversationId: args.conversationId,
+      turnId: args.turnId,
+      operationId: args.operationId,
+      evidence: ownerEvidence(),
+    });
+    state.recoveryUnresolved = (state.recoveryUnresolved || []).filter(
+      (row) => row.operationId !== args.operationId,
+    );
+    if (state.recoveryUnresolved.length === 0) state.recoveryNotice = null;
+    else {
+      state.recoveryNotice = `${state.recoveryUnresolved.length} stranded turn(s) need explicit recovery (prior host provenance).`;
+    }
+    return {
+      generation,
+      ...ack,
+      recoveryNotice: state.recoveryNotice,
+      recoveryUnresolved: state.recoveryUnresolved,
     };
   }
 
@@ -1364,9 +1940,15 @@ export function createNativeChatService(options) {
     if (!isValidId(args.conversationId)) throw new Error("native_chat_hydrate_conversation requires conversationId");
     const durable = await ensurePersistence();
     if (!durable || !state.durableProject) return { generation, conversation: null };
+    const maxEventPages = Number.isSafeInteger(args.maxEventPages) ? args.maxEventPages : 64;
+    const turnLimit = Number.isSafeInteger(args.turnLimit) ? args.turnLimit : 100;
     const conversation = durable.hydrateConversation({
       projectId: state.durableProject.id,
       conversationId: args.conversationId,
+      maxEventPages,
+      turnLimit,
+      ...(Number.isSafeInteger(args.beforeTurnSeq) ? { beforeTurnSeq: args.beforeTurnSeq } : {}),
+      ...(Number.isSafeInteger(args.beforeImportedIndex) ? { beforeImportedIndex: args.beforeImportedIndex, beforeTurnSeq: 1 } : {}),
     });
     if (conversation === null) return { generation, conversation: null };
     // Register the session so later sends reuse the durable conversation id
@@ -1408,10 +1990,25 @@ export function createNativeChatService(options) {
       case "native_chat_answer": return cmdQueueAnswer(args);
       case "direct_chat_cancel": return cmdCancel(args);
       case "native_chat_close": return cmdClose(args);
+      case "native_chat_forget_session": {
+        requireLive(); requireGeneration(args); requireToken(args);
+        if (!isValidId(args.sessionId)) throw new Error("Invalid session id");
+        if (state.active?.sessionId === args.sessionId || state.claudeDurable?.sessionId === args.sessionId || state.pendingSteers.size > 0) throw new Error("Cannot evict an active session or an unsettled answer");
+        if (state.prepared.actor?.forgetSession) await state.prepared.actor.forgetSession(args.sessionId);
+        state.sessions.delete(args.sessionId);
+        return { generation, forgotten: true };
+      }
       case "native_chat_list_conversations": return cmdListConversations(args);
       case "native_chat_hydrate_conversation": return cmdHydrateConversation(args);
+      case "native_chat_export_conversation": return cmdExportConversation(args);
+      case "native_chat_import_transcript": return cmdImportTranscript(args);
+      case "native_chat_acknowledge_stranded": return cmdAcknowledgeStranded(args);
       case "native_chat_save_draft": return cmdSaveDraft(args);
       case "native_chat_get_draft": return cmdGetDraft(args);
+      case "native_chat_list_draft_conflicts": return cmdListDraftConflicts(args);
+      case "native_chat_resolve_draft_conflict": return cmdResolveDraftConflict(args);
+      case "native_chat_rename_conversation": return cmdRenameConversation(args);
+      case "native_chat_archive_conversation": return cmdArchiveConversation(args);
       default: throw new Error(`unknown command ${String(command)}`);
     }
   }
@@ -1433,5 +2030,16 @@ export function createNativeChatService(options) {
     }
   }
 
-  return { handle, close };
+  async function authorizeDelegationAssociation({ conversationId, repoPath }) {
+    requireLive();
+    if (!state.prepared || !isValidId(conversationId)) throw new Error("Delegation requires a prepared project and conversation");
+    const root = fs.realpathSync(state.prepared.path);
+    if (typeof repoPath !== "string" || fs.realpathSync(repoPath) !== root) throw new Error("Delegation repository does not match the prepared project");
+    const durable = await ensurePersistence();
+    if (!durable || !state.durableProject) throw new Error("Delegation requires durable conversation storage");
+    durable.ensureConversation({ projectId: state.durableProject.id, conversationId,
+      controller: state.prepared.controller, evidence: ownerEvidence() });
+    return { conversationId, repoPath: root };
+  }
+  return { handle, close, authorizeDelegationAssociation };
 }

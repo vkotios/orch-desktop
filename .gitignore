@@ -22,3 +22,7 @@ apps/desktop/src-tauri/gen/schemas/
 
 # Generated Windows runtime staging (prepare-runtime.mjs output; never commit binaries)
 apps/desktop/src-tauri/.runtime/
+
+# Host-built coordinator macOS process helper
+orch/native/darwin-processes
+orch/native/darwin-processes.[0-9]*

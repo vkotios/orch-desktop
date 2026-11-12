@@ -79,7 +79,7 @@ async fn host_invoke(app: AppHandle, command: String, args: Option<Value>) -> Re
 // name, takes the real UI args payload (never an empty object), and rejects
 // a non-object at the route before anything is written to the host.
 async fn route_with_args(app: &AppHandle, command: &str, args: Value) -> Result<Value, String> {
-    if (!args.is_object()) {
+    if !args.is_object() {
         return Err(format!("native command {command} requires an object args payload"));
     }
     host(app).await?.request(command, args).await
@@ -126,6 +126,11 @@ async fn native_chat_close(app: AppHandle, args: Value) -> Result<Value, String>
 }
 
 #[tauri::command]
+async fn native_chat_forget_session(app: AppHandle, args: Value) -> Result<Value, String> {
+    route_with_args(&app, "native_chat_forget_session", args).await
+}
+
+#[tauri::command]
 async fn native_chat_list_conversations(app: AppHandle, args: Value) -> Result<Value, String> {
     route_with_args(&app, "native_chat_list_conversations", args).await
 }
@@ -143,6 +148,41 @@ async fn native_chat_save_draft(app: AppHandle, args: Value) -> Result<Value, St
 #[tauri::command]
 async fn native_chat_get_draft(app: AppHandle, args: Value) -> Result<Value, String> {
     route_with_args(&app, "native_chat_get_draft", args).await
+}
+
+#[tauri::command]
+async fn native_chat_list_draft_conflicts(app: AppHandle, args: Value) -> Result<Value, String> {
+    route_with_args(&app, "native_chat_list_draft_conflicts", args).await
+}
+
+#[tauri::command]
+async fn native_chat_resolve_draft_conflict(app: AppHandle, args: Value) -> Result<Value, String> {
+    route_with_args(&app, "native_chat_resolve_draft_conflict", args).await
+}
+
+#[tauri::command]
+async fn native_chat_rename_conversation(app: AppHandle, args: Value) -> Result<Value, String> {
+    route_with_args(&app, "native_chat_rename_conversation", args).await
+}
+
+#[tauri::command]
+async fn native_chat_archive_conversation(app: AppHandle, args: Value) -> Result<Value, String> {
+    route_with_args(&app, "native_chat_archive_conversation", args).await
+}
+
+#[tauri::command]
+async fn native_chat_export_conversation(app: AppHandle, args: Value) -> Result<Value, String> {
+    route_with_args(&app, "native_chat_export_conversation", args).await
+}
+
+#[tauri::command]
+async fn native_chat_import_transcript(app: AppHandle, args: Value) -> Result<Value, String> {
+    route_with_args(&app, "native_chat_import_transcript", args).await
+}
+
+#[tauri::command]
+async fn native_chat_acknowledge_stranded(app: AppHandle, args: Value) -> Result<Value, String> {
+    route_with_args(&app, "native_chat_acknowledge_stranded", args).await
 }
 
 #[tauri::command]
@@ -226,10 +266,18 @@ pub fn run() {
             native_chat_answer,
             direct_chat_cancel,
             native_chat_close,
+            native_chat_forget_session,
             native_chat_list_conversations,
             native_chat_hydrate_conversation,
             native_chat_save_draft,
             native_chat_get_draft,
+            native_chat_list_draft_conflicts,
+            native_chat_resolve_draft_conflict,
+            native_chat_rename_conversation,
+            native_chat_archive_conversation,
+            native_chat_export_conversation,
+            native_chat_import_transcript,
+            native_chat_acknowledge_stranded,
             native_pick_project_folder
         ])
         .build(tauri::generate_context!())

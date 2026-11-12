@@ -293,6 +293,16 @@ export interface NativeValidateResult {
   projectToken: string;
 }
 
+export interface NativeRecoveryUnresolved {
+  conversationId: string;
+  turnId: string;
+  operationId: string;
+  priorOpState?: string;
+  priorOwnerGeneration?: number;
+  priorHostGeneration?: string;
+  reason?: string;
+}
+
 export interface NativePrepareResult {
   controller?: NativeController;
   generation: string;
@@ -300,6 +310,9 @@ export interface NativePrepareResult {
   path: string;
   name: string;
   models: NativeModelInfo[];
+  /** Surfaced when stranded turns belong to a prior host (no auto-adoption). */
+  recoveryNotice?: string;
+  recoveryUnresolved?: NativeRecoveryUnresolved[];
 }
 
 interface NativeAckBase {
@@ -331,6 +344,10 @@ export interface NativePollEvent {
   generation: string;
   /** Durable catch-up events are tagged so the UI can avoid double-appending live streams. */
   source?: "durable" | "live";
+  /** Durable event sequence for cursor recovery / dedupe. */
+  seq?: number;
+  /** Durable message-delta part identity for exactly-once apply. */
+  partId?: string;
   kind:
     | "message_delta"
     | "tool_call"
@@ -500,6 +517,7 @@ export function nativeChatClose(
 }
 
 export interface NativeConversationSummary {
+  archived?: boolean;
   id: string;
   controller: NativeController;
   title: string;
@@ -509,7 +527,14 @@ export interface NativeConversationSummary {
   updatedAtMs: number;
 }
 
+export function nativeChatForgetSession(generation: string, projectToken: string, sessionId: string) {
+  return invokeNative<{ forgotten: boolean }>("native_chat_forget_session", { generation, projectToken, sessionId });
+}
+
 export interface NativeHydratedMessage {
+  imported?: boolean;
+  importIndex?: number;
+  parts?: Array<{ partId: string; text: string; seq: number | null; order: number }>;
   id: string;
   role: "user" | "assistant";
   text: string;
@@ -534,24 +559,91 @@ export interface NativeHydratedConversation {
   eventTip: number;
   eventCursor?: NativeEventCursor | null;
   hasMoreEvents: boolean;
+  hasMoreTurns?: boolean;
+  hasMoreBytes?: boolean;
+  beforeTurnSeq?: number;
+  beforeImportedIndex?: number;
+  turnsLoaded?: number;
+  turnLimit?: number;
 }
 
 export function nativeChatListConversations(
   generation: string,
   projectToken: string,
-): Promise<{ generation: string; projectId?: string; conversations: NativeConversationSummary[] }> {
-  return invokeNative("native_chat_list_conversations", { generation, projectToken });
+  options: { query?: string; includeArchived?: boolean; offset?: number; limit?: number } = {},
+): Promise<{ generation: string; projectId?: string; query?: string; hasMore?: boolean; conversations: NativeConversationSummary[] }> {
+  return invokeNative("native_chat_list_conversations", {
+    generation,
+    projectToken,
+    ...(typeof options.query === "string" ? { query: options.query } : {}),
+    ...(options.includeArchived === true ? { includeArchived: true } : {}),
+    ...(typeof options.offset === "number" ? { offset: options.offset } : {}),
+    ...(typeof options.limit === "number" ? { limit: options.limit } : {}),
+  });
+}
+
+export function nativeChatExportConversation(
+  generation: string,
+  projectToken: string,
+  conversationId: string,
+  options: { messageOffset?: number; expectedEventTip?: number } = {},
+): Promise<{
+  generation: string;
+  export: {
+    truncated?: boolean;
+    truncation?: { events?: boolean; turns?: boolean; bytes?: boolean };
+  } & Record<string, unknown>;
+}> {
+  return invokeNative("native_chat_export_conversation", {
+    generation,
+    projectToken,
+    conversationId,
+    ...options,
+  });
+}
+
+export function nativeChatImportTranscript(args: {
+  generation: string;
+  projectToken: string;
+  source: string;
+  sourceKey: string;
+  title?: string;
+  controller?: NativeController;
+  messages?: Array<{ role?: string; text?: string }>;
+}): Promise<{ generation: string; created: boolean; conversationId: string; importBatchId: string | null }> {
+  return invokeNative("native_chat_import_transcript", { ...args });
+}
+
+export function nativeChatAcknowledgeStranded(args: {
+  generation: string;
+  projectToken: string;
+  conversationId: string;
+  turnId: string;
+  operationId: string;
+}): Promise<{
+  generation: string;
+  acknowledged?: boolean;
+  alreadyTerminal?: boolean;
+  recoveryNotice?: string | null;
+  recoveryUnresolved?: NativeRecoveryUnresolved[];
+}> {
+  return invokeNative("native_chat_acknowledge_stranded", { ...args });
 }
 
 export function nativeChatHydrateConversation(
   generation: string,
   projectToken: string,
   conversationId: string,
+  options: { maxEventPages?: number; turnLimit?: number; beforeTurnSeq?: number; beforeImportedIndex?: number } = {},
 ): Promise<{ generation: string; conversation: NativeHydratedConversation | null }> {
   return invokeNative("native_chat_hydrate_conversation", {
     generation,
     projectToken,
     conversationId,
+    ...(Number.isSafeInteger(options.maxEventPages) ? { maxEventPages: options.maxEventPages } : {}),
+    ...(Number.isSafeInteger(options.turnLimit) ? { turnLimit: options.turnLimit } : {}),
+    ...(Number.isSafeInteger(options.beforeTurnSeq) ? { beforeTurnSeq: options.beforeTurnSeq } : {}),
+    ...(Number.isSafeInteger(options.beforeImportedIndex) ? { beforeImportedIndex: options.beforeImportedIndex } : {}),
   });
 }
 
@@ -583,5 +675,58 @@ export function nativeChatGetDraft(
     generation,
     projectToken,
     conversationId,
+  });
+}
+
+export function nativeChatListDraftConflicts(
+  generation: string,
+  projectToken: string,
+  conversationId: string,
+): Promise<{ generation: string; conflicts: Array<{ conversationId: string; saveId: string; baseVersion: number; resolution: string | null; createdAtMs: number }> }> {
+  return invokeNative("native_chat_list_draft_conflicts", {
+    generation,
+    projectToken,
+    conversationId,
+  });
+}
+
+export function nativeChatResolveDraftConflict(args: {
+  generation: string;
+  projectToken: string;
+  conversationId: string;
+  conflictId: string;
+  resolutionId: string;
+  expectedVersion: number;
+  action: "kept" | "dropped";
+  text?: string;
+}): Promise<{ generation: string; receipt: unknown }> {
+  return invokeNative("native_chat_resolve_draft_conflict", { ...args });
+}
+
+export function nativeChatRenameConversation(
+  generation: string,
+  projectToken: string,
+  conversationId: string,
+  title: string,
+): Promise<{ generation: string; conversation: unknown }> {
+  return invokeNative("native_chat_rename_conversation", {
+    generation,
+    projectToken,
+    conversationId,
+    title,
+  });
+}
+
+export function nativeChatArchiveConversation(
+  generation: string,
+  projectToken: string,
+  conversationId: string,
+  archived: boolean,
+): Promise<{ generation: string; conversation: unknown }> {
+  return invokeNative("native_chat_archive_conversation", {
+    generation,
+    projectToken,
+    conversationId,
+    archived,
   });
 }

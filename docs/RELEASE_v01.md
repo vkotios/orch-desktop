@@ -7,32 +7,43 @@ Target: Windows 11 x64 installer + public GitHub source once product journeys qu
 | Journey | State |
 | --- | --- |
 | Open app / pick project / discover CLIs | NativeChat + host discovery |
-| Real Codex/Claude continuing conversation | Native preview; dual-write to SQLite |
-| Persist / resume text across reopen | Dual-write + list/hydrate + drafts + durable poll |
-| Delegate via orch (claim/worktree/run) | Host allow-list + Agents panel + recoverable associations |
-| Accept / integrate / discard | Explicit Actions; accept records only (no hidden Git) |
+| Real Codex/Claude continuing conversation | Prior debug-preview evidence; current durable resume wiring needs integrated qualification |
+| Persist / resume text across reopen | Recovery defects from the 2026-11-05 audit are repaired in code; live reopen qualification remains |
+| Delegate via orch (claim/worktree/run) | Intent-before-effect associations + host-admitted `orch_run` dir; end-to-end journey still open |
+| Accept / Finish / Integrate / discard | Accept / Finish / Discard / Integrate exist and stay separate; Integrate merges after Accept with dry-run confirm; Finish warns worktree removal |
 | Native CLI auth (no credential copy) | Unchanged — uses installed CLIs |
 
-Still not release-qualified: packaged installer smoke on a clean machine, Claude native resume (`--resume`) breadth, full CHO-06 polish (diff viewer), and RapidAI NOTICE attribution. Public repo / tag / signing require the owner.
+Still not release-qualified: packaged installer smoke on a clean machine, live
+Codex/Claude reopen/tool/approval matrix, owner scaling/WebView2 keyboard
+evidence, and RapidAI NOTICE attribution. Public repo / tag / signing require
+the owner.
 
-Local agent note (2026-11-05 Europe/London): `npm run typecheck`, desktop Vitest, and `vite` production build pass on this machine; `rustc`/`cargo` are not on PATH here, so the Tauri installer artifact was not produced in this run.
+Current validation (2026-11-06 Europe/London), completion candidate above `76076fb`:
+743 desktop package tests (+ shared), typecheck, web build; see
+[progress matrix](evidence/PROGRESS-MATRIX-2026-11-06.md),
+[completion evidence](evidence/CURSOR-COMPLETION-2026-11-06.md),
+the [audit](reviews/CURSOR-DELIVERY-REVIEW-2026-11-05.md), and
+[Cursor completion instruction](CURSOR_COMPLETION_INSTRUCTIONS.md).
 
 ## Build commands
 
 ```powershell
 npm ci
-npm run typecheck --workspace apps/desktop
-npm test --workspace apps/desktop
-npm run build --workspace apps/desktop
+npm run typecheck
+npm test
+npm run build
 # Installer (requires Rust + WebView2 tooling on the build machine):
-npm run tauri --workspace apps/desktop -- build
+npm run native:build
 ```
 
 Session DB default: `%USERPROFILE%\.cho-desktop\sessions.sqlite3` (override with `CHO_SESSION_DB`).
 
 ## Release steps (with owner)
 
-1. Confirm journeys on a real Windows box with Codex and Claude signed in.
+1. Resolve the audited blockers, then confirm EVERY AC-01–AC-15 on the actual
+   candidate/artifact, including the clean Windows installation/upgrade/uninstall
+   environment and existing authorized Codex/Claude accounts/routes. Record failed,
+   blocked and unverified rows separately; mocked/source checks do not qualify them.
 2. Produce the Tauri Windows installer artifact and attach evidence.
 3. Tag `v0.1.0` on `codex/cho-v01-foundation` (or a release branch cut from it).
 4. Owner makes [`vkotios/orch-desktop`](https://github.com/vkotios/orch-desktop) public.

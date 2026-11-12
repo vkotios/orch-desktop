@@ -25,6 +25,7 @@ import { extractCodexModel } from '../../../orch/src/adapters/codex.mjs';
 import { getAdapter } from '../../../orch/src/adapters/index.mjs';
 import { resolveStateRoot } from '../../../orch/src/config.mjs';
 import { listWorktreeRecords } from '../../../orch/src/worktrees.mjs';
+import { listReviewEvidence } from '../../../orch/src/archive.mjs';
 import { callTool } from '../../../orch/src/mcp.mjs';
 import { parseArgs, runCommand } from '../../../orch/src/cli.mjs';
 
@@ -1312,6 +1313,53 @@ export async function launchOrchRun(params) {
   return execOrchTool('run', toolArgs);
 }
 
+/**
+ * Read-only finished review evidence for a work package.
+ * Never launches a reviewer (use orch_review for that).
+ */
+export async function getOrchReviewEvidence({ wp, reviewId = null, runId = null } = {}) {
+  if (typeof wp !== 'string' || wp.length === 0) {
+    throw new Error('orch_review_evidence requires wp');
+  }
+  const cfg = { stateRoot: resolveStateRoot() };
+  let reviews = [];
+  try {
+    reviews = listReviewEvidence(cfg, { wp }).map((r) => ({
+      id: r.id,
+      review_id: r.review_id ?? r.id,
+      wp: r.wp,
+      slice: r.slice ?? null,
+      implementer_run: r.implementer_run ?? null,
+      run_id: r.run_id ?? null,
+      review_of: r.review_of ?? null,
+      containment: r.containment ?? null,
+      outcome: r.outcome ?? null,
+      finished_at: r.finished_at ?? null,
+      ref: r.ref ?? null,
+      commit: r.commit ?? null,
+    }));
+  } catch (err) {
+    return {
+      ok: false,
+      wp,
+      reviews: [],
+      error: err instanceof Error ? err.message : String(err),
+      text: err instanceof Error ? err.message : String(err),
+    };
+  }
+  if (reviewId) {
+    reviews = reviews.filter((r) => r.id === reviewId || r.review_id === reviewId);
+  }
+  // Exact run binding only — never keep an unrelated WP review when the
+  // requested implementer run has no match.
+  if (runId) {
+    reviews = reviews.filter(
+      (r) => r.implementer_run === runId || r.run_id === runId || r.review_of === runId,
+    );
+  }
+  return { ok: true, wp, reviews };
+}
+
 export async function getOrchRunDetail({ runId }) {
   const [statusRes, resultRes, stderrTail, keeperTail] = await Promise.all([
     execOrchTool('status', { id: runId }),
@@ -1476,6 +1524,8 @@ export async function handleBridgeCommand(command, args = {}) {
       return execOrchTool('scope', { run_id: args.runId });
     case 'orch_review':
       return launchOrchReview(args);
+    case 'orch_review_evidence':
+      return getOrchReviewEvidence(args);
     case 'orch_review_finish':
       return execOrchTool('review_finish', { review_id: args.reviewId, by: args.by || 'owner' });
     case 'orch_gate_status':

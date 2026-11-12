@@ -1,0 +1,52 @@
+{
+  "recordedAtUtc": "2026-11-11T23:55:44.601144+00:00",
+  "sourceCommit": "d634157068af08f6a4f717903e7159dd4caa78c8",
+  "sourceFileCount": 316,
+  "sourceManifestSha256": "0FBEDB183BEEE6E0C22B42FF2821FE947EB1AAD4655B319DC0C9F863E0CA45CB",
+  "stagedFilesChecked": 113,
+  "stagedMismatches": [],
+  "checks": {
+    "desktop": 787,
+    "shared": 44,
+    "rust": 12,
+    "typecheck": "passed",
+    "webBuild": "passed",
+    "nativeBuild": "passed"
+  },
+  "artifacts": [
+    {
+      "path": "apps/desktop/src-tauri/target/release/cho-desktop.exe",
+      "sha256": "1B376D84B11849FD763F34DC239267A4D72930AF3BD7F8C259A01EB503A1B7DA"
+    },
+    {
+      "path": "apps/desktop/src-tauri/target/release/bundle/msi/CHO Desktop_0.1.0_x64_en-US.msi",
+      "sha256": "F10F0497FB838CED64101E04DD702A509A3D8829323E0BCB8DD78CD7A099E30D"
+    },
+    {
+      "path": "apps/desktop/src-tauri/target/release/bundle/nsis/CHO Desktop_0.1.0_x64-setup.exe",
+      "sha256": "3C034B4BD84E40E3B431C868309EB6B402CA9D6975901A26A3BF978E88F398D6"
+    }
+  ],
+  "reviewRuns": [
+    "20261111-213241-139d9d",
+    "20261111-233446-58fa2f",
+    "20261111-235102-41838a"
+  ],
+  "qualification": "Local source/build checks; live provider, WebView, clean-machine and signing remain open",
+  "finalIndependentReview": {
+    "candidate": "d634157068af08f6a4f717903e7159dd4caa78c8",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "report": "docs/reviews/OPUS-5.5-FINAL-2026-11-11.md",
+    "recommendation": "ready to push as a PR; v0.1 release acceptance open",
+    "scope": "pass; report only",
+    "tools": [
+      "Read",
+      "Grep",
+      "Glob",
+      "Edit",
+      "Write",
+      "Bash"
+    ]
+  }
+}

@@ -11,6 +11,7 @@ export type HostDispatch = (
 export type HostFatalCallback = (reason: unknown) => void | Promise<void>;
 
 export interface HostNativeService {
+  authorizeDelegationAssociation?(association: { conversationId: string; repoPath: string }): Promise<{ conversationId: string; repoPath: string }>;
   handle(command: string, args: JsonObject): Promise<unknown>;
   close(): Promise<void>;
 }
@@ -24,6 +25,8 @@ export interface HostServiceContext {
 export type HostServiceFactory = (context: HostServiceContext) => HostNativeService | Promise<HostNativeService>;
 
 export interface HostRunOptions {
+  databasePath?: string;
+  delegationFilePath?: string;
   input?: NodeJS.ReadableStream;
   output?: NodeJS.WritableStream;
   error?: NodeJS.WritableStream;

@@ -24,11 +24,13 @@ test('direct native subscription argv follows the platform without permitting sh
 });
 test('setup discovery checks native executable permission without invoking a harness',t=>{
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'orch-native-discovery-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
- const names=['claude','codex','opencode','vibe','agy','copilot','muse'],before=Object.fromEntries(names.map(h=>['ORCH_'+h.toUpperCase()+'_EXE',process.env['ORCH_'+h.toUpperCase()+'_EXE']]));
+ const names=['claude','codex','opencode','vibe','agy','copilot','muse','grok'],before=Object.fromEntries(names.map(h=>['ORCH_'+h.toUpperCase()+'_EXE',process.env['ORCH_'+h.toUpperCase()+'_EXE']]));
  for(const key of Object.keys(before))delete process.env[key];t.after(()=>{for(const[key,value]of Object.entries(before))if(value===undefined)delete process.env[key];else process.env[key]=value;});
  const file=path.join(dir,process.platform==='win32'?'native.exe':'native');fs.writeFileSync(file,'synthetic executable: never run');fs.chmodSync(file,0o755);
- const config={exe:Object.fromEntries(names.map(h=>[h,file]))};assert.ok(Object.values(discoverExecutables(config,dir)).every(Boolean));
- if(process.platform==='linux'){fs.chmodSync(file,0o644);assert.ok(Object.values(discoverExecutables(config,dir)).every(v=>v===false));}
+ const config={exe:Object.fromEntries(names.map(h=>[h,file]))},installed=discoverExecutables(config,dir);
+ assert.deepEqual(Object.keys(installed).sort(),[...names].sort(),'fixture configures every supported harness without machine fallback');
+ assert.ok(Object.values(installed).every(Boolean));
+ if(process.platform!=='win32'){fs.chmodSync(file,0o644);assert.ok(Object.values(discoverExecutables(config,dir)).every(v=>v===false));}
  const wrapper=path.join(dir,'wrapper.cmd');fs.writeFileSync(wrapper,'synthetic');fs.chmodSync(wrapper,0o755);config.exe=Object.fromEntries(names.map(h=>[h,wrapper]));assert.ok(Object.values(discoverExecutables(config,dir)).every(v=>v===false));
 });
 test('Linux adoption retains a case-distinct owner hook and installs the actual guard',{skip:process.platform!=='linux'},async t=>{
