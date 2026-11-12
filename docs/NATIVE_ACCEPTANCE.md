@@ -45,8 +45,10 @@ happens in this worktree without controller review and authorization.
   entry with no probe-usable effort fails the same way an absent model does.
 - Marker discipline: turn 1 asks for an exact single-line marker echo with no
   tools; turn 2 asks for the marker from the previous reply without
-  supplying it again. Any approval event fails honestly (`APPROVAL_BLOCKED`);
-  the probe never auto-decides.
+  supplying it again. Any approval event fails honestly (`APPROVAL_BLOCKED`)
+  and any observed `tool_call`/`tool_result` event fails honestly as
+  `TOOL_USED` (a read tool needs no approval, so tool use is rejected
+  independently of approvals); the probe never auto-decides.
 - Identity: the native identity (`nativeThreadId`, or Claude
   `nativeSessionUuid`) recorded before restart must equal the identities after
   reopen and after continuation. No `native_chat_acknowledge_stranded`,
@@ -56,7 +58,8 @@ happens in this worktree without controller review and authorization.
   continuation they must hold both turns (marker once in user text, twice in
   assistant text). Live poll text alone cannot prove this, so a mismatch
   fails the receipt as `HYDRATE_MISMATCH`.
-- Pass requires: completed terminal outcomes for both turns, marker present
+- Pass requires: completed terminal outcomes for both turns with no tool
+  use on either turn, marker present
   in turn 1, draft round-trip equal, conversation listed after restart,
   identity preserved twice, exactly one marker occurrence in the
   continuation reply, correct hydrated turn counts/content, and clean owned
@@ -70,7 +73,9 @@ happens in this worktree without controller review and authorization.
 - Bounded: every host request and each poll-to-terminal loop is bounded by
   `--deadline-ms` (default 120000, range 5000–600000). Early-fail paths still
   attempt cleanup; their outcomes are appended as `host-close-finally` cases
-  on the (already failing) receipt.
+  on the (already failing) receipt. A failed (`closedCleanly: false`) or
+  throwing finally close retains the fixture instead of deleting it
+  (`retainFixture: true` with the exact `fixtureRoot`/`databasePath`).
 - Receipt: JSON written with mode `0600` to a fresh path (existing files are
   refused, never overwritten). Records tool version, runtime context, probe
   source (owning-tree commit/dirty status plus probe digest, `unknown` when

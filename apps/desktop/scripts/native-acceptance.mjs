@@ -28,8 +28,10 @@
 // from the prepared catalogue entry's supportedEfforts (Codex default low).
 // Owned close outcomes gate the verdict: a failed or uncertain owned close
 // prevents PASS, is recorded, and retains the fixture location instead of
-// deleting uncertain state. Record failure/uncertainty honestly and never
-// mark pass when the model ignores the scenario. The receipt context also
+// deleting uncertain state (a failed or throwing best-effort finally close
+// on an early-fail path retains the fixture the same way). Record
+// failure/uncertainty honestly and never mark pass when the model ignores
+// the scenario or uses a tool on a no-tools turn. The receipt context also
 // records the probe source (owning-tree commit/dirty status plus probe
 // digest), derived from this module's location and reported as unknown when
 // unavailable.
@@ -485,6 +487,14 @@ function isApprovalBlocker(event, turnId) {
   return typeof event.kind === "string" && event.kind.includes("approval");
 }
 
+// A read tool needs no approval, so observed tool use must fail the
+// no-tools turns independently of approval events.
+function isToolUse(event, turnId) {
+  if (!event || typeof event !== "object") return false;
+  if (typeof event.turnId === "string" && event.turnId !== turnId) return false;
+  return event.kind === "tool_call" || event.kind === "tool_result";
+}
+
 async function prepareProject(request, { generation, projectDir, controller }) {
   const validated = await request("native_chat_validate_project", { path: projectDir, controller });
   if (typeof validated?.projectToken !== "string" || validated.projectToken.length === 0) {
@@ -570,6 +580,7 @@ async function pollTurnTerminal(request, { generation, projectToken, conversatio
   const texts = [];
   const seenEvents = [];
   let terminal = null;
+  let toolUsed = null;
   for (;;) {
     if (Date.now() - startedAt > deadlineMs) {
       fail("TIMEOUT", `turn ${turnId} did not reach a terminal event within ${deadlineMs}ms`, {
@@ -585,11 +596,12 @@ async function pollTurnTerminal(request, { generation, projectToken, conversatio
       seenEvents.push(typeof event.kind === "string" ? event.kind : "unknown");
       if (typeof event.text === "string" && event.text.length > 0) texts.push(event.text);
       if (isApprovalBlocker(event, turnId)) {
-        return { terminal: null, text: texts.join(""), blocked: event.kind, eventKinds: seenEvents };
+        return { terminal: null, text: texts.join(""), blocked: event.kind, toolUsed, eventKinds: seenEvents };
       }
+      if (isToolUse(event, turnId) && toolUsed === null) toolUsed = event.kind;
       if (isTerminalFor(event, turnId)) terminal = event;
     }
-    if (terminal !== null) return { terminal, text: texts.join(""), blocked: null, eventKinds: seenEvents };
+    if (terminal !== null) return { terminal, text: texts.join(""), blocked: null, toolUsed, eventKinds: seenEvents };
     await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
   }
 }
@@ -614,14 +626,23 @@ export async function runAcceptanceProbe({ openHost, controller, model, fixture,
     markerLength: typeof fixture.marker === "string" ? fixture.marker.length : 0,
     source: await describeProbeSource(),
   };
-  const failReceipt = (reason, extra = {}) => ({
-    ...context,
-    finishedAt: new Date().toISOString(),
-    result: "fail",
-    reason,
-    cases,
-    ...extra,
-  });
+  // Every fail receipt is tracked so the finally block can retain the
+  // fixture on it when a best-effort finally close fails or throws: the
+  // return value is the same object reference, so mutating it in finally
+  // is visible to the caller (runAcceptanceCli skips cleanup on
+  // retainFixture and the receipt keeps the exact fixture paths).
+  let lastFailReceipt = null;
+  const failReceipt = (reason, extra = {}) => {
+    lastFailReceipt = {
+      ...context,
+      finishedAt: new Date().toISOString(),
+      result: "fail",
+      reason,
+      cases,
+      ...extra,
+    };
+    return lastFailReceipt;
+  };
 
   const marker = fixture.marker;
   const conversationId = fixture.conversationId;
@@ -681,6 +702,10 @@ export async function runAcceptanceProbe({ openHost, controller, model, fixture,
     if (settled1.blocked !== null) {
       record(cases, "first-turn-no-tools", "fail", { blocked: settled1.blocked });
       return failReceipt("APPROVAL_BLOCKED", { eventKinds: settled1.eventKinds });
+    }
+    if (settled1.toolUsed !== null) {
+      record(cases, "first-turn-no-tools", "fail", { toolUsed: settled1.toolUsed, eventKinds: settled1.eventKinds });
+      return failReceipt("TOOL_USED", { toolUsed: settled1.toolUsed, eventKinds: settled1.eventKinds });
     }
     const markerCount1 = countOccurrences(settled1.text, marker);
     if (settled1.terminal?.nativeOutcome !== "completed") {
@@ -841,6 +866,10 @@ export async function runAcceptanceProbe({ openHost, controller, model, fixture,
       record(cases, "continue-no-tools", "fail", { blocked: settled2.blocked });
       return failReceipt("APPROVAL_BLOCKED", { eventKinds: settled2.eventKinds });
     }
+    if (settled2.toolUsed !== null) {
+      record(cases, "continue-no-tools", "fail", { toolUsed: settled2.toolUsed, eventKinds: settled2.eventKinds });
+      return failReceipt("TOOL_USED", { toolUsed: settled2.toolUsed, eventKinds: settled2.eventKinds });
+    }
     if (settled2.terminal?.nativeOutcome !== "completed") {
       record(cases, "continue-no-tools", "fail", {
         outcome: settled2.terminal?.nativeOutcome ?? settled2.terminal?.kind ?? "unknown",
@@ -942,26 +971,40 @@ export async function runAcceptanceProbe({ openHost, controller, model, fixture,
     };
   } catch (err) {
     if (err instanceof AcceptanceError) {
-      return { ...failReceipt(err.code, { errorDetail: err.message }), errorCode: err.code };
+      // Spread copy: re-track the outer object so finally can retain on it.
+      lastFailReceipt = { ...failReceipt(err.code, { errorDetail: err.message }), errorCode: err.code };
+      return lastFailReceipt;
     }
     return failReceipt("UNEXPECTED", { errorDetail: err?.message ?? String(err) });
   } finally {
     // Early-fail paths return with a host still open. Best-effort cleanup
     // records its outcome in the shared cases list (visible on the fail
-    // receipt); the verdict is already fail so nothing here can pass.
+    // receipt); the verdict is already fail so nothing here can pass. A
+    // failed (closedCleanly false) or throwing finally close leaves owned
+    // resource closure uncertain, so the fixture must be retained, never
+    // deleted: mark the tracked fail receipt instead of cleaning up.
+    let finallyCloseFailed = false;
     for (const slot of ["first", "second"]) {
       const handle = slot === "first" ? first : second;
       if (handle === null) continue;
       try {
         const outcome = await handle.close();
-        record(cases, "host-close-finally", outcome?.closedCleanly === true ? "pass" : "fail", { slot });
+        const ok = outcome?.closedCleanly === true;
+        if (!ok) finallyCloseFailed = true;
+        record(cases, "host-close-finally", ok ? "pass" : "fail", { slot, detail: ok ? null : (outcome?.detail ?? null) });
         if (slot === "first") first = null;
         else second = null;
       } catch (err) {
+        finallyCloseFailed = true;
         record(cases, "host-close-finally", "fail", { slot, detail: err?.message ?? String(err) });
         if (slot === "first") first = null;
         else second = null;
       }
+    }
+    if (finallyCloseFailed && lastFailReceipt !== null && lastFailReceipt.retainFixture !== true) {
+      lastFailReceipt.retainFixture = true;
+      lastFailReceipt.fixtureRoot = fixture.root;
+      lastFailReceipt.databasePath = fixture.databasePath;
     }
   }
 }

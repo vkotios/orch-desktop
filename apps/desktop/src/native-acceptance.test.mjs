@@ -50,7 +50,11 @@ function createFakeWorld(options = {}) {
     typeof entry === "string" ? { id: entry } : entry);
   const stores = new Map();
   const log = [];
-  const mode = options.mode ?? "echo"; // echo | ignore-marker | approval-block
+  const mode = options.mode ?? "echo"; // echo | ignore-marker | approval-block | tool-use | tool-use-continue
+  // tool-use emits a tool_call event on every turn before echoing the marker
+  // (a read tool needs no approval, so the approval probe stays silent).
+  // tool-use-continue stays clean on the marker turn and uses a tool only on
+  // the continuation turn (whose prompt never repeats the marker).
   const closeMode = options.closeMode ?? "ok"; // ok | fail-service | fail-host | throw-host | fail-final-host-close
   let closes = 0;
   function storeFor(databasePath) {
@@ -132,9 +136,22 @@ function createFakeWorld(options = {}) {
             store.queued.push({ kind: "approval_requested", turnId, sessionId, nativeOutcome: null });
           } else {
             const marker = options.marker;
-            reply = typeof marker === "string" && prompt.includes(marker)
+            const promptHasMarker = typeof marker === "string" && prompt.includes(marker);
+            const usesTool = mode === "tool-use" ||
+              (mode === "tool-use-continue" && !promptHasMarker);
+            if (usesTool) {
+              store.queued.push({
+                kind: "tool_call",
+                turnId,
+                sessionId,
+                toolCallId: "tool-seam-1",
+                toolTitle: "Read",
+                toolStatus: "completed",
+              });
+            }
+            reply = promptHasMarker
               ? marker
-              : (mode === "echo" ? marker : "the model replies without repeating anything");
+              : (mode === "echo" || usesTool ? marker : "the model replies without repeating anything");
             store.queued.push({ kind: "message_delta", turnId, sessionId, text: reply });
             store.queued.push({ kind: "turn_done", turnId, sessionId, nativeOutcome: "completed" });
           }
@@ -374,6 +391,40 @@ describe("native acceptance probe (seam only, never live)", () => {
     expect(receipt.reason).toBe("APPROVAL_BLOCKED");
   });
 
+  it("rejects a first turn that uses a tool even when the marker is echoed", async () => {
+    const marker = "MARKER-TOOL-1";
+    const world = createFakeWorld({ catalogue: ["test-model"], marker, mode: "tool-use" });
+    const receipt = await runAcceptanceProbe({
+      openHost: world.openHost,
+      controller: "codex",
+      model: "test-model",
+      fixture: fakeFixture(marker),
+      deadlineMs: 10_000,
+    });
+    expect(receipt.result).toBe("fail");
+    expect(receipt.reason).toBe("TOOL_USED");
+    expect(receipt.cases.find((c) => c.name === "first-turn-no-tools"))
+      .toMatchObject({ status: "fail", detail: { toolUsed: "tool_call" } });
+  });
+
+  it("rejects a continuation that uses a tool even when the marker is replayed", async () => {
+    const marker = "MARKER-TOOL-2";
+    const world = createFakeWorld({ catalogue: ["test-model"], marker, mode: "tool-use-continue" });
+    const receipt = await runAcceptanceProbe({
+      openHost: world.openHost,
+      controller: "codex",
+      model: "test-model",
+      fixture: fakeFixture(marker),
+      deadlineMs: 10_000,
+    });
+    expect(receipt.result).toBe("fail");
+    expect(receipt.reason).toBe("TOOL_USED");
+    expect(receipt.cases.find((c) => c.name === "first-turn-no-tools"))
+      .toMatchObject({ status: "pass" });
+    expect(receipt.cases.find((c) => c.name === "continue-no-tools"))
+      .toMatchObject({ status: "fail", detail: { toolUsed: "tool_call" } });
+  });
+
   it("sends the review role with a catalogue-supported effort for claude", async () => {
     const marker = "MARKER-CLAUDE-1";
     const world = createFakeWorld({
@@ -501,6 +552,52 @@ describe("native acceptance probe (seam only, never live)", () => {
     const byName = new Map(result.receipt.cases.map((c) => [c.name, c.status]));
     expect(byName.get("close-after-continue")).toBe("pass");
     expect(byName.get("host-close")).toBe("fail");
+  });
+
+  it("retains the fixture when an early MODEL_ABSENT failure meets an unclean finally close", async () => {
+    const marker = "MARKER-EARLY-CLOSE-1";
+    const world = createFakeWorld({ catalogue: ["other-model"], marker, closeMode: "fail-host" });
+    const output = tempOutput();
+    const fixture = fakeFixture(marker);
+    const result = await runAcceptanceCli(
+      ["node", "native-acceptance.mjs", "--allow-live", "--controller", "codex", "--model", "missing-model",
+        "--output", output, "--deadline-ms", "10000"],
+      { openHost: world.openHost, createFixture: async () => fixture },
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.receipt?.result).toBe("fail");
+    expect(result.receipt?.reason).toBe("MODEL_ABSENT");
+    expect(result.receipt?.retainFixture).toBe(true);
+    expect(result.receipt?.fixtureRoot).toBe(fixture.root);
+    expect(result.receipt?.databasePath).toBe(fixture.databasePath);
+    expect(fixture.cleaned).toBe(false);
+    const finallyCases = result.receipt.cases.filter((c) => c.name === "host-close-finally");
+    expect(finallyCases.some((c) => c.status === "fail")).toBe(true);
+    const written = JSON.parse(fs.readFileSync(output, "utf8"));
+    expect(written.retainFixture).toBe(true);
+    expect(written.fixtureRoot).toBe(fixture.root);
+  });
+
+  it("retains the fixture when an early MODEL_ABSENT failure meets a throwing finally close", async () => {
+    const marker = "MARKER-EARLY-CLOSE-2";
+    const world = createFakeWorld({ catalogue: ["other-model"], marker, closeMode: "throw-host" });
+    const output = tempOutput();
+    const fixture = fakeFixture(marker);
+    const result = await runAcceptanceCli(
+      ["node", "native-acceptance.mjs", "--allow-live", "--controller", "codex", "--model", "missing-model",
+        "--output", output, "--deadline-ms", "10000"],
+      { openHost: world.openHost, createFixture: async () => fixture },
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.receipt?.result).toBe("fail");
+    expect(result.receipt?.reason).toBe("MODEL_ABSENT");
+    expect(result.receipt?.retainFixture).toBe(true);
+    expect(result.receipt?.fixtureRoot).toBe(fixture.root);
+    expect(result.receipt?.databasePath).toBe(fixture.databasePath);
+    expect(fixture.cleaned).toBe(false);
+    const finallyCase = result.receipt.cases.find((c) => c.name === "host-close-finally");
+    expect(finallyCase).toMatchObject({ status: "fail", detail: { slot: "first" } });
+    expect(typeof finallyCase.detail.detail === "string").toBe(true);
   });
 
   it("fails closed when the pre-restart host close throws", async () => {
