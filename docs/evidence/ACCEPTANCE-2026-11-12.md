@@ -43,3 +43,11 @@ Existing Cargo lockfile alert: `glib <0.20.0` (GitHub Dependabot #2).
 The Windows x64 target has no `glib` dependency (`cargo tree --locked --target
 x86_64-pc-windows-msvc -i glib` prints no dependency). Keep this as a non-Windows
 dependency follow-up; the zero-vulnerability statement above refers to npm.
+
+Hosted checkpoint: Desktop CI and the full selected coordinator matrix pass on
+`9f6836b`. The Windows candidate also built EXE/MSI/NSIS and verified its receipt,
+then the new installed smoke failed before installation on an invalid
+`[IO.Char[]]` cast. Muse corrected both casts to `[char[]]`; independent GLM
+review is clean, and 31 static types plus four containment cases pass under both
+PowerShell 5.1 and 7.6.9. Fresh hosted install/uninstall qualification is pending;
+the failed run is not counted as installed acceptance.

@@ -34,7 +34,13 @@
       "scope": "Owned source host-generation/native-client restart; not installed app process qualification"
     }
   },
-  "hostedCI": "pending",
+  "hostedCI": {
+    "head": "9f6836b332d7a5e77256df9f64bbb303c26001a5",
+    "desktop": "pass",
+    "coordinatorMatrix": "pass",
+    "candidateBuildAndReceipt": "pass",
+    "installedSmoke": "failed before installation: invalid IO.Char[] type; corrected char[] pending rerun"
+  },
   "newInstallerQualification": "pending",
   "releaseAccepted": false,
   "existingCargoAlert": {
@@ -43,5 +49,11 @@
     "windowsTargetDependency": false,
     "evidence": "cargo tree --locked --target x86_64-pc-windows-msvc -i glib: nothing to print",
     "disposition": "Retained existing non-Windows dependency alert; non-Windows product support remains unqualified"
+  },
+  "smokeHelperRepair": {
+    "sha256": "23e7a7460860f2f4590e90bf8b930433871bc8c9f48da7af0c0d4ea31e38b45f",
+    "validation": "31 static types resolved and four containment cases pass on Windows PowerShell 5.1 and PowerShell 7.6.9",
+    "independentReview": "GLM: approve; clean containment",
+    "hostedRerun": "pending"
   }
 }

@@ -56,7 +56,7 @@ Requirements enforced by the script:
 - Requires the WebView2 runtime on the Windows runner (Tauri WebView
   dependency); the real CI run qualifies it.
 
-## Workflow snippet (for later integration; workflows are owned by GLM)
+## Workflow invocation (wired in the private Windows candidate workflow)
 
 ```yaml
 - name: Installed NSIS smoke
