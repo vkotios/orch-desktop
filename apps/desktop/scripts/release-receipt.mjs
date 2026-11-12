@@ -21,6 +21,7 @@
 //     --bundle-dir <dir> --source-root . [--runtime-dir <dir>]
 //
 // Exit code: 0 = ok, 1 = usage/verify failure.
+import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -34,6 +35,14 @@ const REFUSED_LEVELS = new Set(['installed', 'clean-machine', 'installed-clean-m
 
 const ARTIFACT_EXTS = new Set(['.msi', '.exe']);
 const HEX64 = /^[0-9a-f]{64}$/;
+// Full object-format SHAs only: SHA-1 (40 hex) or SHA-256 (64 hex), lowercase.
+// Short prefixes and branch/tag names are never valid commit claims.
+const COMMIT_RE = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+// Staged files with no source counterpart. These are vendored binaries pinned
+// by apps/desktop/runtime-manifest.json and verified by recorded bytes only;
+// every other staged file must map to a checked-out source file (see
+// stagedToSource). Anything unmapped is a verification failure, never a skip.
+const VENDORED_BINARIES = new Set(['node.exe', 'LICENSE.node']);
 
 export const sha256Hex = (bytes) => createHash('sha256').update(bytes).digest('hex');
 
@@ -63,6 +72,40 @@ async function walkFiles(root) {
 }
 
 const toPosix = (p) => p.split(path.sep).join('/');
+
+/**
+ * True when rel is a portable relative path that is safe to join to a root:
+ * posix separators only, never absolute, no drive letter, no empty / . / ..
+ * segments, no NUL. Receipt-supplied paths are untrusted until they pass this.
+ */
+function isSafePosixRel(rel) {
+  if (typeof rel !== 'string' || rel.length === 0 || rel.length > 1024) return false;
+  if (rel.includes('\\') || rel.includes('\0')) return false;
+  if (rel.startsWith('/') || /^[A-Za-z]:/.test(rel)) return false;
+  const segs = rel.split('/');
+  for (const s of segs) {
+    if (s === '' || s === '.' || s === '..') return false;
+  }
+  return true;
+}
+
+/**
+ * Resolve the checked-out source HEAD for sourceRoot, or null when it cannot
+ * be determined (not a git checkout, git unavailable). Never throws.
+ */
+function gitHead(sourceRoot) {
+  return new Promise((resolve) => {
+    try {
+      execFile('git', ['-C', sourceRoot, 'rev-parse', 'HEAD'], { timeout: 15000 }, (error, stdout) => {
+        if (error) return resolve(null);
+        const sha = String(stdout).trim().toLowerCase();
+        resolve(COMMIT_RE.test(sha) ? sha : null);
+      });
+    } catch {
+      resolve(null);
+    }
+  });
+}
 
 /** Map a staged-runtime relative path to its source-root relative path, or null when it has no source counterpart (vendored binaries). */
 export function stagedToSource(stagedRel) {
@@ -103,6 +146,9 @@ export async function collectArtifacts(bundleDir) {
  */
 export async function writeReceipt({ bundleDir, runtimeDir, sourceRoot, commit, nodeVersion }) {
   if (!commit || typeof commit !== 'string') throw new Error('release-receipt: commit is required');
+  if (!COMMIT_RE.test(commit)) {
+    throw new Error('release-receipt: commit must be a full lowercase hex SHA (40 or 64 chars)');
+  }
   const artifacts = await collectArtifacts(bundleDir);
   const stagedRuntime = await hashTree(runtimeDir);
   const staged = stagedRuntime.map((e) => ({ ...e, source: stagedToSource(e.rel) }));
@@ -120,9 +166,16 @@ export async function writeReceipt({ bundleDir, runtimeDir, sourceRoot, commit, 
 
 /**
  * Verify a receipt against on-disk bytes. Returns { ok, errors }.
- * Fails on: wrong schema, refused evidence level, missing artifact,
- * artifact hash/size mismatch, missing source file, staged-vs-source
- * byte mismatch, or staged-on-disk drift when runtimeDir is provided.
+ * Fails on: wrong schema, refused evidence level, malformed or mismatched
+ * commit claim (shape-checked, and bound to the checked-out source HEAD when
+ * sourceRoot is a git checkout), missing/duplicate/unsafe artifact paths,
+ * artifact hash/size mismatch, missing/duplicate/unsafe staged paths,
+ * staged files with no trusted source mapping (other than vendored
+ * binaries), missing source files, staged-vs-source byte mismatch,
+ * staged-on-disk drift, or — when runtimeDir is provided — any inventory
+ * difference between the receipt and the runtime directory (omitted, added,
+ * or duplicate entries). The receipt's own `source` fields are never
+ * trusted: the source counterpart always comes from stagedToSource().
  */
 export async function verifyReceipt(receipt, { bundleDir, sourceRoot, runtimeDir = null }) {
   const errors = [];
@@ -133,15 +186,34 @@ export async function verifyReceipt(receipt, { bundleDir, sourceRoot, runtimeDir
   if (receipt.evidenceLevel !== EVIDENCE_LEVEL || REFUSED_LEVELS.has(receipt.evidenceLevel)) {
     errors.push(`evidenceLevel '${String(receipt.evidenceLevel)}' is not verifiable by this pipeline; expected '${EVIDENCE_LEVEL}'`);
   }
-  if (!receipt.commit || typeof receipt.commit !== 'string') errors.push('commit is missing');
+  if (!receipt.commit || typeof receipt.commit !== 'string') {
+    errors.push('commit is missing');
+  } else if (!COMMIT_RE.test(receipt.commit)) {
+    errors.push(`commit '${receipt.commit}' is not a full lowercase hex SHA (40 or 64 chars)`);
+  } else {
+    const head = await gitHead(sourceRoot);
+    if (head !== null && receipt.commit !== head) {
+      errors.push(`commit ${receipt.commit} does not match checked-out source HEAD ${head}`);
+    }
+  }
   if (!Array.isArray(receipt.artifacts) || receipt.artifacts.length === 0) {
     errors.push('artifacts list is empty: no installer artifact recorded');
   } else {
+    const seenArtifacts = new Set();
     for (const a of receipt.artifacts) {
       if (!a || typeof a.file !== 'string' || typeof a.sha256 !== 'string' || !HEX64.test(a.sha256)) {
         errors.push(`malformed artifact entry: ${JSON.stringify(a)}`);
         continue;
       }
+      if (!isSafePosixRel(a.file)) {
+        errors.push(`unsafe artifact path: ${JSON.stringify(a.file)}`);
+        continue;
+      }
+      if (seenArtifacts.has(a.file)) {
+        errors.push(`duplicate artifact entry: ${a.file}`);
+        continue;
+      }
+      seenArtifacts.add(a.file);
       const abs = path.join(bundleDir, a.file);
       let st = null;
       try {
@@ -164,23 +236,45 @@ export async function verifyReceipt(receipt, { bundleDir, sourceRoot, runtimeDir
   if (!Array.isArray(receipt.stagedRuntime) || receipt.stagedRuntime.length === 0) {
     errors.push('stagedRuntime list is empty: staged runtime bytes not recorded');
   } else {
+    const seenStaged = new Set();
     for (const s of receipt.stagedRuntime) {
       if (!s || typeof s.rel !== 'string' || typeof s.sha256 !== 'string' || !HEX64.test(s.sha256)) {
         errors.push(`malformed stagedRuntime entry: ${JSON.stringify(s)}`);
         continue;
       }
+      if (!isSafePosixRel(s.rel)) {
+        errors.push(`unsafe stagedRuntime path: ${JSON.stringify(s.rel)}`);
+        continue;
+      }
+      if (seenStaged.has(s.rel)) {
+        errors.push(`duplicate stagedRuntime entry: ${s.rel}`);
+        continue;
+      }
+      seenStaged.add(s.rel);
       // Staged bytes on disk must still match the receipt (when a runtime dir is available).
       if (runtimeDir) {
         try {
           const onDisk = await sha256File(path.join(runtimeDir, s.rel));
           if (onDisk.sha256 !== s.sha256) errors.push(`staged runtime drift on disk: ${s.rel}`);
+          if (typeof s.bytes === 'number' && onDisk.bytes !== s.bytes) {
+            errors.push(`staged runtime size drift on disk: ${s.rel} (receipt ${s.bytes}, disk ${onDisk.bytes})`);
+          }
         } catch {
           errors.push(`staged runtime file missing on disk: ${s.rel}`);
         }
       }
-      // Staged bytes must equal the current source bytes; vendored binaries have no source.
-      const sourceRel = typeof s.source === 'string' ? s.source : stagedToSource(s.rel);
-      if (!sourceRel) continue;
+      // Staged bytes must equal the current source bytes. The mapping always
+      // comes from the trusted staging rules — a receipt-supplied `source`
+      // field is untrusted and ignored, so redirecting it cannot hide a
+      // source change. Files with no trusted mapping fail unless they are
+      // vendored binaries with recorded bytes; nothing is silently skipped.
+      const sourceRel = stagedToSource(s.rel);
+      if (!sourceRel) {
+        if (!VENDORED_BINARIES.has(s.rel)) {
+          errors.push(`staged file has no trusted source mapping: ${s.rel}`);
+        }
+        continue;
+      }
       let srcHash;
       try {
         srcHash = (await sha256File(path.join(sourceRoot, sourceRel))).sha256;
@@ -189,6 +283,23 @@ export async function verifyReceipt(receipt, { bundleDir, sourceRoot, runtimeDir
         continue;
       }
       if (srcHash !== s.sha256) errors.push(`staged runtime differs from source: ${s.rel} != ${sourceRel}`);
+    }
+    // Complete inventory: when the staged runtime directory is available,
+    // every file on disk must be recorded in the receipt and vice versa.
+    if (runtimeDir) {
+      let actual = null;
+      try {
+        actual = await hashTree(runtimeDir);
+      } catch {
+        errors.push(`cannot read runtimeDir: ${runtimeDir}`);
+      }
+      if (actual) {
+        for (const { rel } of actual) {
+          if (!seenStaged.has(rel)) {
+            errors.push(`staged runtime file on disk is not recorded in receipt: ${rel}`);
+          }
+        }
+      }
     }
   }
   return { ok: errors.length === 0, errors };
