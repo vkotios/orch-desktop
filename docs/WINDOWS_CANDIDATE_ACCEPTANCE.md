@@ -45,8 +45,8 @@ Limits — the CI installed smoke is NONE of the following:
 - Not a DPI/display-scaling qualification.
 - Not an MSI qualification: only the NSIS installer is exercised.
 - Not an upgrade/migration test: a single fresh install and uninstall only.
-- Not a signed release or publication: the candidate stays unsigned and
-  private; nothing is released or published.
+- Not a signed release or publication: the candidate is an unsigned CI
+  artifact; this workflow does not publish a GitHub Release.
 
 It therefore does not raise the receipt's evidence level and does not
 satisfy Procedure A/B/C/D or AC-01/AC-13; those remain owner-executed.

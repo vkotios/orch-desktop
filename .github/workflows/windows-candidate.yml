@@ -1,4 +1,4 @@
-# Windows candidate (manual + same-repo PR check, private)
+# Windows beta candidate (manual + same-repo PR check)
 #
 # Builds a Windows install candidate (EXE/MSI/NSIS) from the EXACT commit this
 # run was created from, plus machine-readable SHA256/source/runtime receipts.
@@ -7,7 +7,7 @@
 # workflow itself merges. There is no ref/branch input, so a dispatched run
 # can never be pointed at an arbitrary untrusted ref. No signing credentials,
 # no tags, no GitHub Release creation, no publishing step of any kind.
-# Artifacts are private workflow artifacts (private repository), retained for
+# Artifacts follow repository visibility and are retained for
 # inspection and owner acceptance only.
 #
 # Evidence produced here, kept strictly apart:
@@ -21,7 +21,7 @@
 # owner-executed procedure documented in
 # docs/WINDOWS_CANDIDATE_ACCEPTANCE.md (AC-01/AC-13 remain open).
 
-name: Windows candidate (manual + PR, private)
+name: Windows beta candidate (manual + PR)
 
 on:
   workflow_dispatch:
@@ -49,7 +49,7 @@ permissions:
 jobs:
   candidate:
     name: Build candidate + receipts
-    # Fork PRs are excluded: this private pipeline builds unsigned
+    # Fork PRs are excluded: this pipeline builds unsigned
     # candidates from same-repository branches only.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: windows-latest
@@ -163,7 +163,7 @@ jobs:
             -Installer "$env:NSIS_INSTALLER" `
             -OutputDir "candidate-dist/installed-smoke-${{ github.run_id }}-${{ github.run_attempt }}"
 
-      - name: Upload candidate artifacts (private)
+      - name: Upload candidate artifacts
         # always(): a failed installed smoke must still leave its receipt and
         # logs retrievable. Job status stays failed (no continue-on-error).
         if: always()

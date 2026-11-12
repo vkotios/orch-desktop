@@ -1,12 +1,21 @@
-# orch-desktop (CHO Desktop)
+# orch-desktop (CHO Desktop) — public beta
 
-Private development repository for CHO Desktop. Start with the
-[current handoff](CURRENT_HANDOFF.md) for the accepted checkpoint, verification,
-remaining work and implementation/review workflow.
+Public beta source for the Windows x64 CHO Desktop app. PR #3 is merged;
+application and coordinator CI pass, and the Windows candidate passes the
+installed-host startup/shutdown/uninstall smoke. This is experimental software;
+clean-Windows upgrade/recovery and full installed-user journeys remain open.
+
+[Full release plan](docs/RELEASE_PLAN.md) ·
+[Verified Windows candidate and receipts](https://github.com/vkotios/orch-desktop/actions/runs/43290366546/artifacts/13977807426) ·
+[Current handoff](CURRENT_HANDOFF.md)
+
+The candidate is unsigned and its app version is 0.1.0. It is a CI build for beta
+testing, not a tagged stable release; CI artifacts have limited retention.
+See the release plan for beta packaging and the remaining stable-release gates.
 
 **CHO-desktop** combines the multi-harness desktop shell architecture of [`RapidAI/grok-build-desktop`](https://github.com/RapidAI/grok-build-desktop) with the multi-agent coordination engine of [`vkotios/cli-agentic-coordinator`](https://github.com/vkotios/cli-agentic-coordinator) (`orch`).
 
-The product brings direct CLI conversations and the `orch` coordination dashboard into one desktop workspace. The current delivery is a Windows native Codex and Claude debug preview; product and release work continues:
+The product brings direct CLI conversations and the `orch` coordination dashboard into one desktop workspace. The current delivery is a Windows beta with native Codex and Claude conversations; product qualification and release work continues:
 
 1. **Direct CLI conversations:** the native preview uses the installed Codex or Claude CLI and saved first-party sign-in. It supports streamed continuing conversations, tool status, once-only permissions, clarification answers and cancellation after project selection and trust. SQLite persistence supports history, drafts and recovery; owned source-host Codex/Claude restart probes pass; installed-provider qualification remains open.
 2. **Coordinator studio:** the native host admits selected conversation-bound delegation operations and provides explicit acceptance, integration and cleanup journeys. Local checks establish source behavior; live worker/reviewer and installed-app qualification remain open.
@@ -21,7 +30,7 @@ support does not qualify CHO Desktop on those platforms.
 
 Current completion candidate and its measured checks: [handoff](CURRENT_HANDOFF.md) and
 [acceptance ledger](docs/evidence/ACCEPTANCE-2026-11-12.md). PR #2 is merged;
-the follow-on candidate adds 80 rendered checks and private Windows candidate CI.
+the follow-on candidate adds 80 rendered checks and Windows candidate CI.
 The dated runtime observations below are historical, not final release acceptance.
 
 

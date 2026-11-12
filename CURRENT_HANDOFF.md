@@ -1,5 +1,15 @@
 # orch-desktop handoff
 
+## Public beta publication — 2026-11-12
+
+PR #3 is merged at `d0a50cd`; its tree matches the CI-tested candidate `11634aab`.
+The repository is being published as public beta source at the owner's direction.
+[Full beta-to-stable release plan](docs/RELEASE_PLAN.md) is the current release
+entry point. Desktop CI, the selected coordinator matrix, installer build and
+installed NSIS smoke all passed on `5bf95fb`. Installer hashes were independently
+verified. The older pending-rerun snapshots below are historical.
+
+
 ## Completion candidate — 2026-11-12
 
 PR #2 was merged as `cd86a0f`. The follow-on completion branch is

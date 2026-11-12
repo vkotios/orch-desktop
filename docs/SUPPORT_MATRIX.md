@@ -1,11 +1,12 @@
 # CHO Desktop v0.1 support matrix
 
-Current candidate: `be49418`, 2026-11-12. Historical installer hashes do not
+Current application checkpoint: `be49418`; merged delivery `d0a50cd`, 2026-11-12.
+Public beta source. See the [full release plan](RELEASE_PLAN.md). Historical installer hashes do not
 qualify this source. See [acceptance ledger](evidence/ACCEPTANCE-2026-11-12.md).
 
 | Capability | Implementation / measured evidence | Remaining qualification |
 | --- | --- | --- |
-| Platform | Windows x64 target; private CI EXE/MSI/NSIS pipeline | Clean Windows install and proposed release artifacts |
+| Platform | Windows x64 target; CI EXE/MSI/NSIS pipeline | Clean Windows install and proposed release artifacts |
 | Runtime | Bundled Node 24.22.2; 116 staged files match source | Final installed candidate smoke in CI |
 | Controllers/auth | Existing Codex/Claude CLI login; both owned native restart probes pass | Installed real tool/approval journeys; no automatic fallback |
 | Durable sessions | SQLite history, drafts, replay, imports, migration protections; strict Claude wire DTO fixed | Installed-process recovery and upgrade acceptance |
