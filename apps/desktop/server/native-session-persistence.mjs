@@ -1098,10 +1098,13 @@ export function createNativeSessionPersistence(options) {
         text: assistantText,
         ...(includeParts ? { parts } : {}),
         tools: toolsByTurn.get(turn.id) ?? [],
-        outcome,
+        // Optional DTO fields must be omitted when absent: the strict
+        // result-frame encoder rejects `undefined` (e.g. Claude turns carry
+        // no Codex-style nativeTurnId; unfinished turns carry no outcome).
+        ...(outcome !== undefined ? { outcome } : {}),
         isError: outcome === "failed" || outcome === "unknown",
         isStreaming: !terminal && turn.intentState !== "completed",
-        nativeTurnId: turn.nativeTurnId ?? undefined,
+        ...(turn.nativeTurnId != null ? { nativeTurnId: turn.nativeTurnId } : {}),
       });
     }
 
