@@ -14,11 +14,11 @@
 //   node apps/desktop/scripts/release-receipt.mjs write \
 //     --bundle-dir apps/desktop/src-tauri/target/release/bundle \
 //     --runtime-dir apps/desktop/src-tauri/.runtime \
-//     --source-root . --commit <sha> --out candidate-receipt.json
+//     --commit <sha> [--pr-head <sha>] --out candidate-receipt.json
 //
 //   node apps/desktop/scripts/release-receipt.mjs verify \
 //     --receipt candidate-receipt.json \
-//     --bundle-dir <dir> --source-root . [--runtime-dir <dir>]
+//     --bundle-dir <dir> --source-root . --runtime-dir <dir>
 //
 // Exit code: 0 = ok, 1 = usage/verify failure.
 import { execFile } from 'node:child_process';
@@ -33,7 +33,12 @@ export const RECEIPT_SCHEMA_VERSION = 1;
 export const EVIDENCE_LEVEL = 'built-local';
 const REFUSED_LEVELS = new Set(['installed', 'clean-machine', 'installed-clean-machine']);
 
+// Installer artifact kinds in candidate-dist. All three are intentionally
+// desired: the MSI installer, the NSIS installer (ships as *-setup.exe),
+// and the raw app executable. The raw EXE is NOT a standalone installer:
+// it requires the bundled runtime staged next to it (see prepare-runtime).
 const ARTIFACT_EXTS = new Set(['.msi', '.exe']);
+const REQUIRED_ARTIFACT_KINDS = ['msi', 'nsis', 'raw'];
 const HEX64 = /^[0-9a-f]{64}$/;
 // Full object-format SHAs only: SHA-1 (40 hex) or SHA-256 (64 hex), lowercase.
 // Short prefixes and branch/tag names are never valid commit claims.
@@ -54,6 +59,19 @@ export async function sha256File(absPath) {
 /** Installer artifacts are .msi / .exe files (NSIS ships as *-setup.exe). */
 export function isArtifactFile(rel) {
   return ARTIFACT_EXTS.has(path.extname(rel).toLowerCase());
+}
+
+/**
+ * Artifact kind from the file name: 'msi' for the MSI installer, 'nsis'
+ * for the NSIS installer (*-setup.exe), 'raw' for any other .exe (the raw
+ * app executable, which needs the bundled runtime and is not a standalone
+ * installer), or null for non-artifact files.
+ */
+export function artifactKind(file) {
+  const base = toPosix(String(file)).split('/').pop().toLowerCase();
+  if (base.endsWith('.msi')) return 'msi';
+  if (base.endsWith('.exe')) return base.endsWith('-setup.exe') ? 'nsis' : 'raw';
+  return null;
 }
 
 async function walkFiles(root) {
@@ -107,15 +125,65 @@ function gitHead(sourceRoot) {
   });
 }
 
-/** Map a staged-runtime relative path to its source-root relative path, or null when it has no source counterpart (vendored binaries). */
+// Exact prepare-runtime outputs. Keep in sync with
+// apps/desktop/scripts/prepare-runtime.mjs: SERVER_MODULES (named server
+// modules copied flat), ACP_TS_MODULES (named TypeScript sources),
+// orch/src copied recursively for *.mjs only, plus orch/roster.example.json
+// and the root model-catalog.json. Anything else staged under app/ has no
+// trusted source counterpart and fails verification.
+const STAGED_SERVER_MODULES = new Set([
+  'host.mjs',
+  'protocol.mjs',
+  'bridge.mjs',
+  'native-rpc.mjs',
+  'codex-client.mjs',
+  'event-mailbox.mjs',
+  'native-chat.mjs',
+  'native-clarification.mjs',
+  'claude-wire.mjs',
+  'claude-client.mjs',
+  'claude-chat-actor.mjs',
+  'delegation-admit.mjs',
+  'delegation-integrate.mjs',
+  'delegation-integrate-evidence.mjs',
+  'delegation-associations.mjs',
+  'native-session-persistence.mjs',
+  'session-store.mjs',
+  'session-store-schema.mjs',
+  'session-store-migrate.mjs',
+  'session-store-restore.mjs',
+  'session-records.mjs',
+  'session-bindings.mjs',
+  'session-turns.mjs',
+  'session-message-deltas.mjs',
+  'session-tool-facts.mjs',
+  'session-turn-outcomes.mjs',
+  'session-events.mjs',
+  'session-bodies.mjs',
+  'session-approvals.mjs',
+  'session-clarifications.mjs',
+  'session-stops.mjs',
+  'session-producer-transaction.mjs',
+]);
+const STAGED_ACP_MODULES = new Set([
+  'packages/acp-client/src/codex-app-server.ts',
+  'packages/acp-client/src/claude-stream.ts',
+]);
+
+/** Map a staged-runtime relative path to its source-root relative path, or null when it has no source counterpart (vendored binaries and anything outside the exact prepare-runtime outputs). */
 export function stagedToSource(stagedRel) {
   const rel = toPosix(stagedRel);
   if (rel === 'runtime-manifest.json') return 'apps/desktop/runtime-manifest.json';
   if (!rel.startsWith('app/')) return null;
   const inner = rel.slice('app/'.length);
-  if (inner.startsWith('apps/desktop/server/')) return inner;
-  if (inner.startsWith('packages/acp-client/src/')) return inner;
-  if (inner.startsWith('orch/')) return inner;
+  if (inner.startsWith('apps/desktop/server/')) {
+    const base = inner.slice('apps/desktop/server/'.length);
+    if (!base.includes('/') && STAGED_SERVER_MODULES.has(base)) return inner;
+    return null;
+  }
+  if (STAGED_ACP_MODULES.has(inner)) return inner;
+  if (inner === 'orch/roster.example.json') return inner;
+  if (inner.startsWith('orch/src/') && inner.endsWith('.mjs')) return inner;
   if (inner === 'model-catalog.json') return inner;
   return null;
 }
@@ -143,16 +211,28 @@ export async function collectArtifacts(bundleDir) {
 /**
  * Build a receipt object. staged entries carry the hash of the staged bytes;
  * verification compares them against freshly hashed source bytes.
+ * `commit` is the exact checked-out commit that was built (for PR runs this
+ * is the synthetic merge SHA, which is the valid candidate identity).
+ * `prHead` is informational only: the PR head SHA from trusted workflow
+ * metadata, recorded so the merge commit is never mislabeled as the PR head.
+ * The receipt carries no absolute sourceRoot: it is build-machine-local and
+ * would make the receipt non-portable. Verification binds to the sourceRoot
+ * it is given on its own host.
  */
-export async function writeReceipt({ bundleDir, runtimeDir, sourceRoot, commit, nodeVersion }) {
+export async function writeReceipt({ bundleDir, runtimeDir, commit, prHead, nodeVersion }) {
   if (!commit || typeof commit !== 'string') throw new Error('release-receipt: commit is required');
   if (!COMMIT_RE.test(commit)) {
     throw new Error('release-receipt: commit must be a full lowercase hex SHA (40 or 64 chars)');
   }
+  if (prHead !== undefined && prHead !== null && prHead !== '') {
+    if (typeof prHead !== 'string' || !COMMIT_RE.test(prHead)) {
+      throw new Error('release-receipt: prHead must be a full lowercase hex SHA (40 or 64 chars) when provided');
+    }
+  }
   const artifacts = await collectArtifacts(bundleDir);
   const stagedRuntime = await hashTree(runtimeDir);
   const staged = stagedRuntime.map((e) => ({ ...e, source: stagedToSource(e.rel) }));
-  return {
+  const receipt = {
     schemaVersion: RECEIPT_SCHEMA_VERSION,
     evidenceLevel: EVIDENCE_LEVEL,
     commit,
@@ -160,26 +240,37 @@ export async function writeReceipt({ bundleDir, runtimeDir, sourceRoot, commit, 
     builtAt: new Date().toISOString(),
     artifacts,
     stagedRuntime: staged,
-    sourceRoot: toPosix(path.resolve(sourceRoot)),
   };
+  if (prHead) receipt.prHead = prHead;
+  return receipt;
 }
 
 /**
  * Verify a receipt against on-disk bytes. Returns { ok, errors }.
- * Fails on: wrong schema, refused evidence level, malformed or mismatched
- * commit claim (shape-checked, and bound to the checked-out source HEAD when
- * sourceRoot is a git checkout), missing/duplicate/unsafe artifact paths,
- * artifact hash/size mismatch, missing/duplicate/unsafe staged paths,
- * staged files with no trusted source mapping (other than vendored
- * binaries), missing source files, staged-vs-source byte mismatch,
- * staged-on-disk drift, or — when runtimeDir is provided — any inventory
- * difference between the receipt and the runtime directory (omitted, added,
- * or duplicate entries). The receipt's own `source` fields are never
- * trusted: the source counterpart always comes from stagedToSource().
+ * Complete verification REQUIRES runtimeDir: without the staged runtime
+ * directory a receipt stripped down to a single vendored binary would
+ * verify, so absence is a failure, never a skip. Fails on: wrong schema,
+ * refused evidence level, missing runtimeDir, malformed commit claim, or a
+ * commit claim that cannot be bound because the source HEAD cannot be
+ * resolved (an extracted non-git source tree refuses verification instead
+ * of silently skipping candidate binding), missing/duplicate/unsafe
+ * artifact paths, artifact hash/size mismatch, installer artifacts on disk
+ * that are not recorded in the receipt, a missing required artifact kind
+ * (msi, nsis, raw), missing/duplicate/unsafe staged paths, staged files
+ * with no trusted source mapping (other than vendored binaries), missing
+ * source files, staged-vs-source byte mismatch, staged-on-disk drift, or
+ * any other inventory difference between the receipt and the runtime
+ * directory (omitted, added, or duplicate entries). The receipt's own
+ * `source` fields are never trusted: the source counterpart always comes
+ * from stagedToSource(). The informational `prHead` field, when present,
+ * is shape-checked only and never used for binding.
  */
-export async function verifyReceipt(receipt, { bundleDir, sourceRoot, runtimeDir = null }) {
+export async function verifyReceipt(receipt, { bundleDir, sourceRoot, runtimeDir }) {
   const errors = [];
   if (!receipt || typeof receipt !== 'object') return { ok: false, errors: ['receipt is not an object'] };
+  if (!runtimeDir || typeof runtimeDir !== 'string') {
+    errors.push('runtimeDir is required: complete verification needs the staged runtime directory');
+  }
   if (receipt.schemaVersion !== RECEIPT_SCHEMA_VERSION) {
     errors.push(`schemaVersion must be ${RECEIPT_SCHEMA_VERSION}, got ${String(receipt.schemaVersion)}`);
   }
@@ -192,14 +283,22 @@ export async function verifyReceipt(receipt, { bundleDir, sourceRoot, runtimeDir
     errors.push(`commit '${receipt.commit}' is not a full lowercase hex SHA (40 or 64 chars)`);
   } else {
     const head = await gitHead(sourceRoot);
-    if (head !== null && receipt.commit !== head) {
+    if (head === null) {
+      errors.push(`cannot resolve checked-out source HEAD for '${sourceRoot}': not a git checkout or git unavailable; refusing candidate binding`);
+    } else if (receipt.commit !== head) {
       errors.push(`commit ${receipt.commit} does not match checked-out source HEAD ${head}`);
+    }
+  }
+  if (receipt.prHead !== undefined && receipt.prHead !== null) {
+    if (typeof receipt.prHead !== 'string' || !COMMIT_RE.test(receipt.prHead)) {
+      errors.push(`prHead '${String(receipt.prHead)}' is not a full lowercase hex SHA (40 or 64 chars)`);
     }
   }
   if (!Array.isArray(receipt.artifacts) || receipt.artifacts.length === 0) {
     errors.push('artifacts list is empty: no installer artifact recorded');
   } else {
     const seenArtifacts = new Set();
+    const seenKinds = new Set();
     for (const a of receipt.artifacts) {
       if (!a || typeof a.file !== 'string' || typeof a.sha256 !== 'string' || !HEX64.test(a.sha256)) {
         errors.push(`malformed artifact entry: ${JSON.stringify(a)}`);
@@ -214,6 +313,7 @@ export async function verifyReceipt(receipt, { bundleDir, sourceRoot, runtimeDir
         continue;
       }
       seenArtifacts.add(a.file);
+      seenKinds.add(artifactKind(a.file));
       const abs = path.join(bundleDir, a.file);
       let st = null;
       try {
@@ -230,6 +330,33 @@ export async function verifyReceipt(receipt, { bundleDir, sourceRoot, runtimeDir
       if (actual.sha256 !== a.sha256) errors.push(`artifact sha256 mismatch: ${a.file}`);
       if (typeof a.bytes === 'number' && actual.bytes !== a.bytes) {
         errors.push(`artifact size mismatch: ${a.file} (receipt ${a.bytes}, disk ${actual.bytes})`);
+      }
+    }
+    // All three artifact kinds are intentionally desired: a receipt that
+    // records only the MSI while the NSIS/raw outputs exist (or vice versa)
+    // is not a complete candidate.
+    for (const kind of REQUIRED_ARTIFACT_KINDS) {
+      if (!seenKinds.has(kind)) {
+        const hint = kind === 'msi' ? 'MSI installer (.msi)'
+          : kind === 'nsis' ? 'NSIS installer (*-setup.exe)'
+          : 'raw app executable (.exe other than *-setup.exe; needs the bundled runtime, not a standalone installer)';
+        errors.push(`artifacts missing required kind '${kind}': no ${hint} recorded`);
+      }
+    }
+    // Complete artifact inventory: every installer artifact on disk must be
+    // recorded in the receipt, so a receipt listing only one of the
+    // on-disk EXE/MSI/NSIS outputs cannot verify as complete.
+    let onDiskArtifacts = null;
+    try {
+      onDiskArtifacts = await collectArtifacts(bundleDir);
+    } catch {
+      errors.push(`cannot read bundleDir: ${bundleDir}`);
+    }
+    if (onDiskArtifacts) {
+      for (const { file } of onDiskArtifacts) {
+        if (!seenArtifacts.has(file)) {
+          errors.push(`installer artifact on disk is not recorded in receipt: ${file}`);
+        }
       }
     }
   }
@@ -308,8 +435,8 @@ export async function verifyReceipt(receipt, { bundleDir, sourceRoot, runtimeDir
 function usage() {
   return [
     'usage:',
-    '  write  --bundle-dir <dir> --runtime-dir <dir> --source-root <dir> --commit <sha> --out <file>',
-    '  verify --receipt <file> --bundle-dir <dir> --source-root <dir> [--runtime-dir <dir>]',
+    '  write  --bundle-dir <dir> --runtime-dir <dir> --commit <sha> --out <file> [--pr-head <sha>]',
+    '  verify --receipt <file> --bundle-dir <dir> --source-root <dir> --runtime-dir <dir>',
   ].join('\n');
 }
 
@@ -334,26 +461,26 @@ if (invokedDirectly) {
   try {
     args = parseArgs(rest);
     if (command === 'write') {
-      for (const k of ['bundle-dir', 'runtime-dir', 'source-root', 'commit', 'out']) {
+      for (const k of ['bundle-dir', 'runtime-dir', 'commit', 'out']) {
         if (!args[k]) throw new Error(`missing --${k}`);
       }
       const receipt = await writeReceipt({
         bundleDir: args['bundle-dir'],
         runtimeDir: args['runtime-dir'],
-        sourceRoot: args['source-root'],
         commit: args.commit,
+        prHead: args['pr-head'],
       });
       await writeFile(args.out, `${JSON.stringify(receipt, null, 2)}\n`, 'utf8');
       console.log(`release-receipt: wrote ${receipt.artifacts.length} artifact(s), ${receipt.stagedRuntime.length} staged file(s) -> ${args.out}`);
     } else if (command === 'verify') {
-      for (const k of ['receipt', 'bundle-dir', 'source-root']) {
+      for (const k of ['receipt', 'bundle-dir', 'source-root', 'runtime-dir']) {
         if (!args[k]) throw new Error(`missing --${k}`);
       }
       const receipt = JSON.parse(await readFile(args.receipt, 'utf8'));
       const { ok, errors } = await verifyReceipt(receipt, {
         bundleDir: args['bundle-dir'],
         sourceRoot: args['source-root'],
-        runtimeDir: args['runtime-dir'] || null,
+        runtimeDir: args['runtime-dir'],
       });
       if (ok) {
         console.log(`release-receipt: VERIFIED ${receipt.artifacts.length} artifact(s), ${receipt.stagedRuntime.length} staged file(s) at evidence level '${receipt.evidenceLevel}' (built-local only, not clean-machine acceptance)`);

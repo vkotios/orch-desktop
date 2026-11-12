@@ -22,6 +22,8 @@ on:
   workflow_dispatch:
   pull_request:
     # Candidate inputs only: doc edits alone do not spend a native build.
+    # Root and orch package manifests are included so dependency-only
+    # changes trigger a candidate build too.
     paths:
       - .github/workflows/windows-candidate.yml
       - apps/desktop/**
@@ -30,6 +32,10 @@ on:
       - orch/roster.example.json
       - model-catalog.json
       - apps/desktop/runtime-manifest.json
+      - package.json
+      - package-lock.json
+      - orch/package.json
+      - orch/package-lock.json
 
 # Read-only, no secrets: nothing here publishes or releases.
 permissions:
@@ -56,8 +62,15 @@ jobs:
           $sha = (git rev-parse HEAD).Trim()
           "sha=$sha" >> $env:GITHUB_OUTPUT
           "HEAD_SHA=$sha" >> $env:GITHUB_ENV
+          # For pull_request runs, HEAD_SHA is the synthetic merge commit the
+          # PR checkout produced: that exact checkout is the valid candidate
+          # identity. The PR head SHA is recorded separately, from trusted
+          # workflow event metadata only, as informational receipt metadata.
+          $prHead = "${{ github.event.pull_request.head.sha }}"
+          if ($prHead) { "PR_HEAD_SHA=$prHead" >> $env:GITHUB_ENV }
           git status --short
           Write-Output "candidate commit: $sha"
+          if ($prHead) { Write-Output "pr head (informational): $prHead" }
 
       - name: Set up Node.js 24
         uses: actions/setup-node@v7
@@ -101,7 +114,11 @@ jobs:
           if (-not (Get-ChildItem candidate-dist/ -File)) { throw 'no installer artifacts collected' }
 
       - name: Write candidate receipt
-        run: node apps/desktop/scripts/release-receipt.mjs write --bundle-dir candidate-dist --runtime-dir apps/desktop/src-tauri/.runtime --source-root . --commit ${{ env.HEAD_SHA }} --out candidate-dist/candidate-receipt.json
+        shell: pwsh
+        run: |
+          $prHeadArg = @()
+          if ($env:PR_HEAD_SHA) { $prHeadArg = @('--pr-head', $env:PR_HEAD_SHA) }
+          node apps/desktop/scripts/release-receipt.mjs write --bundle-dir candidate-dist --runtime-dir apps/desktop/src-tauri/.runtime --commit $env:HEAD_SHA --out candidate-dist/candidate-receipt.json @prHeadArg
 
       - name: Write SHASUMS256.txt
         shell: pwsh

@@ -18,6 +18,35 @@ evidence.
 A `built-local` receipt never implies `installed` or `clean-machine`. The
 receipt verifier refuses receipts that claim a stronger level.
 
+## Candidate contents and identity
+
+A `candidate-dist/` artifact intentionally contains three installer artifact
+kinds, and the receipt verifier requires all of them:
+
+| Kind | File shape | Role |
+| --- | --- | --- |
+| `msi` | `*.msi` | MSI installer |
+| `nsis` | `*-setup.exe` | NSIS installer |
+| `raw` | any other `*.exe` | Raw app executable |
+
+The raw app executable is NOT a standalone installer: it only runs together
+with the bundled runtime staged next to it by
+[`prepare-runtime.mjs`](../apps/desktop/scripts/prepare-runtime.mjs). Use the
+MSI or NSIS installer to install the app; the raw EXE exists for direct
+launch from the packaged layout. The verifier also refuses any installer
+artifact found on disk that the receipt does not record, so a receipt
+listing only one of the three outputs cannot verify as complete.
+
+Candidate identity: the receipt's `commit` field is the exact commit that
+was checked out and built. For `pull_request` runs this is the synthetic
+merge commit the PR checkout produces; that exact checkout is the valid
+candidate identity and the receipt is bound to it. When the run is a PR, the
+workflow additionally records the PR head SHA in the receipt's informational
+`prHead` field, taken from trusted workflow event metadata
+(`github.event.pull_request.head.sha`); `prHead` is never used for binding
+and is never hardcoded. The receipt carries no absolute source paths, so it
+stays portable between the build host and inspection hosts.
+
 ## Prerequisites for the acceptance machine
 
 - Windows 11 x64, clean local account (no developer Node/Rust toolchains).
@@ -28,12 +57,13 @@ receipt verifier refuses receipts that claim a stronger level.
 - Documented prerequisites only: Git and the CLIs under test, with native
   sign-in already completed outside CHO.
 - The candidate under test: `windows-candidate-<sha>` workflow artifact
-  (`candidate-dist/`), containing the installer(s), `candidate-receipt.json`,
-  and `SHASUMS256.txt`.
+  (`candidate-dist/`), containing the MSI installer, the NSIS installer, the
+  raw app executable, `candidate-receipt.json`, and `SHASUMS256.txt`.
 
 Record first:
 
-- Candidate commit SHA: _______________
+- Candidate commit SHA (the exact checked-out commit; for PR runs the merge
+  commit the PR checkout produced): _______________
 - CI "Verify candidate receipt" output for that SHA (paste; this is the
   source/runtime verification — it runs on the build host, never here): _______________
 - Machine description (VM/physical, Windows build, account type): _______________
