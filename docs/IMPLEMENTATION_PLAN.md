@@ -8,11 +8,12 @@ Planning branch: `codex/cho-v01-plan`; implementation branch: `codex/cho-v01-fou
 ## Current execution amendment — 2026-11-05
 
 Owner update (2026-11-12): remaining implementation and acceptance work now uses
-Muse CLI `muse-spark-1.3` and Vibe CLI `deepseek-v4-1-flash-1017`. Follow the
+Muse CLI `muse-spark-1.3` and Vibe CLI `zai-glm-5-3-flash`. The owner
+revoked DeepSeek after a nonprogress incident and host restart. Follow the
 [completion package](work-packages/CHO-COMPLETE-20261112.md) and its portable
 roster. This replaces older development-worker assignments for the remaining
-work. DeepSeek receives no controller turn cap; inspect actual progress before
-intervening. Runtime controller candidates and AC-01–15 remain unchanged.
+work. Inspect semantic progress as well as process liveness. Runtime controller
+candidates and AC-01–15 remain unchanged.
 
 Current delivery assessment (2026-11-12): see
 [implementation status](IMPLEMENTATION_STATUS.md#current-delivery-assessment--2026-11-12)
