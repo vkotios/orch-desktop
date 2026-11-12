@@ -1,5 +1,5 @@
 .native-shell { display: flex; height: 100%; min-height: 0; background: var(--surface); color: var(--text); }
-.native-sidebar { width: 252px; flex: 0 0 252px; display: flex; flex-direction: column; gap: 16px; padding: 22px 15px; background: var(--sidebar); border-right: 1px solid var(--sidebar-border); }
+.native-sidebar { width: 252px; flex: 0 0 252px; display: flex; flex-direction: column; gap: 16px; padding: 22px 15px; background: var(--sidebar); border-right: 1px solid var(--sidebar-border); min-height: 0; overflow-y: auto; }
 .native-brand { display: flex; align-items: center; gap: 9px; }
 .native-brand span { margin-left: auto; font-size: 12px; color: var(--muted); }
 .native-muted, .native-hint { color: var(--muted); font-size: 12px; line-height: 1.5; }
@@ -12,7 +12,7 @@
 .native-button:hover:not(:disabled), .native-close-project:hover:not(:disabled) { background: var(--hover); }
 .native-primary:hover:not(:disabled) { background: var(--button-hover); }
 .native-shell button:disabled, .native-shell select:disabled { opacity: .5; cursor: default; }
-.native-chat-list { display: grid; gap: 3px; overflow: auto; }
+.native-chat-list { display: grid; gap: 3px; overflow: auto; flex-shrink: 0; }
 .native-chat-list button { display: flex; align-items: center; gap: 9px; min-width: 0; text-align: left; border: 0; border-radius: 6px; padding: 9px; background: transparent; color: var(--secondary); cursor: pointer; font: inherit; }
 .native-chat-list button span:first-of-type { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .native-chat-list button.selected { background: var(--selected); color: var(--text); }
