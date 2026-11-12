@@ -11,7 +11,7 @@ evidence.
 
 | Level | Meaning | Produced by |
 | --- | --- | --- |
-| built-local | Commit built; artifact hashes recorded; staged runtime bytes match checked-out source | CI workflow + [`candidate-receipt.json`](../apps/desktop/scripts/release-receipt.mjs) |
+| built-local | Commit built; artifact hashes recorded; staged runtime bytes match checked-out source (copied files byte-exact; generated manifest compared as serialized — see "Staged runtime verification") | CI workflow + [`candidate-receipt.json`](../apps/desktop/scripts/release-receipt.mjs) |
 | installed | App installed, launched, and exercised on a real Windows machine | This procedure (owner) |
 | clean-machine | Installed level on a clean Windows account/machine with only documented prerequisites | This procedure (owner), Procedure A/B/C clean-machine variant |
 
@@ -46,6 +46,26 @@ workflow additionally records the PR head SHA in the receipt's informational
 (`github.event.pull_request.head.sha`); `prHead` is never used for binding
 and is never hardcoded. The receipt carries no absolute source paths, so it
 stays portable between the build host and inspection hosts.
+
+## Staged runtime verification: copied vs generated files
+
+The receipt verifier compares every staged runtime file against its checked-out
+source, using the exact prepare-runtime outputs as the trusted mapping:
+
+- Copied byte-for-byte: everything under `app/` (the named server modules,
+  the two ACP TypeScript sources, `orch/src/**/*.mjs`,
+  `orch/roster.example.json`, `model-catalog.json`) plus the vendored
+  binaries `node.exe` and `LICENSE.node` (verified by recorded bytes only).
+  These comparisons are byte-exact; any difference fails verification.
+- Generated, not copied: `runtime-manifest.json`.
+  [`prepare-runtime.mjs`](../apps/desktop/scripts/prepare-runtime.mjs) writes
+  it as `JSON.stringify(manifest, null, 2)` + LF from the parsed source
+  manifest `apps/desktop/runtime-manifest.json`. On Windows checkouts the
+  source file keeps CRLF line endings (the repo pins `* -text`), so raw
+  source bytes never equal the LF staged bytes. The verifier therefore compares
+  the staged manifest against that exact serialization of the parsed source
+  manifest. Every JSON field participates: any value or field change still
+  fails verification; only source-side EOL/indent formatting is factored out.
 
 ## Prerequisites for the acceptance machine
 

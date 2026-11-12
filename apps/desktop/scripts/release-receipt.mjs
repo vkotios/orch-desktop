@@ -4,7 +4,9 @@
 //
 // Evidence level is ALWAYS "built-local": this receipt proves that the listed
 // installer artifacts were built from the listed commit on the build machine
-// and that the staged runtime bytes match the checked-out source bytes. It is
+// and that the staged runtime bytes match the checked-out source bytes
+// (byte-exact for copied files; for the one generated file, the exact
+// prepare-runtime serialization — see GENERATED_MANIFEST_REL). It is
 // NOT installed-app or clean-machine acceptance (see AC-01/AC-13 and
 // docs/WINDOWS_CANDIDATE_ACCEPTANCE.md). The verifier refuses any receipt that
 // claims an "installed" or "clean-machine" evidence level.
@@ -48,6 +50,16 @@ const COMMIT_RE = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 // every other staged file must map to a checked-out source file (see
 // stagedToSource). Anything unmapped is a verification failure, never a skip.
 const VENDORED_BINARIES = new Set(['node.exe', 'LICENSE.node']);
+
+// The one staged file that is generated rather than copied: prepare-runtime
+// writes it as `${JSON.stringify(manifest, null, 2)}\n` from the parsed
+// source manifest (apps/desktop/runtime-manifest.json). Source checkouts on
+// Windows keep CRLF (".gitattributes: * -text"), so raw source bytes never
+// equal the LF staged bytes; verification therefore compares the staged
+// manifest against that exact serialization of the parsed source manifest.
+// Every JSON field participates, so any value or field change still fails;
+// only source-side EOL/indent formatting is factored out.
+const GENERATED_MANIFEST_REL = 'runtime-manifest.json';
 
 export const sha256Hex = (bytes) => createHash('sha256').update(bytes).digest('hex');
 
@@ -188,6 +200,26 @@ export function stagedToSource(stagedRel) {
   return null;
 }
 
+/**
+ * Expected bytes a staged file must match, derived from its checked-out
+ * source. Copied files compare byte-exact. The generated runtime manifest
+ * compares against the exact prepare-runtime serialization
+ * (`JSON.stringify(parsed, null, 2)` + LF) of the pinned source manifest, so
+ * a CRLF Windows checkout verifies against the LF staged file while any JSON
+ * value or field change still fails. Returns null when the source manifest
+ * is not valid JSON — a hard verification failure, never a skip.
+ */
+function expectedStagedBytes(sourceBytes, stagedRel) {
+  if (toPosix(stagedRel) !== GENERATED_MANIFEST_REL) return sourceBytes;
+  let parsed;
+  try {
+    parsed = JSON.parse(sourceBytes.toString('utf8'));
+  } catch {
+    return null;
+  }
+  return Buffer.from(`${JSON.stringify(parsed, null, 2)}\n`, 'utf8');
+}
+
 /** Hash every file under root; returns [{ rel (posix), sha256, bytes }] sorted. */
 export async function hashTree(root, accept) {
   const files = await walkFiles(root);
@@ -258,7 +290,9 @@ export async function writeReceipt({ bundleDir, runtimeDir, commit, prHead, node
  * that are not recorded in the receipt, a missing required artifact kind
  * (msi, nsis, raw), missing/duplicate/unsafe staged paths, staged files
  * with no trusted source mapping (other than vendored binaries), missing
- * source files, staged-vs-source byte mismatch, staged-on-disk drift, or
+ * source files, staged-vs-source mismatch (byte-exact for copied files; for
+ * the generated runtime manifest, against the exact prepare-runtime
+ * serialization of the parsed source manifest), staged-on-disk drift, or
  * any other inventory difference between the receipt and the runtime
  * directory (omitted, added, or duplicate entries). The receipt's own
  * `source` fields are never trusted: the source counterpart always comes
@@ -390,8 +424,11 @@ export async function verifyReceipt(receipt, { bundleDir, sourceRoot, runtimeDir
           errors.push(`staged runtime file missing on disk: ${s.rel}`);
         }
       }
-      // Staged bytes must equal the current source bytes. The mapping always
-      // comes from the trusted staging rules — a receipt-supplied `source`
+      // Staged bytes must equal the current source bytes: byte-exact for
+      // copied files, and for the generated runtime manifest the exact
+      // prepare-runtime serialization of the parsed source manifest. The
+      // mapping always comes from the trusted staging rules — a
+      // receipt-supplied `source`
       // field is untrusted and ignored, so redirecting it cannot hide a
       // source change. Files with no trusted mapping fail unless they are
       // vendored binaries with recorded bytes; nothing is silently skipped.
@@ -402,14 +439,19 @@ export async function verifyReceipt(receipt, { bundleDir, sourceRoot, runtimeDir
         }
         continue;
       }
-      let srcHash;
+      let srcBytes;
       try {
-        srcHash = (await sha256File(path.join(sourceRoot, sourceRel))).sha256;
+        srcBytes = await readFile(path.join(sourceRoot, sourceRel));
       } catch {
         errors.push(`source file missing for staged entry ${s.rel} (expected ${sourceRel})`);
         continue;
       }
-      if (srcHash !== s.sha256) errors.push(`staged runtime differs from source: ${s.rel} != ${sourceRel}`);
+      const expected = expectedStagedBytes(srcBytes, s.rel);
+      if (expected === null) {
+        errors.push(`generated manifest source is not valid JSON: ${sourceRel}`);
+        continue;
+      }
+      if (sha256Hex(expected) !== s.sha256) errors.push(`staged runtime differs from source: ${s.rel} != ${sourceRel}`);
     }
     // Complete inventory: when the staged runtime directory is available,
     // every file on disk must be recorded in the receipt and vice versa.

@@ -47,9 +47,11 @@ function makeTree() {
   // Source files (checked-out commit content).
   fs.mkdirSync(path.join(sourceRoot, "apps", "desktop", "server"), { recursive: true });
   fs.writeFileSync(path.join(sourceRoot, "apps", "desktop", "server", "host.mjs"), "host-bytes\n");
+  // Source manifest as a Windows checkout produces it: CRLF line endings
+  // (the repo pins "* -text", so no EOL normalization happens).
   fs.writeFileSync(
     path.join(sourceRoot, "apps", "desktop", "runtime-manifest.json"),
-    '{"version":"v24.22.2"}\n',
+    '{\r\n  "version": "v24.22.2"\r\n}\r\n',
   );
   // Staged runtime mirrors the source plus vendored binaries.
   fs.mkdirSync(path.join(runtimeDir, "app", "apps", "desktop", "server"), { recursive: true });
@@ -57,7 +59,9 @@ function makeTree() {
     path.join(runtimeDir, "app", "apps", "desktop", "server", "host.mjs"),
     "host-bytes\n",
   );
-  fs.writeFileSync(path.join(runtimeDir, "runtime-manifest.json"), '{"version":"v24.22.2"}\n');
+  // Staged manifest is generated, not copied: exactly the bytes
+  // prepare-runtime writes (JSON.stringify(manifest, null, 2) + LF).
+  fs.writeFileSync(path.join(runtimeDir, "runtime-manifest.json"), '{\n  "version": "v24.22.2"\n}\n');
   fs.writeFileSync(path.join(runtimeDir, "node.exe"), "fake-binary\n");
   // Installer artifacts: all three intended kinds (MSI, NSIS setup, raw EXE).
   fs.mkdirSync(bundleDir, { recursive: true });
@@ -312,6 +316,38 @@ describe.runIf(HAS_GIT)("release receipt", () => {
     fs.writeFileSync(
       path.join(sourceRoot, "apps", "desktop", "runtime-manifest.json"),
       '{"version":"tampered"}\n',
+    );
+    const { ok, errors } = await verifyReceipt(receipt, { bundleDir, sourceRoot, runtimeDir });
+    expect(ok).toBe(false);
+    expect(errors.some((e) => e.includes("runtime-manifest.json"))).toBe(true);
+  });
+
+  it("verifies a CRLF source manifest against the LF generated stage", async () => {
+    const { sourceRoot, runtimeDir, bundleDir, commit } = makeGitTree();
+    // Fixture guard: the source manifest really carries CRLF endings and the
+    // staged manifest really is the LF serialization, as on a Windows checkout.
+    const sourceManifest = fs.readFileSync(
+      path.join(sourceRoot, "apps", "desktop", "runtime-manifest.json"),
+      "utf8",
+    );
+    const stagedManifest = fs.readFileSync(path.join(runtimeDir, "runtime-manifest.json"), "utf8");
+    expect(sourceManifest).toContain("\r\n");
+    expect(stagedManifest).not.toContain("\r");
+    expect(stagedManifest).toBe('{\n  "version": "v24.22.2"\n}\n');
+    const receipt = await writeReceipt({ bundleDir, runtimeDir, commit });
+    const { ok, errors } = await verifyReceipt(receipt, { bundleDir, sourceRoot, runtimeDir });
+    expect(errors).toEqual([]);
+    expect(ok).toBe(true);
+  });
+
+  it("fails when the source manifest gains a field the stage lacks", async () => {
+    const { sourceRoot, runtimeDir, bundleDir, commit } = makeGitTree();
+    const receipt = await writeReceipt({ bundleDir, runtimeDir, commit });
+    // Every JSON field participates: an added source field changes the
+    // serialization the stage must match, so it can never be skipped.
+    fs.writeFileSync(
+      path.join(sourceRoot, "apps", "desktop", "runtime-manifest.json"),
+      '{\r\n  "version": "v24.22.2",\r\n  "extra": true\r\n}\r\n',
     );
     const { ok, errors } = await verifyReceipt(receipt, { bundleDir, sourceRoot, runtimeDir });
     expect(ok).toBe(false);
