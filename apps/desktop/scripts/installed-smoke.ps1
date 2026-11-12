@@ -74,8 +74,8 @@ function Write-Result {
 }
 
 function Test-Contained([string]$Child, [string]$Parent) {
-  $c = [IO.Path]::GetFullPath($Child).TrimEnd([IO.Char[]]@('\', '/')) + [IO.Path]::DirectorySeparatorChar
-  $p = [IO.Path]::GetFullPath($Parent).TrimEnd([IO.Char[]]@('\', '/')) + [IO.Path]::DirectorySeparatorChar
+  $c = [IO.Path]::GetFullPath($Child).TrimEnd([char[]]@('\', '/')) + [IO.Path]::DirectorySeparatorChar
+  $p = [IO.Path]::GetFullPath($Parent).TrimEnd([char[]]@('\', '/')) + [IO.Path]::DirectorySeparatorChar
   return ($c.StartsWith($p, [StringComparison]::OrdinalIgnoreCase) -and ($c.Length -gt $p.Length))
 }
 
