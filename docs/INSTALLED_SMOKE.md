@@ -47,9 +47,14 @@ Requirements enforced by the script:
   authoritative completion (the generated `installer.nsi` uses this same
   mechanism). No removal of user app data and no registry edits; this runs
   on a disposable CI runner.
-- Returns nonzero on failure and always writes structured JSON plus
-  stdout/stderr logs into the output directory. Uncertain resources/evidence
-  are kept rather than claimed PASS.
+- Returns nonzero on failure. Guard refusal (non-CI host) writes no
+  outputs: it exits before the output directory is created. Otherwise the
+  script writes structured JSON into the output directory; app
+  stdout/stderr logs exist only after launch, so prelaunch failures may
+  lack app logs. Uncertain resources/evidence are kept rather than
+  claimed PASS.
+- Requires the WebView2 runtime on the Windows runner (Tauri WebView
+  dependency); the real CI run qualifies it.
 
 ## Workflow snippet (for later integration; workflows are owned by GLM)
 
@@ -60,7 +65,7 @@ Requirements enforced by the script:
     powershell -NoProfile -ExecutionPolicy Bypass
     -File apps/desktop/scripts/installed-smoke.ps1
     -Installer <nsis-artifact-path>
-    -OutputDir ${{ runner.temp }}/cho-installed-smoke-evidence
+    -OutputDir ${{ runner.temp }}/cho-installed-smoke-${{ github.run_id }}-${{ github.run_attempt }}
 ```
 
 ## Release health diagnostic

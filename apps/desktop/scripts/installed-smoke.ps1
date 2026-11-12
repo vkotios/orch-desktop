@@ -132,7 +132,8 @@ try {
   }
   $result.installDir = $installDir
   $result.appExe = [ordered]@{ path = $appExe; sha256 = (Get-FileHash -LiteralPath $appExe -Algorithm SHA256).Hash }
-  $result.runtimeNode = [ordered]@{ path = $runtimeNode; sha256 = (Get-FileHash -LiteralPath $runtimeNode -Algorithm SHA256).Hash }
+  $runtimeNodeFull = [IO.Path]::GetFullPath($runtimeNode)
+  $result.runtimeNode = [ordered]@{ path = $runtimeNodeFull; sha256 = (Get-FileHash -LiteralPath $runtimeNode -Algorithm SHA256).Hash }
   $result['runtimeHost'] = [ordered]@{ path = $runtimeHost; sha256 = (Get-FileHash -LiteralPath $runtimeHost -Algorithm SHA256).Hash }
 
   # --- Launch installed app from an unrelated empty CWD with a sanitized child env. ---
@@ -148,10 +149,12 @@ try {
   $env:PATH = $childPath
   $env:NODE_OPTIONS = '--require C:/cho-deliberately-missing/injected.cjs'
   $env:NODE_PATH = 'C:/cho-deliberately-missing/modules'
-  $nodeOnPath = $null -ne (Get-Command node -ErrorAction SilentlyContinue)
   $sanitizedPath = $env:PATH
+  $nodeOnPath = $false
   $appProc = $null
   try {
+    $nodeOnPath = $null -ne (Get-Command node -ErrorAction SilentlyContinue)
+    if ($nodeOnPath) { throw 'sanitized PATH still resolves node; refusing to launch (environment restored by finally)' }
     $appProc = Start-Process -FilePath $appExe -ArgumentList '--native-host-smoke' `
       -WorkingDirectory $emptyCwd -WindowStyle Hidden -PassThru `
       -RedirectStandardOutput $stdoutLog -RedirectStandardError $stderrLog
@@ -201,7 +204,7 @@ try {
   $hostProc = Get-Process -Id ([int]$receipt.pid) -ErrorAction SilentlyContinue
   if ($hostProc) {
     $null = $hostProc.Handle
-    if ($hostProc.Path -ne $runtimeNode) { throw 'host PID identity changed (path is not the installed bundled Node); leaving it alone' }
+    if ($hostProc.Path -ne $runtimeNodeFull) { throw 'host PID identity changed (path is not the installed bundled Node); leaving it alone' }
     if (-not $hostProc.WaitForExit(10000)) { throw 'owned host remained alive after app exit; leaving it alone rather than PID-killing' }
   }
   $result.hostGone = $true
