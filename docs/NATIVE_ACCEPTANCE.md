@@ -95,6 +95,16 @@ happens in this worktree without controller review and authorization.
   framing, same SQLite durable store, zero provider starts), which also
   exercises the hydrated-content checks against real persistence. Neither
   proves live acceptance.
+- Poll replay mirrors the UI: the poll loop passes the returned cursor on
+  every `native_chat_poll` and rebuilds reply text through the pure UI
+  reducer (`createNativeUiSession`/`beginNativeTurn`/`applyNativeUiEvent`
+  from `apps/desktop/src/lib/native-chat-state.ts`), so stable `partId`
+  dedupe plus ordered durable `seq` keeps live/durable replays exactly-once
+  with delayed-middle-part ordering. A dedicated multi-poll test covers a
+  live delta, an empty-live batch replaying the same durable part, a later
+  terminal, a repeated part appearing once, and a genuinely new part
+  remaining. Entrypoint identity uses `fileURLToPath` (percent-decoding),
+  covered by real `--help`/refusal subprocesses from a spaced temp layout.
 - A `fail` receipt on a live run means the scenario did not verify — for
   example the model ignored the no-tools instruction, which the receipt
   records (`MARKER_NOT_ECHOED`, `MARKER_NOT_REPLAYED`, or

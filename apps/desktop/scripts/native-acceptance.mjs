@@ -49,6 +49,11 @@ import { fileURLToPath } from "node:url";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { PassThrough } from "node:stream";
+import {
+  applyNativeUiEvent,
+  beginNativeTurn,
+  createNativeUiSession,
+} from "../src/lib/native-chat-state.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -488,11 +493,12 @@ function isApprovalBlocker(event, turnId) {
 }
 
 // A read tool needs no approval, so observed tool use must fail the
-// no-tools turns independently of approval events.
+// no-tools turns independently of approval events. A clarification request
+// is tool-equivalent here: the marker turn must ask nothing and use nothing.
 function isToolUse(event, turnId) {
   if (!event || typeof event !== "object") return false;
   if (typeof event.turnId === "string" && event.turnId !== turnId) return false;
-  return event.kind === "tool_call" || event.kind === "tool_result";
+  return event.kind === "tool_call" || event.kind === "tool_result" || event.kind === "clarification";
 }
 
 async function prepareProject(request, { generation, projectDir, controller }) {
@@ -547,6 +553,12 @@ function selectSendEffort(entry, controller) {
 const SEND_ROLE = "review";
 
 async function sendTurn(request, { generation, projectToken, controller, conversationId, turnId, prompt, model, effort }) {
+  void controller;
+  // The effort always comes from the prepared catalogue entry selected by the
+  // caller; there is no fallback model or effort here.
+  if (typeof effort !== "string" || effort.length === 0) {
+    fail("USAGE", "sendTurn requires an explicit catalogue effort; refusing without fallback");
+  }
   return request("direct_chat_send", {
     generation,
     projectToken,
@@ -555,7 +567,7 @@ async function sendTurn(request, { generation, projectToken, controller, convers
     prompt,
     model,
     role: SEND_ROLE,
-    effort: effort ?? selectSendEffort(catalogueEntry(null, model), controller),
+    effort,
   });
 }
 
@@ -575,33 +587,70 @@ function countRoleMessages(messages, role) {
   return messages.filter((entry) => entry !== null && typeof entry === "object" && entry.role === role).length;
 }
 
-async function pollTurnTerminal(request, { generation, projectToken, conversationId, turnId, deadlineMs }) {
+// Poll loop replays through the actual UI reducer instead of concatenating
+// deltas. The real service mixes live and durable catch-up and deliberately
+// withholds cursor advancement for live turns, so an empty live poll can
+// replay already observed parts: passing the cursor alone is insufficient.
+// Stable partId dedupe plus ordered durable seq (the same rules the UI
+// applies) keeps replays exactly-once and preserves delayed-middle-part
+// ordering. The returned cursor advances only after its batch was processed.
+export async function pollTurnTerminal(request, {
+  generation,
+  projectToken,
+  conversationId,
+  turnId,
+  deadlineMs,
+  controller = "codex",
+  model = "",
+  effort = "low",
+  prompt = "",
+}) {
   const startedAt = Date.now();
-  const texts = [];
+  let ui = beginNativeTurn(
+    createNativeUiSession(conversationId, model, SEND_ROLE, effort, controller),
+    turnId,
+    prompt,
+  );
+  const assistantText = () => {
+    const message = ui.messages.find(
+      (entry) => entry !== null && typeof entry === "object" && entry.id === turnId && entry.role === "assistant",
+    );
+    return typeof message?.text === "string" ? message.text : "";
+  };
   const seenEvents = [];
   let terminal = null;
   let toolUsed = null;
+  let cursor = null;
   for (;;) {
     if (Date.now() - startedAt > deadlineMs) {
       fail("TIMEOUT", `turn ${turnId} did not reach a terminal event within ${deadlineMs}ms`, {
         polledMs: Date.now() - startedAt,
-        textChars: texts.join("").length,
+        textChars: assistantText().length,
       });
     }
-    const polled = await request("native_chat_poll", { generation, projectToken, conversationId });
+    const polled = await request("native_chat_poll", {
+      generation,
+      projectToken,
+      conversationId,
+      ...(cursor === null || cursor === undefined ? {} : { cursor }),
+    });
     const events = Array.isArray(polled?.events) ? polled.events : [];
     for (const event of events) {
       if (!event || typeof event !== "object") continue;
       if (typeof event.turnId === "string" && event.turnId !== turnId) continue;
       seenEvents.push(typeof event.kind === "string" ? event.kind : "unknown");
-      if (typeof event.text === "string" && event.text.length > 0) texts.push(event.text);
-      if (isApprovalBlocker(event, turnId)) {
-        return { terminal: null, text: texts.join(""), blocked: event.kind, toolUsed, eventKinds: seenEvents };
+      // The deterministic seam omits ambient fields the real service always
+      // sets; fill only absent ones so stale-generation filtering still holds.
+      const normalized = { generation, sessionId: conversationId, controller, ...event };
+      if (isApprovalBlocker(normalized, turnId)) {
+        return { terminal: null, text: assistantText(), blocked: normalized.kind, toolUsed, eventKinds: seenEvents };
       }
-      if (isToolUse(event, turnId) && toolUsed === null) toolUsed = event.kind;
-      if (isTerminalFor(event, turnId)) terminal = event;
+      if (isToolUse(normalized, turnId) && toolUsed === null) toolUsed = normalized.kind;
+      ui = applyNativeUiEvent(ui, normalized, generation);
+      if (isTerminalFor(normalized, turnId)) terminal = normalized;
     }
-    if (terminal !== null) return { terminal, text: texts.join(""), blocked: null, toolUsed, eventKinds: seenEvents };
+    if (polled !== null && typeof polled === "object" && "cursor" in polled) cursor = polled.cursor;
+    if (terminal !== null) return { terminal, text: assistantText(), blocked: null, toolUsed, eventKinds: seenEvents };
     await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
   }
 }
@@ -698,6 +747,10 @@ export async function runAcceptanceProbe({ openHost, controller, model, fixture,
       conversationId,
       turnId: turn1,
       deadlineMs,
+      controller,
+      model,
+      effort: effort1,
+      prompt: markerPrompt,
     });
     if (settled1.blocked !== null) {
       record(cases, "first-turn-no-tools", "fail", { blocked: settled1.blocked });
@@ -729,8 +782,8 @@ export async function runAcceptanceProbe({ openHost, controller, model, fixture,
       expectedVersion: 0,
       text: draftText,
     });
-    if (saved?.saved !== true && saved?.receipt === undefined) {
-      record(cases, "save-draft", "fail", {});
+    if (saved?.saved !== true) {
+      record(cases, "save-draft", "fail", { saved: saved?.saved ?? null });
       return failReceipt("DRAFT_NOT_SAVED");
     }
     record(cases, "save-draft", "pass", {});
@@ -861,6 +914,10 @@ export async function runAcceptanceProbe({ openHost, controller, model, fixture,
       conversationId,
       turnId: turn2,
       deadlineMs,
+      controller,
+      model,
+      effort: effort2,
+      prompt: resumePrompt,
     });
     if (settled2.blocked !== null) {
       record(cases, "continue-no-tools", "fail", { blocked: settled2.blocked });
@@ -1094,10 +1151,12 @@ export async function runAcceptanceCli(argv, deps = {}) {
   };
 }
 
+// fileURLToPath decodes percent-encoding (spaces, non-ASCII), unlike
+// URL.pathname which keeps %XX escapes and silently fails the identity check.
 const invokedAsMain = (() => {
   try {
-    const entry = process.argv[1] ? path.resolve(process.argv[1]) : null;
-    return entry !== null && entry === path.resolve(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1"));
+    if (!process.argv[1]) return false;
+    return path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
   } catch {
     return false;
   }

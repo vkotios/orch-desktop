@@ -6,9 +6,12 @@
 // restart flow. They do NOT prove live acceptance; only an explicit,
 // authorized live run of scripts/native-acceptance.mjs does that.
 import { afterEach, describe, expect, it } from "vitest";
+import { execFile } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { randomUUID } from "node:crypto";
 import {
   AcceptanceError,
@@ -22,11 +25,14 @@ import {
   describeProbeSource,
   openRealHost,
   parseAcceptanceArgs,
+  pollTurnTerminal,
   runAcceptanceCli,
   runAcceptanceProbe,
   usageText,
   withTimeout,
 } from "../scripts/native-acceptance.mjs";
+
+const execFileAsync = promisify(execFile);
 
 const dirs = [];
 afterEach(() => {
@@ -703,5 +709,93 @@ describe("native acceptance probe (seam only, never live)", () => {
     expect(typeof source.probeDigest === "string" && source.probeDigest.length === 64).toBe(true);
     expect(source.commit === "unknown" || /^[0-9a-f]{40}$/i.test(source.commit)).toBe(true);
     expect(typeof source.root === "string").toBe(true);
+  });
+
+  it("replays multi-poll batches through the UI reducer without duplicating parts", async () => {
+    const generation = randomUUID();
+    const conversationId = randomUUID();
+    const turnId = randomUUID();
+    const marker = "MARKER-POLL-REPLAY-1";
+    const base = { generation, sessionId: conversationId, turnId, controller: "codex" };
+    const cursor1 = { instanceId: "instance-1", conversationId, seq: 1 };
+    const cursor2 = { instanceId: "instance-1", conversationId, seq: 2 };
+    // Five polls, never one batch: live delta, then an empty-live poll whose
+    // durable catch-up replays the same part, then a repeated durable part,
+    // then the delayed middle part (seq 1 after seq 2), then terminal.
+    const batches = [
+      { events: [{ ...base, kind: "message_delta", partId: "live-1", text: "pre-" }], cursor: cursor1 },
+      { events: [{ ...base, kind: "message_delta", source: "durable", seq: 0, partId: "live-1", text: "pre-" }], cursor: cursor2 },
+      {
+        events: [
+          { ...base, kind: "message_delta", source: "durable", seq: 2, partId: "late", text: "post" },
+          { ...base, kind: "message_delta", source: "durable", seq: 2, partId: "late", text: "post" },
+        ],
+        cursor: cursor2,
+      },
+      { events: [{ ...base, kind: "message_delta", source: "durable", seq: 1, partId: "mid", text: marker }], cursor: cursor2 },
+      { events: [{ ...base, kind: "turn_complete", source: "durable", seq: 3, nativeOutcome: "completed" }], cursor: cursor2 },
+    ];
+    const seenCursors = [];
+    let calls = 0;
+    async function request(command, args = {}) {
+      expect(command).toBe("native_chat_poll");
+      seenCursors.push(args.cursor ?? null);
+      const batch = batches[Math.min(calls, batches.length - 1)];
+      calls += 1;
+      return { generation, ...batch };
+    }
+    const settled = await pollTurnTerminal(request, {
+      generation,
+      projectToken: "token-1",
+      conversationId,
+      turnId,
+      deadlineMs: 10_000,
+      controller: "codex",
+      model: "test-model",
+      effort: "low",
+      prompt: `echo ${marker}`,
+    });
+    expect(calls).toBe(5);
+    expect(seenCursors[0]).toBe(null);
+    // The returned cursor advances only after its batch was processed.
+    expect(seenCursors[1]).toEqual(cursor1);
+    expect(seenCursors[2]).toEqual(cursor2);
+    expect(settled.terminal?.nativeOutcome).toBe("completed");
+    expect(settled.toolUsed).toBe(null);
+    expect(settled.blocked).toBe(null);
+    // Replayed part once, genuinely new part kept, delayed middle in seq order.
+    expect(settled.text).toBe(`pre-${marker}post`);
+    expect(countOccurrences(settled.text, "pre-")).toBe(1);
+    expect(countOccurrences(settled.text, marker)).toBe(1);
+    expect(countOccurrences(settled.text, "post")).toBe(1);
+  });
+
+  it("entrypoint identity survives percent-encoded paths via real subprocesses", async () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), "cho acceptance probe-"));
+    dirs.push(base);
+    const scriptsDir = path.join(base, "scripts");
+    const libDir = path.join(base, "src", "lib");
+    fs.mkdirSync(scriptsDir, { recursive: true });
+    fs.mkdirSync(libDir, { recursive: true });
+    // Preserve the scripts/../src/lib layout so the probe's reducer import resolves.
+    fs.copyFileSync(
+      fileURLToPath(new URL("../scripts/native-acceptance.mjs", import.meta.url)),
+      path.join(scriptsDir, "native-acceptance.mjs"),
+    );
+    fs.copyFileSync(
+      fileURLToPath(new URL("./lib/native-chat-state.ts", import.meta.url)),
+      path.join(libDir, "native-chat-state.ts"),
+    );
+    const probeDst = path.join(scriptsDir, "native-acceptance.mjs");
+    expect(probeDst).toContain(" ");
+    // --help exercises the fixed entrypoint identity (spaces percent-encode
+    // in import.meta.url); zero providers start on either path.
+    const help = await execFileAsync(process.execPath, [probeDst, "--help"], { timeout: 30_000 });
+    expect(help.stdout).toContain("--allow-live");
+    const refusal = await execFileAsync(process.execPath, [probeDst], { timeout: 30_000 })
+      .then(() => null)
+      .catch((err) => err);
+    expect(refusal?.code).toBe(2);
+    expect(String(refusal?.stdout ?? "")).toContain("refused");
   });
 });
