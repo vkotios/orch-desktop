@@ -21,8 +21,18 @@
 //      session WITHOUT supplying the marker again
 //   6. verify native identity preserved and the replay contains the marker
 //      text exactly once in the continuation reply
-// Close owned resources in finally. Record failure/uncertainty honestly and
-// never mark pass when the model ignores the scenario.
+//   7. verify the hydrated assistant/user message texts hold the right turn
+//      count and content (no dropped/duplicated text), then close owned
+//      resources
+// Both turns send role "review" (the no-tools role) with an effort taken
+// from the prepared catalogue entry's supportedEfforts (Codex default low).
+// Owned close outcomes gate the verdict: a failed or uncertain owned close
+// prevents PASS, is recorded, and retains the fixture location instead of
+// deleting uncertain state. Record failure/uncertainty honestly and never
+// mark pass when the model ignores the scenario. The receipt context also
+// records the probe source (owning-tree commit/dirty status plus probe
+// digest), derived from this module's location and reported as unknown when
+// unavailable.
 //
 // Deterministic tests inject a fixture host seam (openHost) instead of the
 // real host. Seam tests cover orchestration only and do NOT prove live
@@ -33,6 +43,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { PassThrough } from "node:stream";
@@ -49,6 +60,13 @@ export const CONTROLLERS = ["codex", "claude"];
 // Terminal provider outcomes (mirrors native-chat.mjs TERMINAL). Kept local
 // so this probe never imports provider internals beyond the host boundary.
 const TERMINAL_OUTCOMES = new Set(["completed", "failed", "interrupted", "unknown"]);
+// Real direct_chat_send contracts (mirrors native-chat.mjs ROLES/EFFORTS and
+// claude-chat-actor.mjs TOOLS/EFFORTS). Codex requires a role and an effort;
+// Claude requires a role (review is the no-tools role) with an optional
+// effort that must come from the catalogue entry's supportedEfforts.
+export const SEND_ROLES = ["implement", "review"];
+export const CODEX_SEND_EFFORTS = ["low", "medium", "high", "xhigh"];
+export const CLAUDE_SEND_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
 // Commands this probe will never send: no ownership/fence clearing and no
 // proof-weakening recovery shortcuts.
 const FORBIDDEN_COMMANDS = new Set([
@@ -186,6 +204,63 @@ export function countOccurrences(haystack, needle) {
   }
 }
 
+// Truthful source provenance for the receipt context: the candidate commit
+// and dirty status of the source tree that owns THIS module, plus a digest
+// of this probe file. Derived from the module's own location, never the
+// caller cwd. Anything unavailable is reported as "unknown", never invented.
+export async function describeProbeSource() {
+  const out = { root: "unknown", commit: "unknown", dirty: "unknown", probeDigest: "unknown" };
+  let file = null;
+  try {
+    file = fileURLToPath(import.meta.url);
+  } catch {
+    return out;
+  }
+  try {
+    out.probeDigest = crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+  } catch {
+    // Digest stays unknown; never invent one.
+  }
+  let cursor = null;
+  try {
+    cursor = path.dirname(file);
+  } catch {
+    return out;
+  }
+  let root = null;
+  for (let guard = 0; guard < 32; guard += 1) {
+    let hit = false;
+    try {
+      hit = fs.existsSync(path.join(cursor, ".git"));
+    } catch {
+      hit = false;
+    }
+    if (hit) {
+      root = cursor;
+      break;
+    }
+    const parent = path.dirname(cursor);
+    if (parent === cursor) break;
+    cursor = parent;
+  }
+  if (root === null) return out;
+  out.root = root;
+  try {
+    const head = await withTimeout(execFileAsync("git", ["rev-parse", "HEAD"], { cwd: root }), 10_000, "probe source commit");
+    const commit = String(head?.stdout ?? "").trim();
+    if (/^[0-9a-f]{40}$/i.test(commit)) out.commit = commit;
+  } catch {
+    // Commit stays unknown.
+  }
+  try {
+    const status = await withTimeout(execFileAsync("git", ["status", "--porcelain"], { cwd: root }), 10_000, "probe source status");
+    out.dirty = String(status?.stdout ?? "").trim().length > 0;
+  } catch {
+    // Dirty stays unknown.
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------------------
 // Owned fixture: isolated temporary Git project + SQLite + liveness state.
 // Never touches the user's default app database, saved projects, or
@@ -242,7 +317,7 @@ export function assertFreshOutput(outputPath) {
 // Real host seam: drives the REAL product host over piped v1 NDJSON frames.
 // Only the host starts native clients. Returns { request, close }.
 // ---------------------------------------------------------------------------
-export async function openRealHost({ generation, databasePath, deadlineMs = DEFAULT_OP_TIMEOUT_MS }) {
+export async function openRealHost({ generation, databasePath, deadlineMs = DEFAULT_OP_TIMEOUT_MS, openClient } = {}) {
   if (!isUuid(generation)) fail("USAGE", "openRealHost requires a UUID generation");
   if (typeof databasePath !== "string" || databasePath.length === 0) {
     fail("USAGE", "openRealHost requires an explicit databasePath");
@@ -257,7 +332,17 @@ export async function openRealHost({ generation, databasePath, deadlineMs = DEFA
   const errorChunks = [];
   const errorStream = new PassThrough();
   errorStream.on("data", (chunk) => errorChunks.push(chunk));
-  const done = runHost({ input, output, error: errorStream, generation, databasePath });
+  // openClient injects a deterministic native peer through the REAL host and
+  // service (same framing, same SQLite persistence) for tests that must not
+  // start a live provider. Omitted in live runs, where the host owns clients.
+  const done = runHost({
+    input,
+    output,
+    error: errorStream,
+    generation,
+    databasePath,
+    ...(typeof openClient === "function" ? { openClient } : {}),
+  });
   done.catch(() => {});
   let seq = 0;
   const pending = new Map();
@@ -413,22 +498,71 @@ async function prepareProject(request, { generation, projectDir, controller }) {
   return { validated, prepared, projectToken: validated.projectToken };
 }
 
-function requireCatalogueModel(prepared, model) {
-  const ids = catalogueIds(prepared?.models);
-  if (!ids.includes(model)) {
-    fail("MODEL_ABSENT", `requested model ${model} is absent from the prepared project catalogue; refusing without fallback`, {
-      catalogue: ids,
-    });
-  }
-  return ids;
+function catalogueEntry(models, model) {
+  if (!Array.isArray(models)) return null;
+  return models.find((entry) => entry !== null && typeof entry === "object" && entry.id === model) ?? null;
 }
 
-async function sendTurn(request, { generation, projectToken, controller, conversationId, turnId, prompt, model }) {
-  const base = { generation, projectToken, sessionId: conversationId, turnId, prompt, model };
-  if (controller === "claude") {
-    return request("direct_chat_send", base);
+function requireCatalogueModel(prepared, model) {
+  const models = Array.isArray(prepared?.models) ? prepared.models : [];
+  const entry = catalogueEntry(models, model);
+  if (entry === null) {
+    fail("MODEL_ABSENT", `requested model ${model} is absent from the prepared project catalogue; refusing without fallback`, {
+      catalogue: catalogueIds(models),
+    });
   }
-  return request("direct_chat_send", { ...base, role: "implement", effort: "low" });
+  return entry;
+}
+
+// Effort comes from the catalogue entry's supportedEfforts when the service
+// reports them (Claude metadata does); otherwise the Codex default "low".
+// Never falls back to another model: an entry with no probe-usable effort
+// fails the same way an absent model does.
+function selectSendEffort(entry, controller) {
+  const allowed = controller === "claude" ? CLAUDE_SEND_EFFORTS : CODEX_SEND_EFFORTS;
+  const supported = Array.isArray(entry?.supportedEfforts)
+    ? entry.supportedEfforts.filter((value) => typeof value === "string" && allowed.includes(value))
+    : [];
+  if (supported.length > 0) return supported[0];
+  if (Array.isArray(entry?.supportedEfforts) && entry.supportedEfforts.length > 0) {
+    fail("MODEL_ABSENT", `model ${entry.id} supports no probe-usable effort; refusing without fallback`, {
+      supportedEfforts: entry.supportedEfforts,
+    });
+  }
+  return "low";
+}
+
+// Review is the no-tools role on both controllers (read-only tools); the
+// marker turn must never request tool use.
+const SEND_ROLE = "review";
+
+async function sendTurn(request, { generation, projectToken, controller, conversationId, turnId, prompt, model, effort }) {
+  return request("direct_chat_send", {
+    generation,
+    projectToken,
+    sessionId: conversationId,
+    turnId,
+    prompt,
+    model,
+    role: SEND_ROLE,
+    effort: effort ?? selectSendEffort(catalogueEntry(null, model), controller),
+  });
+}
+
+// Hydrated transcript content: the poll stream alone cannot prove the
+// durable history is complete, so the marker is also counted in the actual
+// assistant/user message texts after restart and after continuation.
+function roleMessageTexts(messages, role) {
+  if (!Array.isArray(messages)) return "";
+  return messages
+    .filter((entry) => entry !== null && typeof entry === "object" && entry.role === role && typeof entry.text === "string")
+    .map((entry) => entry.text)
+    .join("\n");
+}
+
+function countRoleMessages(messages, role) {
+  if (!Array.isArray(messages)) return 0;
+  return messages.filter((entry) => entry !== null && typeof entry === "object" && entry.role === role).length;
 }
 
 async function pollTurnTerminal(request, { generation, projectToken, conversationId, turnId, deadlineMs }) {
@@ -478,6 +612,7 @@ export async function runAcceptanceProbe({ openHost, controller, model, fixture,
     node: process.version,
     platform: process.platform,
     markerLength: typeof fixture.marker === "string" ? fixture.marker.length : 0,
+    source: await describeProbeSource(),
   };
   const failReceipt = (reason, extra = {}) => ({
     ...context,
@@ -502,17 +637,23 @@ export async function runAcceptanceProbe({ openHost, controller, model, fixture,
       projectDir: fixture.projectDir,
       controller,
     });
-    let catalogue;
+    let effort1;
     try {
-      catalogue = requireCatalogueModel(opened.prepared, model);
+      effort1 = selectSendEffort(requireCatalogueModel(opened.prepared, model), controller);
     } catch (err) {
       if (err instanceof AcceptanceError && err.code === "MODEL_ABSENT") {
-        record(cases, "catalogue-contains-model", "fail", { catalogue: err.details?.catalogue ?? [] });
-        return failReceipt("MODEL_ABSENT", { catalogue: err.details?.catalogue ?? [] });
+        record(cases, "catalogue-contains-model", "fail", {
+          catalogue: err.details?.catalogue ?? [],
+          supportedEfforts: err.details?.supportedEfforts ?? null,
+        });
+        return failReceipt("MODEL_ABSENT", {
+          catalogue: err.details?.catalogue ?? [],
+          supportedEfforts: err.details?.supportedEfforts ?? null,
+        });
       }
       throw err;
     }
-    record(cases, "catalogue-contains-model", "pass", { catalogueSize: catalogue.length });
+    record(cases, "catalogue-contains-model", "pass", { role: SEND_ROLE, effort: effort1 });
     const token1 = opened.projectToken;
     record(cases, "validate-trust-prepare", "pass", { controller });
     const turn1 = crypto.randomUUID();
@@ -525,6 +666,7 @@ export async function runAcceptanceProbe({ openHost, controller, model, fixture,
       turnId: turn1,
       prompt: markerPrompt,
       model,
+      effort: effort1,
     });
     const ackIdentity1 = typeof ack1?.nativeThreadId === "string"
       ? { kind: "thread", value: ack1.nativeThreadId }
@@ -578,11 +720,31 @@ export async function runAcceptanceProbe({ openHost, controller, model, fixture,
       return failReceipt("NO_NATIVE_IDENTITY");
     }
     record(cases, "hydrate-before-restart", "pass", { nativeIdentityKind: identity1.kind });
-    const closed1 = await first.close();
-    first = null;
+    let closed1 = null;
+    try {
+      closed1 = await first.close();
+      first = null;
+    } catch (err) {
+      const detail = err?.message ?? String(err);
+      record(cases, "close-before-restart", "fail", { detail, thrown: true });
+      return {
+        ...failReceipt("CLOSE_UNCLEAN", {
+          closeDetail: detail,
+          fixtureRoot: fixture.root,
+          databasePath: fixture.databasePath,
+          retainFixture: true,
+        }),
+        generations: [generation1],
+      };
+    }
     if (closed1?.closedCleanly !== true) {
       record(cases, "close-before-restart", "fail", { detail: closed1?.detail ?? null });
-      return failReceipt("CLOSE_UNCLEAN", { closeDetail: closed1?.detail ?? null });
+      return failReceipt("CLOSE_UNCLEAN", {
+        closeDetail: closed1?.detail ?? null,
+        fixtureRoot: fixture.root,
+        databasePath: fixture.databasePath,
+        retainFixture: true,
+      });
     }
     record(cases, "close-before-restart", "pass", {});
 
@@ -594,9 +756,10 @@ export async function runAcceptanceProbe({ openHost, controller, model, fixture,
       projectDir: fixture.projectDir,
       controller,
     });
-    const catalogue2 = requireCatalogueModel(reopened.prepared, model);
-    void catalogue2;
-    record(cases, "reopen-prepare", "pass", { controller });
+    // The reopened catalogue gates the continuation the same way: absent
+    // model or unusable effort fails without fallback.
+    const effort2 = selectSendEffort(requireCatalogueModel(reopened.prepared, model), controller);
+    record(cases, "reopen-prepare", "pass", { controller, role: SEND_ROLE, effort: effort2 });
     const token2 = reopened.projectToken;
     const listed = await second.request("native_chat_list_conversations", {
       generation: generation2,
@@ -624,6 +787,25 @@ export async function runAcceptanceProbe({ openHost, controller, model, fixture,
       return failReceipt("IDENTITY_CHANGED");
     }
     record(cases, "identity-preserved", "pass", { nativeIdentityKind: identity2.kind });
+    // The durable history after restart must already hold exactly one turn:
+    // the user prompt carrying the marker and one assistant echo of it.
+    {
+      const messages = hydrate2?.conversation?.messages;
+      const userMarkers = countOccurrences(roleMessageTexts(messages, "user"), marker);
+      const assistantMarkers = countOccurrences(roleMessageTexts(messages, "assistant"), marker);
+      const userCount = countRoleMessages(messages, "user");
+      const assistantCount = countRoleMessages(messages, "assistant");
+      if (userMarkers !== 1 || assistantMarkers !== 1 || userCount !== 1 || assistantCount !== 1) {
+        record(cases, "hydrate-content-before-restart", "fail", {
+          userMarkers,
+          assistantMarkers,
+          userCount,
+          assistantCount,
+        });
+        return failReceipt("HYDRATE_MISMATCH", { userMarkers, assistantMarkers, userCount, assistantCount });
+      }
+      record(cases, "hydrate-content-before-restart", "pass", { userCount, assistantCount });
+    }
     const draft = await second.request("native_chat_get_draft", {
       generation: generation2,
       projectToken: token2,
@@ -646,6 +828,7 @@ export async function runAcceptanceProbe({ openHost, controller, model, fixture,
       turnId: turn2,
       prompt: resumePrompt,
       model,
+      effort: effort2,
     });
     const settled2 = await pollTurnTerminal(second.request, {
       generation: generation2,
@@ -664,7 +847,7 @@ export async function runAcceptanceProbe({ openHost, controller, model, fixture,
       });
       return failReceipt("CONTINUATION_NOT_COMPLETED");
     }
-    record(cases, "continue-no-tools", "pass", { outcome: "completed" });
+    record(cases, "continue-no-tools", "pass", { outcome: "completed", role: SEND_ROLE, effort: effort2 });
     const markerCount2 = countOccurrences(settled2.text, marker);
     const hydrate3 = await second.request("native_chat_hydrate_conversation", {
       generation: generation2,
@@ -690,13 +873,65 @@ export async function runAcceptanceProbe({ openHost, controller, model, fixture,
       });
     }
     record(cases, "replay-marker-once", "pass", { markerCount: markerCount2 });
-    const closed2 = await second.request("native_chat_close", {
-      generation: generation2,
-      projectToken: token2,
-    }).then(() => ({ closedCleanly: true })).catch((err) => ({ closedCleanly: false, detail: err?.message ?? String(err) }));
-    // Owned resources are still released by the host close in finally; a
-    // failed service-level close is recorded as uncertainty, not pass/fail.
-    record(cases, "close-after-continue", closed2.closedCleanly ? "pass" : "fail", { ...closed2, advisory: true });
+    // The durable history after continuation must hold both turns with no
+    // dropped or duplicated text: one marker in the first user prompt, one
+    // marker in each assistant reply.
+    {
+      const messages = hydrate3?.conversation?.messages;
+      const userMarkers = countOccurrences(roleMessageTexts(messages, "user"), marker);
+      const assistantMarkers = countOccurrences(roleMessageTexts(messages, "assistant"), marker);
+      const userCount = countRoleMessages(messages, "user");
+      const assistantCount = countRoleMessages(messages, "assistant");
+      if (userMarkers !== 1 || assistantMarkers !== 2 || userCount !== 2 || assistantCount !== 2) {
+        record(cases, "hydrate-content-after-continue", "fail", {
+          userMarkers,
+          assistantMarkers,
+          userCount,
+          assistantCount,
+        });
+        return failReceipt("HYDRATE_MISMATCH", { userMarkers, assistantMarkers, userCount, assistantCount });
+      }
+      record(cases, "hydrate-content-after-continue", "pass", { userCount, assistantCount });
+    }
+    // Owned close outcomes gate the verdict: a failed or uncertain owned
+    // close prevents PASS, is recorded, and retains the fixture location
+    // instead of deleting state whose resource closure is unknown. No forced
+    // process kill happens here; the host close below releases owned pipes.
+    const closeUnclean = (detail) => ({
+      ...failReceipt("CLOSE_UNCLEAN", {
+        closeDetail: detail,
+        fixtureRoot: fixture.root,
+        databasePath: fixture.databasePath,
+        retainFixture: true,
+      }),
+      nativeIdentityKind: identity1.kind,
+      generations: [generation1, generation2],
+    });
+    try {
+      await second.request("native_chat_close", {
+        generation: generation2,
+        projectToken: token2,
+      });
+      record(cases, "close-after-continue", "pass", {});
+    } catch (err) {
+      const detail = err?.message ?? String(err);
+      record(cases, "close-after-continue", "fail", { detail });
+      return closeUnclean(detail);
+    }
+    try {
+      const hostClosed = await second.close();
+      second = null;
+      if (hostClosed?.closedCleanly !== true) {
+        const detail = hostClosed?.detail ?? "host close reported unclean";
+        record(cases, "host-close", "fail", { detail });
+        return closeUnclean(detail);
+      }
+      record(cases, "host-close", "pass", {});
+    } catch (err) {
+      const detail = err?.message ?? String(err);
+      record(cases, "host-close", "fail", { detail, thrown: true });
+      return closeUnclean(detail);
+    }
     return {
       ...context,
       finishedAt: new Date().toISOString(),
@@ -711,18 +946,21 @@ export async function runAcceptanceProbe({ openHost, controller, model, fixture,
     }
     return failReceipt("UNEXPECTED", { errorDetail: err?.message ?? String(err) });
   } finally {
-    if (first !== null) {
+    // Early-fail paths return with a host still open. Best-effort cleanup
+    // records its outcome in the shared cases list (visible on the fail
+    // receipt); the verdict is already fail so nothing here can pass.
+    for (const slot of ["first", "second"]) {
+      const handle = slot === "first" ? first : second;
+      if (handle === null) continue;
       try {
-        await first.close();
-      } catch {
-        // Close is best-effort here; the receipt already records the outcome.
-      }
-    }
-    if (second !== null) {
-      try {
-        await second.close();
-      } catch {
-        // Same as above.
+        const outcome = await handle.close();
+        record(cases, "host-close-finally", outcome?.closedCleanly === true ? "pass" : "fail", { slot });
+        if (slot === "first") first = null;
+        else second = null;
+      } catch (err) {
+        record(cases, "host-close-finally", "fail", { slot, detail: err?.message ?? String(err) });
+        if (slot === "first") first = null;
+        else second = null;
       }
     }
   }
@@ -786,10 +1024,16 @@ export async function runAcceptanceCli(argv, deps = {}) {
       cases: [],
     };
   } finally {
-    try {
-      fixture.cleanup();
-    } catch {
-      // Temp cleanup is best-effort; receipt already recorded.
+    if (receipt?.retainFixture === true) {
+      // Owned resources did not close cleanly: leave the fixture in place
+      // and point at it (fixtureRoot/databasePath in the receipt) instead of
+      // deleting state whose resource closure is uncertain.
+    } else {
+      try {
+        fixture.cleanup();
+      } catch {
+        // Temp cleanup is best-effort; receipt already recorded.
+      }
     }
   }
   const body = `${JSON.stringify(receipt, null, 2)}\n`;

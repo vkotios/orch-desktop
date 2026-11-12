@@ -39,7 +39,10 @@ happens in this worktree without controller review and authorization.
   sessions. No arbitrary project path is accepted: the probe owns its fixture.
 - Catalogue gate: the requested `--model` must be present in the catalogue
   returned by `native_chat_prepare_project`. Absence fails the receipt as
-  `MODEL_ABSENT` with the catalogue recorded. No fallback, ever.
+  `MODEL_ABSENT` with the catalogue recorded. No fallback, ever. Turns send
+  role `review` (the no-tools role on both controllers) with an effort taken
+  from the catalogue entry's `supportedEfforts` (Codex default `low`); an
+  entry with no probe-usable effort fails the same way an absent model does.
 - Marker discipline: turn 1 asks for an exact single-line marker echo with no
   tools; turn 2 asks for the marker from the previous reply without
   supplying it again. Any approval event fails honestly (`APPROVAL_BLOCKED`);
@@ -48,26 +51,45 @@ happens in this worktree without controller review and authorization.
   `nativeSessionUuid`) recorded before restart must equal the identities after
   reopen and after continuation. No `native_chat_acknowledge_stranded`,
   draft-conflict resolution, or ownership/fence clearing is ever sent.
+- Hydrated content: after restart the hydrated messages must hold exactly one
+  turn (user prompt plus one assistant echo, marker once in each); after
+  continuation they must hold both turns (marker once in user text, twice in
+  assistant text). Live poll text alone cannot prove this, so a mismatch
+  fails the receipt as `HYDRATE_MISMATCH`.
 - Pass requires: completed terminal outcomes for both turns, marker present
   in turn 1, draft round-trip equal, conversation listed after restart,
-  identity preserved twice, and exactly one marker occurrence in the
-  continuation reply.
+  identity preserved twice, exactly one marker occurrence in the
+  continuation reply, correct hydrated turn counts/content, and clean owned
+  closes (service-level `native_chat_close` plus host shutdown).
+- Close gating: an owned close failure or uncertainty (returned
+  `closedCleanly: false` or a thrown close) prevents `pass`, is recorded on
+  its case, and fails the receipt as `CLOSE_UNCLEAN` (pre-restart closings
+  use the same reason). The fixture location (`fixtureRoot`, `databasePath`)
+  is recorded and cleanup is skipped so uncertain state is retained, not
+  deleted. No forced process kill happens on unproven identity.
 - Bounded: every host request and each poll-to-terminal loop is bounded by
-  `--deadline-ms` (default 120000, range 5000–600000). Owned resources close
-  in `finally`; the receipt records clean/unclean closes and any uncertainty.
+  `--deadline-ms` (default 120000, range 5000–600000). Early-fail paths still
+  attempt cleanup; their outcomes are appended as `host-close-finally` cases
+  on the (already failing) receipt.
 - Receipt: JSON written with mode `0600` to a fresh path (existing files are
-  refused, never overwritten). Records tool version, runtime context, case
-  list, catalogue basis, and failure reasons — never secrets or raw
-  credentials. Keep receipts in a private directory (outside the repo) and do
-  not commit them. The probe does not sign, install, publish, or release.
+  refused, never overwritten). Records tool version, runtime context, probe
+  source (owning-tree commit/dirty status plus probe digest, `unknown` when
+  unavailable — never invented), case list, catalogue basis, and failure
+  reasons — never secrets or raw credentials. Keep receipts in a private
+  directory (outside the repo) and do not commit them. The probe does not
+  sign, install, publish, or release.
 
 ## Limits
 
 - Live paths are untested by the implementer: deterministic tests in
   `apps/desktop/src/native-acceptance.test.mjs` inject a fixture host seam
   and prove orchestration only (refusal, catalogue gate, bounds, fixture
-  ownership, two-generation flow, honest failure). They do not prove live
-  acceptance.
+  ownership, two-generation flow, honest failure). One test additionally
+  drives the two-generation flow through the REAL host/service with an
+  injected deterministic Codex peer (`openClient` passthrough: same NDJSON
+  framing, same SQLite durable store, zero provider starts), which also
+  exercises the hydrated-content checks against real persistence. Neither
+  proves live acceptance.
 - A `fail` receipt on a live run means the scenario did not verify — for
   example the model ignored the no-tools instruction, which the receipt
   records (`MARKER_NOT_ECHOED`, `MARKER_NOT_REPLAYED`, or
