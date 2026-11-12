@@ -11,8 +11,8 @@
     "typecheck": "pass",
     "webBuild": "pass",
     "releaseScanUnexpectedHits": 0,
-    "dependencyAuditVulnerabilities": 0,
-    "stagedSourceFiles": 116
+    "stagedSourceFiles": 116,
+    "npmAuditVulnerabilities": 0
   },
   "liveNativeProbes": {
     "codex": {
@@ -36,5 +36,12 @@
   },
   "hostedCI": "pending",
   "newInstallerQualification": "pending",
-  "releaseAccepted": false
+  "releaseAccepted": false,
+  "existingCargoAlert": {
+    "package": "glib",
+    "fixedVersion": "0.20.0",
+    "windowsTargetDependency": false,
+    "evidence": "cargo tree --locked --target x86_64-pc-windows-msvc -i glib: nothing to print",
+    "disposition": "Retained existing non-Windows dependency alert; non-Windows product support remains unqualified"
+  }
 }

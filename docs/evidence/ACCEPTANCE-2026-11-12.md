@@ -38,3 +38,8 @@ Action tags questioned from stale model knowledge were verified directly in the
 official action repositories; no downgrade was needed.
 
 Private traces, fixture paths and raw provider transcripts remain private.
+
+Existing Cargo lockfile alert: `glib <0.20.0` (GitHub Dependabot #2).
+The Windows x64 target has no `glib` dependency (`cargo tree --locked --target
+x86_64-pc-windows-msvc -i glib` prints no dependency). Keep this as a non-Windows
+dependency follow-up; the zero-vulnerability statement above refers to npm.

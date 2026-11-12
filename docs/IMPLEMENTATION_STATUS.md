@@ -15,7 +15,7 @@ restart probes pass with native identity, history, draft and continuation intact
 They restart the source host, not an installed desktop window.
 
 Local verification: 843 desktop + 44 shared tests, 80 browser checks, 15 Rust
-tests, 106 coordinator checks, typecheck, production build, zero dependency
+tests, 106 coordinator checks, typecheck, production build, zero npm dependency
 vulnerabilities and zero unexpected release-scan hits. All 116 staged runtime
 files match source. The desktop suite passed with two workers after the initial
 concurrent build/test run caused three five-second timeouts; assertions and
