@@ -1,0 +1,59 @@
+{
+  "date": "2026-11-12",
+  "sourceCommit": "be494183aee1eeac9947e53e0b8e204c6211b71f",
+  "branch": "codex/cho-v01-acceptance-completion",
+  "checks": {
+    "desktop": 843,
+    "shared": 44,
+    "browser": 80,
+    "rust": 15,
+    "coordinator": 106,
+    "typecheck": "pass",
+    "webBuild": "pass",
+    "releaseScanUnexpectedHits": 0,
+    "stagedSourceFiles": 116,
+    "npmAuditVulnerabilities": 0
+  },
+  "liveNativeProbes": {
+    "codex": {
+      "result": "pass",
+      "model": "gpt-6-sol",
+      "source": "be494183aee1eeac9947e53e0b8e204c6211b71f",
+      "sourceDirty": false,
+      "probeDigest": "a9dbd0b2f7679d37e6d1cb655ee744a17178dc950d1c5889a3977aaab2325cac",
+      "cases": 17,
+      "scope": "Owned source host-generation/native-client restart; not installed app process qualification"
+    },
+    "claude": {
+      "result": "pass",
+      "model": "sonnet",
+      "source": "be494183aee1eeac9947e53e0b8e204c6211b71f",
+      "sourceDirty": false,
+      "probeDigest": "a9dbd0b2f7679d37e6d1cb655ee744a17178dc950d1c5889a3977aaab2325cac",
+      "cases": 17,
+      "scope": "Owned source host-generation/native-client restart; not installed app process qualification"
+    }
+  },
+  "hostedCI": {
+    "head": "9f6836b332d7a5e77256df9f64bbb303c26001a5",
+    "desktop": "pass",
+    "coordinatorMatrix": "pass",
+    "candidateBuildAndReceipt": "pass",
+    "installedSmoke": "failed before installation: invalid IO.Char[] type; corrected char[] pending rerun"
+  },
+  "newInstallerQualification": "pending",
+  "releaseAccepted": false,
+  "existingCargoAlert": {
+    "package": "glib",
+    "fixedVersion": "0.20.0",
+    "windowsTargetDependency": false,
+    "evidence": "cargo tree --locked --target x86_64-pc-windows-msvc -i glib: nothing to print",
+    "disposition": "Retained existing non-Windows dependency alert; non-Windows product support remains unqualified"
+  },
+  "smokeHelperRepair": {
+    "sha256": "23e7a7460860f2f4590e90bf8b930433871bc8c9f48da7af0c0d4ea31e38b45f",
+    "validation": "31 static types resolved and four containment cases pass on Windows PowerShell 5.1 and PowerShell 7.6.9",
+    "independentReview": "GLM: approve; clean containment",
+    "hostedRerun": "pending"
+  }
+}

@@ -1,11 +1,32 @@
 # CHO Desktop v0.1 — Implementation Plan
 
 Date: 2026-10-30  
-Status: Foundation, native Codex/Claude debug conversations and clarification accepted locally; durable recovery and release qualification remain open
+Status: Completion candidate locally verified; final hosted CI and release acceptance remain open
 Product contract: [PRODUCT_SPEC.md](PRODUCT_SPEC.md), initially committed as `d9cc7ef`  
 Planning branch: `codex/cho-v01-plan`; implementation branch: `codex/cho-v01-foundation`
 
+## Current closeout amendment — 2026-11-12
+
+The completion candidate and measured checks are recorded in
+[evidence](evidence/COMPLETION-2026-11-12.json) and the
+[AC-01–15 acceptance ledger](evidence/ACCEPTANCE-2026-11-12.md).
+PR #2 is merged; current work is on `codex/cho-v01-acceptance-completion`.
+Current implementation slices are complete and reviewed. Run final hosted CI,
+repair concrete failures, then qualify the remaining real-user release journeys.
+Do not reopen historical inventories or expand scope for nonblocking test/doc
+follow-ups. Muse Spark 1.3 and Vibe GLM 5.3 Flash remain the approved workforce;
+DeepSeek is revoked. Product requirements and AC-01–15 remain unchanged.
+Signing, publication and merging the new completion PR require owner direction.
+
 ## Current execution amendment — 2026-11-05
+
+Owner update (2026-11-12): remaining implementation and acceptance work now uses
+Muse CLI `muse-spark-1.3` and Vibe CLI `zai-glm-5-3-flash`. The owner
+revoked DeepSeek after a nonprogress incident and host restart. Follow the
+[completion package](work-packages/CHO-COMPLETE-20261112.md) and its portable
+roster. This replaces older development-worker assignments for the remaining
+work. Inspect semantic progress as well as process liveness. Runtime controller
+candidates and AC-01–15 remain unchanged.
 
 Current delivery assessment (2026-11-12): see
 [implementation status](IMPLEMENTATION_STATUS.md#current-delivery-assessment--2026-11-12)

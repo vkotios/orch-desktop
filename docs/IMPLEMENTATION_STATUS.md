@@ -1,5 +1,36 @@
 # CHO Desktop implementation status
 
+## Current completion candidate — 2026-11-12
+
+PR #2 was merged as `cd86a0f`. The follow-on completion branch is
+`codex/cho-v01-acceptance-completion`; verified application source is `be49418`.
+Muse `muse-spark-1.3` and Vibe `zai-glm-5-3-flash` completed the current slices;
+DeepSeek is disabled in the portable roster and must not be relaunched.
+
+The candidate includes draft-switch/empty-clear and short-viewport fixes,
+80 rendered Chromium checks, the Claude hydrate/export wire repair, a reusable
+opt-in native restart probe, source-bound Windows artifact receipts, and CI
+browser plus installed-NSIS smoke checks. Both real Codex and Claude owned
+restart probes pass with native identity, history, draft and continuation intact.
+They restart the source host, not an installed desktop window.
+
+Local verification: 843 desktop + 44 shared tests, 80 browser checks, 15 Rust
+tests, 106 coordinator checks, typecheck, production build, zero npm dependency
+vulnerabilities and zero unexpected release-scan hits. All 116 staged runtime
+files match source. The desktop suite passed with two workers after the initial
+concurrent build/test run caused three five-second timeouts; assertions and
+timeouts were not weakened. Final CI and new installer receipts must come from
+this candidate's hosted run, not historical binary hashes.
+
+See [completion evidence](evidence/COMPLETION-2026-11-12.json) and
+[acceptance ledger](evidence/ACCEPTANCE-2026-11-12.md). Remaining release
+acceptance: real tool/approval and delegated-change journeys on the proposed
+release, installed WebView2/keyboard/OS scaling, clean-Windows install/upgrade/
+uninstall, and signing/publication decisions. The complete v0.1 plan is not yet
+accepted. No additional feature scope or specification change is introduced.
+
+## Historical delivery assessments
+
 ## Current delivery assessment — 2026-11-12
 
 The complete committed application tree, Cursor delivery/corrections, controller

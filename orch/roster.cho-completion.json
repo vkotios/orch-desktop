@@ -1,0 +1,38 @@
+{
+  "_comment": "Active completion pair: Muse muse-spark-1.3 and Vibe zai-glm-5-3-flash. Owner revoked DeepSeek for remainder on 2026-11-12; historical entries retained inactive.",
+  "models": [
+    {
+      "cli": "vibe",
+      "model": "zai-glm-5-3-flash",
+      "family": "glm",
+      "lane": "cloud",
+      "workloads": [
+        "implement",
+        "review"
+      ],
+      "cost_class": "subscription",
+      "playbook_note": "Owner requested 2026-11-12 after DeepSeek nonprogress incident. Exact native Vibe route; no substitution. Use bounded concrete handoffs and monitor semantic progress, not only process liveness."
+    },
+    {
+      "cli": "muse",
+      "model": "muse-spark-1.3",
+      "family": "meta",
+      "lane": "cloud",
+      "workloads": [
+        "implement",
+        "review"
+      ],
+      "cost_class": "subscription",
+      "playbook_note": "Owner-requested completion implementer/reviewer, 2026-11-12. Qualify actual model and task evidence; use a different model for independent review."
+    },
+    {
+      "cli": "vibe",
+      "model": "deepseek-v4-1-flash-1017",
+      "family": "deepseek",
+      "lane": "cloud",
+      "workloads": [],
+      "cost_class": "subscription",
+      "playbook_note": "Owner disabled 2026-11-12 after nonprogress loops and host restart. Do not launch for remaining work. Retained for historical provenance only."
+    }
+  ]
+}

@@ -189,7 +189,9 @@ export function NativeChat() {
       if (!mounted.current || selectedRef.current !== conversationId) return;
       const prior = draftMetaRef.current.get(conversationId) ?? { version: 0 };
       // Keep in-flight save chain/timers and any newer local edit across load.
-      if (typeof prior.pendingText === "string" && prior.pendingText.length > 0) {
+      // Every pending string is a deliberate edit, including the empty clear:
+      // older host state must not replace a local pending clear.
+      if (typeof prior.pendingText === "string") {
         setDraft(prior.pendingText);
         draftMetaRef.current.set(conversationId, {
           ...prior,
@@ -488,13 +490,21 @@ export function NativeChat() {
       cancelDraftTimer(conversationId);
       return;
     }
+    // cancelDraftTimer clears pendingText, so capture the debounced edit first:
+    // switching chats must not drop a draft that was typed but not yet written.
+    // Every captured string is a deliberate edit, including the empty clear.
+    const pending = draftMetaRef.current.get(conversationId)?.pendingText;
     cancelDraftTimer(conversationId);
     const meta = draftMetaRef.current.get(conversationId) ?? { version: 0 };
     await (meta.chain ?? Promise.resolve()).catch(() => {});
     const latest = draftMetaRef.current.get(conversationId) ?? meta;
+    // A pending edit queued while the chain ran is newer than the captured one
+    // and wins; the captured edit wins over the composer fallback.
     const text = typeof latest.pendingText === "string"
       ? latest.pendingText
-      : (selectedRef.current === conversationId ? draft : null);
+      : typeof pending === "string"
+        ? pending
+        : (selectedRef.current === conversationId ? draft : null);
     if (typeof text !== "string") return;
     const session = sessionsRef.current.find((s) => s.id === conversationId);
     try {

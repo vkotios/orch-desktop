@@ -26,3 +26,9 @@ apps/desktop/src-tauri/.runtime/
 # Host-built coordinator macOS process helper
 orch/native/darwin-processes
 orch/native/darwin-processes.[0-9]*
+
+# Playwright rendered-journey outputs (local evidence only; never commit binaries)
+apps/desktop/test-results/
+apps/desktop/playwright-report/
+apps/desktop/blob-report/
+apps/desktop/.playwright/

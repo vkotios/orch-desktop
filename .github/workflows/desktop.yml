@@ -12,7 +12,8 @@ jobs:
   desktop:
     name: Desktop (Node 24, ${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    # Headroom for the Linux-only Playwright browser install + rendered journeys.
+    timeout-minutes: 30
     strategy:
       fail-fast: true
       matrix:
@@ -34,6 +35,31 @@ jobs:
         run: npm test
       - name: Build
         run: npm run build
+      - name: Install Playwright Chromium (with dependencies)
+        # Rendered browser journeys run once, on Linux only: the Windows leg
+        # keeps unit coverage and native-windows keeps Rust coverage without a
+        # second browser install.
+        if: runner.os == 'Linux'
+        working-directory: apps/desktop
+        run: npx playwright install --with-deps chromium
+      - name: Rendered UI journeys (Playwright)
+        # Fixture Vite server on port 1427 with reuseExistingServer: false
+        # (apps/desktop/playwright.config.ts); browser coverage is Chromium
+        # only and is NOT WebView2/installed-app/OS-DPI qualification.
+        if: runner.os == 'Linux'
+        run: npm run test:ui
+      - name: Upload Playwright failure artifacts
+        # Diagnostics for failed runs only, bounded retention; missing outputs
+        # are a warning, not an error.
+        if: failure() && runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-failures-${{ matrix.os }}
+          path: |
+            apps/desktop/test-results/
+            apps/desktop/playwright-report/
+          retention-days: 7
+          if-no-files-found: warn
       - name: Public-tree release scan
         # Exact reviewed fixture/provenance exceptions; new or changed hits fail.
         run: node orch/tools/release-scan.mjs

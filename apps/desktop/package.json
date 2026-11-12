@@ -6,10 +6,12 @@
   "scripts": {
     "dev": "node scripts/dev.mjs",
     "dev:vite": "vite --port 1420 --strictPort",
+    "dev:vite:e2e": "vite --port 1427 --strictPort",
     "dev:bridge": "node server/bridge.mjs",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --port 1420 --strictPort",
-    "test": "vitest run",
+    "test": "vitest run --exclude \"e2e/**\" src",
+    "test:ui": "playwright test",
     "typecheck": "tsc --noEmit",
     "tauri": "tauri"
   },
@@ -22,6 +24,7 @@
     "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
+    "@playwright/test": "1.65.0",
     "@tauri-apps/cli": "^2.2.0",
     "@types/node": "^22.10.2",
     "@types/react": "^18.3.18",

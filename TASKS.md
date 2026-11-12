@@ -1,5 +1,7 @@
 # Desktop follow-ups
 
+Current completion candidate: [acceptance ledger and nonblocking review follow-ups](docs/evidence/ACCEPTANCE-2026-11-12.md).
+
 The accepted delivery sequence is [IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md). These items supplement its work packages.
 
 - [x] **CHO-04 / clarification capability milestone:** native Codex and Claude question/answer contracts established, including explicit answers, invalid-answer recovery and Stop. Source `926110a` passes 388 package tests, native build and independent GLM review. Built Codex question rendering/answer/Stop/recovery passes; Claude uses actual bundled-service and shared-card evidence. See [capability results](docs/work-packages/CHO-04.md).

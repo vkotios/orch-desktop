@@ -1,0 +1,174 @@
+# Windows candidate (manual + same-repo PR check, private)
+#
+# Builds a Windows install candidate (EXE/MSI/NSIS) from the EXACT commit this
+# run was created from, plus machine-readable SHA256/source/runtime receipts.
+# Triggers: manual `workflow_dispatch`, plus `pull_request` (same-repository
+# PRs only, path-filtered) so a candidate can be built and tested BEFORE the
+# workflow itself merges. There is no ref/branch input, so a dispatched run
+# can never be pointed at an arbitrary untrusted ref. No signing credentials,
+# no tags, no GitHub Release creation, no publishing step of any kind.
+# Artifacts are private workflow artifacts (private repository), retained for
+# inspection and owner acceptance only.
+#
+# Evidence produced here, kept strictly apart:
+#   - "built-local" receipt: proves which commit was built and that the staged
+#     runtime bytes match the checked-out source.
+#   - CI installed smoke: after the receipt verifies, the single NSIS
+#     installer is silently installed, smoke-run, and uninstalled on this
+#     disposable Windows runner (apps/desktop/scripts/installed-smoke.ps1).
+# Neither is clean-machine, WebView2 UI, DPI, MSI, upgrade/migration, or
+# signed-release/publication acceptance; that qualification remains a separate
+# owner-executed procedure documented in
+# docs/WINDOWS_CANDIDATE_ACCEPTANCE.md (AC-01/AC-13 remain open).
+
+name: Windows candidate (manual + PR, private)
+
+on:
+  workflow_dispatch:
+  pull_request:
+    # Candidate inputs only: doc edits alone do not spend a native build.
+    # Root and orch package manifests are included so dependency-only
+    # changes trigger a candidate build too.
+    paths:
+      - .github/workflows/windows-candidate.yml
+      - apps/desktop/**
+      - packages/acp-client/src/**
+      - orch/src/**
+      - orch/roster.example.json
+      - model-catalog.json
+      - apps/desktop/runtime-manifest.json
+      - package.json
+      - package-lock.json
+      - orch/package.json
+      - orch/package-lock.json
+
+# Read-only, no secrets: nothing here publishes or releases.
+permissions:
+  contents: read
+
+jobs:
+  candidate:
+    name: Build candidate + receipts
+    # Fork PRs are excluded: this private pipeline builds unsigned
+    # candidates from same-repository branches only.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout exact commit
+        uses: actions/checkout@v6
+        # No ref input: this checks out the exact commit the run was created
+        # from (GITHUB_SHA). The recorded SHA below must match it.
+
+      - name: Record exact commit
+        id: commit
+        shell: pwsh
+        run: |
+          $sha = (git rev-parse HEAD).Trim()
+          "sha=$sha" >> $env:GITHUB_OUTPUT
+          "HEAD_SHA=$sha" >> $env:GITHUB_ENV
+          # For pull_request runs, HEAD_SHA is the synthetic merge commit the
+          # PR checkout produced: that exact checkout is the valid candidate
+          # identity. The PR head SHA is recorded separately, from trusted
+          # workflow event metadata only, as informational receipt metadata.
+          $prHead = "${{ github.event.pull_request.head.sha }}"
+          if ($prHead) { "PR_HEAD_SHA=$prHead" >> $env:GITHUB_ENV }
+          git status --short
+          Write-Output "candidate commit: $sha"
+          if ($prHead) { Write-Output "pr head (informational): $prHead" }
+
+      - name: Set up Node.js 24
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install workspace dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Package checks
+        run: npm test
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Stage pinned runtime
+        run: node apps/desktop/scripts/prepare-runtime.mjs
+
+      - name: Rust checks
+        working-directory: apps/desktop/src-tauri
+        run: cargo test --locked
+
+      - name: Native build (EXE/MSI/NSIS)
+        # Existing pipeline: frontend build + Tauri bundle (targets "all").
+        # Deliberately NO signing variables, NO release upload, NO tag step.
+        run: npm run native:build
+
+      - name: Collect installer artifacts
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force candidate-dist | Out-Null
+          Copy-Item apps/desktop/src-tauri/target/release/bundle/msi/*.msi candidate-dist/
+          Copy-Item apps/desktop/src-tauri/target/release/bundle/nsis/*.exe candidate-dist/
+          Copy-Item apps/desktop/src-tauri/target/release/*.exe candidate-dist/ -Exclude *.pdb
+          Get-ChildItem candidate-dist/
+          if (-not (Get-ChildItem candidate-dist/ -File)) { throw 'no installer artifacts collected' }
+
+      - name: Write candidate receipt
+        shell: pwsh
+        run: |
+          $prHeadArg = @()
+          if ($env:PR_HEAD_SHA) { $prHeadArg = @('--pr-head', $env:PR_HEAD_SHA) }
+          node apps/desktop/scripts/release-receipt.mjs write --bundle-dir candidate-dist --runtime-dir apps/desktop/src-tauri/.runtime --commit $env:HEAD_SHA --out candidate-dist/candidate-receipt.json @prHeadArg
+
+      - name: Write SHASUMS256.txt
+        shell: pwsh
+        run: |
+          $receipt = Get-Content candidate-dist/candidate-receipt.json -Raw | ConvertFrom-Json
+          $lines = foreach ($a in $receipt.artifacts) { "$($a.sha256)  $($a.file)" }
+          [System.IO.File]::WriteAllLines("$PWD/candidate-dist/SHASUMS256.txt", $lines)
+
+      - name: Verify candidate receipt
+        # Self-check: every recorded artifact must exist with matching bytes,
+        # and every staged runtime file must equal its checked-out source.
+        run: node apps/desktop/scripts/release-receipt.mjs verify --receipt candidate-dist/candidate-receipt.json --bundle-dir candidate-dist --source-root . --runtime-dir apps/desktop/src-tauri/.runtime
+
+      - name: Locate NSIS installer candidate
+        # Exactly one NSIS installer (*-setup.exe) must be present; the raw
+        # app executable is not an installer and is never smoke-launched.
+        shell: pwsh
+        run: |
+          $nsis = @(Get-ChildItem -LiteralPath candidate-dist -Filter '*-setup.exe' -File)
+          if ($nsis.Count -ne 1) {
+            throw "expected exactly one NSIS installer ('*-setup.exe') in candidate-dist, found $($nsis.Count)"
+          }
+          "NSIS_INSTALLER=$($nsis[0].FullName)" >> $env:GITHUB_ENV
+          Write-Output "nsis installer: $($nsis[0].Name)"
+
+      - name: Installed smoke (disposable CI runner only)
+        # CI-only installed smoke: silent install of the exact NSIS candidate
+        # into a fresh owned directory, native-host smoke receipt, silent
+        # uninstall of only that install. No signing, no release, no
+        # developer-machine install; failures fail the step and the job (no
+        # continue-on-error). The output directory is inside candidate-dist so
+        # the always()-on upload below carries the smoke receipt even on
+        # failure; run_id + run_attempt keep the path fresh per run.
+        shell: pwsh
+        run: |
+          & ./apps/desktop/scripts/installed-smoke.ps1 `
+            -Installer "$env:NSIS_INSTALLER" `
+            -OutputDir "candidate-dist/installed-smoke-${{ github.run_id }}-${{ github.run_attempt }}"
+
+      - name: Upload candidate artifacts (private)
+        # always(): a failed installed smoke must still leave its receipt and
+        # logs retrievable. Job status stays failed (no continue-on-error).
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-candidate-${{ env.HEAD_SHA }}
+          path: candidate-dist/
+          retention-days: 30

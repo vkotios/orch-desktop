@@ -117,6 +117,54 @@ it("OPUS-09: matching birth refuses recovery; a verified PID reuse permits it", 
   expect(claimed.ownerGeneration).toBe(2);
 });
 
+it("CLAUDE-HYDRATE: completed Claude turn without nativeTurnId and unfinished turn without outcome encode through strict result frames", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cho-claude-hydrate-")); dirs.push(dir);
+  const p = createNativeSessionPersistence({ databasePath: path.join(dir, "sessions.sqlite3"), hostGeneration: randomUUID(),
+    livenessPath: path.join(dir, "liveness.json"), verifyOwnerEvidence: () => true });
+  stores.push(p);
+  const project = p.ensureProject({ pathCanonical: dir, name: "claude-hydrate" });
+  const conversationId = randomUUID(), sessionUuid = randomUUID();
+  p.ensureConversation({ projectId: project.id, conversationId, controller: "claude",
+    modelRequested: "claude-test", effort: "high", role: "implement", evidence: {} });
+  p.setRequestedClaudeSession({ conversationId, sessionUuid, evidence: {} });
+  // Durable completed Claude turn: no Codex-style nativeTurnId anywhere.
+  const turnId = randomUUID(), operationId = randomUUID(), inputUuid = randomUUID();
+  const scope = { conversationId, turnId, operationId, evidence: {} };
+  p.beginTurn({ ...scope, prompt: "hi claude", effort: "high", claudeInputUuid: inputUuid });
+  p.afterTurnWritten(scope);
+  p.afterClaudeSessionBound({ conversationId, nativeSessionUuid: sessionUuid, evidence: {} });
+  p.afterObserved({ ...scope, nativeIdentity: sessionUuid, nativeTurnId: null, claudeInputUuid: inputUuid });
+  p.appendDelta({ ...scope, partId: randomUUID(), nativeMessageId: "msg-1", text: "hello from claude" });
+  p.settleTurn({ ...scope, outcome: "completed", nativeIdentity: sessionUuid, nativeTurnId: null, claudeInputUuid: inputUuid });
+  // Unfinished native turn: observed but never settled, so no outcome.
+  const turnId2 = randomUUID(), operationId2 = randomUUID(), inputUuid2 = randomUUID();
+  const scope2 = { conversationId, turnId: turnId2, operationId: operationId2, evidence: {} };
+  p.beginTurn({ ...scope2, prompt: "second turn", effort: "high", claudeInputUuid: inputUuid2 });
+  p.afterTurnWritten(scope2);
+  p.afterObserved({ ...scope2, nativeIdentity: sessionUuid, nativeTurnId: null, claudeInputUuid: inputUuid2 });
+  p.appendDelta({ ...scope2, partId: randomUUID(), nativeMessageId: "msg-2", text: "partial" });
+
+  const h = p.hydrateConversation({ projectId: project.id, conversationId });
+  expect(h.nativeSessionUuid).toBe(sessionUuid);
+  const [completed, unfinished] = h.messages.filter((m) => m.role === "assistant");
+  // Completed Claude turn keeps terminal semantics without a nativeTurnId key.
+  expect(completed).toMatchObject({ text: "hello from claude", outcome: "completed", isStreaming: false, isError: false });
+  expect(completed).not.toHaveProperty("nativeTurnId");
+  // Unfinished turn omits outcome, stays streaming, and has no nativeTurnId key.
+  expect(unfinished.text).toBe("partial");
+  expect(unfinished).not.toHaveProperty("outcome");
+  expect(unfinished).not.toHaveProperty("nativeTurnId");
+  expect(unfinished.isStreaming).toBe(true);
+  expect(unfinished.isError).toBe(false);
+  // The exact failure surface: strict result-frame encoding must accept both.
+  expect(() => encodeFrame({ v: 1, type: "result", requestId: "r1", generation: "g", result: { generation: "g", conversation: h } })).not.toThrow();
+  const exported = p.exportConversation({ projectId: project.id, conversationId });
+  expect(exported.conversation.messages.filter((m) => m.role === "assistant")).toHaveLength(2);
+  expect(() => encodeFrame({ v: 1, type: "result", requestId: "r2", generation: "g", result: { generation: "g", conversation: exported.conversation } })).not.toThrow();
+  // JSON.stringify alone would silently drop undefined, so assert key absence explicitly.
+  expect(JSON.stringify(h)).not.toContain("nativeTurnId");
+});
+
 it("OPUS-10: explicit clone ownership reset permits fresh context without resuming source identity", () => {
   const f = fixture(), clonePath = path.join(f.dir, "clone.sqlite3");
   const receipt = restoreSessionStore({ sourcePath: path.join(f.dir, "sessions.sqlite3"), databasePath: clonePath, resetNativeOwnership: true });

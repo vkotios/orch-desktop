@@ -214,9 +214,17 @@ async fn native_pick_project_folder(window: WebviewWindow) -> Result<Option<Stri
     }
 }
 
-// Debug-only: report host startup/health on stdout, then exit through the normal lifecycle.
+// Release health diagnostic: the explicit `--native-host-smoke` flag only.
+// It starts the bundled host (handshake + ping), prints the CHO_HOST_SMOKE
+// receipt, and exits through the normal owned lifecycle (RunEvent::Exit ->
+// stop_host). It accepts no arbitrary command/path, invokes no provider, and
+// exposes no HTTP endpoint. Matching is exact: near-matches never trigger it.
+fn smoke_requested_from(args: impl IntoIterator<Item = String>) -> bool {
+    args.into_iter().any(|a| a == "--native-host-smoke")
+}
+
 fn smoke_requested() -> bool {
-    cfg!(debug_assertions) && std::env::args().any(|a| a == "--native-host-smoke")
+    smoke_requested_from(std::env::args())
 }
 
 fn report_smoke(app: &AppHandle, outcome: StartResult) {
@@ -287,4 +295,45 @@ pub fn run() {
             stop_host(handle);
         }
     });
+}
+
+#[cfg(test)]
+mod smoke_flag_tests {
+    use super::smoke_requested_from;
+
+    fn args(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn exact_flag_is_requested() {
+        assert!(smoke_requested_from(args(&[
+            "cho-desktop.exe",
+            "--native-host-smoke"
+        ])));
+    }
+
+    #[test]
+    fn ordinary_launch_is_not_requested() {
+        assert!(!smoke_requested_from(args(&["cho-desktop.exe"])));
+        assert!(!smoke_requested_from(args(&["cho-desktop.exe", "--help"])));
+    }
+
+    #[test]
+    fn near_matches_are_not_requested() {
+        for argv in [
+            vec!["cho-desktop.exe", "--native-host-smoke=1"],
+            vec!["cho-desktop.exe", "--native-host-smokeX"],
+            vec!["cho-desktop.exe", "--native-host-smok"],
+            vec!["cho-desktop.exe", "-native-host-smoke"],
+            vec!["cho-desktop.exe", "--NATIVE-HOST-SMOKE"],
+            vec!["cho-desktop.exe", " --native-host-smoke"],
+            vec!["cho-desktop.exe", "--native-host-smoke "],
+        ] {
+            assert!(
+                !smoke_requested_from(args(&argv)),
+                "near-match must not trigger smoke: {argv:?}"
+            );
+        }
+    }
 }
