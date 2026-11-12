@@ -1,8 +1,11 @@
 # Windows Candidate Acceptance (owner-executed)
 
-Status: **NOT qualified.** No install/upgrade/uninstall or clean-machine run
-has been recorded for any candidate built by
+Status: **NOT qualified.** No owner-executed install/upgrade/uninstall or
+clean-machine run has been recorded for any candidate built by
 [`windows-candidate.yml`](../.github/workflows/windows-candidate.yml).
+(The workflow does run an automated CI installed smoke on disposable runners;
+see "CI installed smoke" below — it is diagnostic evidence only and does not
+substitute for any procedure here.)
 Every result field below is blank until an owner executes the procedure on a
 real machine and fills it in. Do not mark any row PASS without observed
 evidence.
@@ -17,6 +20,36 @@ evidence.
 
 A `built-local` receipt never implies `installed` or `clean-machine`. The
 receipt verifier refuses receipts that claim a stronger level.
+
+## CI installed smoke (automated, not a qualification)
+
+After the receipt verifies, `windows-candidate.yml` runs one automated
+installed smoke on the disposable Windows runner
+([`installed-smoke.ps1`](../apps/desktop/scripts/installed-smoke.ps1)): it
+locates the single NSIS installer (`*-setup.exe`) in `candidate-dist/`,
+silently installs it into a fresh owned directory
+(`candidate-dist/installed-smoke-<run_id>-<run_attempt>/`), launches the
+installed app's native-host smoke with a sanitized child environment, requires
+the real `CHO_HOST_SMOKE` receipt and owned-host shutdown, silently
+uninstalls only that install, and writes `installed-smoke.json` plus smoke
+logs next to the candidate. The candidate artifact upload runs with
+`if: always()`, so a failed smoke's receipt and logs remain retrievable; the
+failure still fails the step and the job.
+
+Limits — the CI installed smoke is NONE of the following:
+
+- Not a clean-machine run: the runner has developer tooling installed, and
+  hiding PATH entries does not make it clean.
+- Not a WebView2/UI run: it exercises the native-host smoke path only, never
+  the real UI, and never a provider conversation.
+- Not a DPI/display-scaling qualification.
+- Not an MSI qualification: only the NSIS installer is exercised.
+- Not an upgrade/migration test: a single fresh install and uninstall only.
+- Not a signed release or publication: the candidate stays unsigned and
+  private; nothing is released or published.
+
+It therefore does not raise the receipt's evidence level and does not
+satisfy Procedure A/B/C/D or AC-01/AC-13; those remain owner-executed.
 
 ## Candidate contents and identity
 
@@ -64,8 +97,12 @@ source, using the exact prepare-runtime outputs as the trusted mapping:
   source file keeps CRLF line endings (the repo pins `* -text`), so raw
   source bytes never equal the LF staged bytes. The verifier therefore compares
   the staged manifest against that exact serialization of the parsed source
-  manifest. Every JSON field participates: any value or field change still
-  fails verification; only source-side EOL/indent formatting is factored out.
+  manifest. This comparison is JSON-value-preserving: it factors out only
+  source-side formatting that carries no JSON meaning once parsed — line
+  endings, indentation, and whitespace — because the comparison runs on the
+  re-serialized parse of the source, not on raw source bytes. Everything the
+  JSON carries must match: any added, removed, changed, or reordered key, or
+  any changed value, changes the serialization and still fails verification.
 
 ## Prerequisites for the acceptance machine
 
@@ -78,7 +115,10 @@ source, using the exact prepare-runtime outputs as the trusted mapping:
   sign-in already completed outside CHO.
 - The candidate under test: `windows-candidate-<sha>` workflow artifact
   (`candidate-dist/`), containing the MSI installer, the NSIS installer, the
-  raw app executable, `candidate-receipt.json`, and `SHASUMS256.txt`.
+  raw app executable, `candidate-receipt.json`, and `SHASUMS256.txt` — plus,
+  when the workflow's installed-smoke step ran, the
+  `installed-smoke-<run_id>-<run_attempt>/` directory (smoke logs and
+  `installed-smoke.json`).
 
 Record first:
 

@@ -10,10 +10,15 @@
 # Artifacts are private workflow artifacts (private repository), retained for
 # inspection and owner acceptance only.
 #
-# Evidence level of everything produced here is "built-local": the receipt
-# proves which commit was built and that the staged runtime bytes match the
-# checked-out source. It is NOT installed-app or clean-machine acceptance;
-# that qualification is a separate owner-executed procedure documented in
+# Evidence produced here, kept strictly apart:
+#   - "built-local" receipt: proves which commit was built and that the staged
+#     runtime bytes match the checked-out source.
+#   - CI installed smoke: after the receipt verifies, the single NSIS
+#     installer is silently installed, smoke-run, and uninstalled on this
+#     disposable Windows runner (apps/desktop/scripts/installed-smoke.ps1).
+# Neither is clean-machine, WebView2 UI, DPI, MSI, upgrade/migration, or
+# signed-release/publication acceptance; that qualification remains a separate
+# owner-executed procedure documented in
 # docs/WINDOWS_CANDIDATE_ACCEPTANCE.md (AC-01/AC-13 remain open).
 
 name: Windows candidate (manual + PR, private)
@@ -132,7 +137,36 @@ jobs:
         # and every staged runtime file must equal its checked-out source.
         run: node apps/desktop/scripts/release-receipt.mjs verify --receipt candidate-dist/candidate-receipt.json --bundle-dir candidate-dist --source-root . --runtime-dir apps/desktop/src-tauri/.runtime
 
+      - name: Locate NSIS installer candidate
+        # Exactly one NSIS installer (*-setup.exe) must be present; the raw
+        # app executable is not an installer and is never smoke-launched.
+        shell: pwsh
+        run: |
+          $nsis = @(Get-ChildItem -LiteralPath candidate-dist -Filter '*-setup.exe' -File)
+          if ($nsis.Count -ne 1) {
+            throw "expected exactly one NSIS installer ('*-setup.exe') in candidate-dist, found $($nsis.Count)"
+          }
+          "NSIS_INSTALLER=$($nsis[0].FullName)" >> $env:GITHUB_ENV
+          Write-Output "nsis installer: $($nsis[0].Name)"
+
+      - name: Installed smoke (disposable CI runner only)
+        # CI-only installed smoke: silent install of the exact NSIS candidate
+        # into a fresh owned directory, native-host smoke receipt, silent
+        # uninstall of only that install. No signing, no release, no
+        # developer-machine install; failures fail the step and the job (no
+        # continue-on-error). The output directory is inside candidate-dist so
+        # the always()-on upload below carries the smoke receipt even on
+        # failure; run_id + run_attempt keep the path fresh per run.
+        shell: pwsh
+        run: |
+          & ./apps/desktop/scripts/installed-smoke.ps1 `
+            -Installer "$env:NSIS_INSTALLER" `
+            -OutputDir "candidate-dist/installed-smoke-${{ github.run_id }}-${{ github.run_attempt }}"
+
       - name: Upload candidate artifacts (private)
+        # always(): a failed installed smoke must still leave its receipt and
+        # logs retrievable. Job status stays failed (no continue-on-error).
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: windows-candidate-${{ env.HEAD_SHA }}
