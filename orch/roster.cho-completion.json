@@ -1,0 +1,29 @@
+{
+  "_comment": "Project completion pool approved 2026-11-12. Copy/select this roster in private orch configuration. Model selection is not proof of task or runtime qualification. Do not impose a turn cap on DeepSeek; inspect activity before intervention.",
+  "models": [
+    {
+      "cli": "muse",
+      "model": "muse-spark-1.3",
+      "family": "meta",
+      "lane": "cloud",
+      "workloads": [
+        "implement",
+        "review"
+      ],
+      "cost_class": "subscription",
+      "playbook_note": "Owner-requested completion implementer/reviewer, 2026-11-12. Qualify actual model and task evidence; use a different model for independent review."
+    },
+    {
+      "cli": "vibe",
+      "model": "deepseek-v4-1-flash-1017",
+      "family": "deepseek",
+      "lane": "cloud",
+      "workloads": [
+        "implement",
+        "review"
+      ],
+      "cost_class": "subscription",
+      "playbook_note": "Owner-requested completion route, 2026-11-12. Fast iterations and more turns expected. Do not set a turns cap or cancel an active run for exceeding a turn count. Monitor activity and preserve progress; no model substitution."
+    }
+  ]
+}
