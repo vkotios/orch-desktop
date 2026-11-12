@@ -1,0 +1,107 @@
+# Windows candidate (manual, private)
+#
+# Builds a Windows install candidate (EXE/MSI/NSIS) from the EXACT commit this
+# run was created from, plus machine-readable SHA256/source/runtime receipts.
+# Manual `workflow_dispatch` only: there is no ref/branch input, so the run can
+# never be pointed at an arbitrary untrusted ref. No signing credentials, no
+# tags, no GitHub Release creation, no publishing step of any kind. Artifacts
+# are private workflow artifacts (private repository), retained for inspection
+# and owner acceptance only.
+#
+# Evidence level of everything produced here is "built-local": the receipt
+# proves which commit was built and that the staged runtime bytes match the
+# checked-out source. It is NOT installed-app or clean-machine acceptance;
+# that qualification is a separate owner-executed procedure documented in
+# docs/WINDOWS_CANDIDATE_ACCEPTANCE.md (AC-01/AC-13 remain open).
+
+name: Windows candidate (manual, private)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  candidate:
+    name: Build candidate + receipts
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout exact commit
+        uses: actions/checkout@v6
+        # No ref input: this checks out the exact commit the run was created
+        # from (GITHUB_SHA). The recorded SHA below must match it.
+
+      - name: Record exact commit
+        id: commit
+        shell: pwsh
+        run: |
+          $sha = (git rev-parse HEAD).Trim()
+          "sha=$sha" >> $env:GITHUB_OUTPUT
+          "HEAD_SHA=$sha" >> $env:GITHUB_ENV
+          git status --short
+          Write-Output "candidate commit: $sha"
+
+      - name: Set up Node.js 24
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install workspace dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Package checks
+        run: npm test
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Stage pinned runtime
+        run: node apps/desktop/scripts/prepare-runtime.mjs
+
+      - name: Rust checks
+        working-directory: apps/desktop/src-tauri
+        run: cargo test --locked
+
+      - name: Native build (EXE/MSI/NSIS)
+        # Existing pipeline: frontend build + Tauri bundle (targets "all").
+        # Deliberately NO signing variables, NO release upload, NO tag step.
+        run: npm run native:build
+
+      - name: Collect installer artifacts
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force candidate-dist | Out-Null
+          Copy-Item apps/desktop/src-tauri/target/release/bundle/msi/*.msi candidate-dist/
+          Copy-Item apps/desktop/src-tauri/target/release/bundle/nsis/*.exe candidate-dist/
+          Copy-Item apps/desktop/src-tauri/target/release/*.exe candidate-dist/ -Exclude *.pdb
+          Get-ChildItem candidate-dist/
+          if (-not (Get-ChildItem candidate-dist/ -File)) { throw 'no installer artifacts collected' }
+
+      - name: Write candidate receipt
+        run: node apps/desktop/scripts/release-receipt.mjs write --bundle-dir candidate-dist --runtime-dir apps/desktop/src-tauri/.runtime --source-root . --commit ${{ env.HEAD_SHA }} --out candidate-dist/candidate-receipt.json
+
+      - name: Write SHASUMS256.txt
+        shell: pwsh
+        run: |
+          $receipt = Get-Content candidate-dist/candidate-receipt.json -Raw | ConvertFrom-Json
+          $lines = foreach ($a in $receipt.artifacts) { "$($a.sha256)  $($a.file)" }
+          [System.IO.File]::WriteAllLines("$PWD/candidate-dist/SHASUMS256.txt", $lines)
+
+      - name: Verify candidate receipt
+        # Self-check: every recorded artifact must exist with matching bytes,
+        # and every staged runtime file must equal its checked-out source.
+        run: node apps/desktop/scripts/release-receipt.mjs verify --receipt candidate-dist/candidate-receipt.json --bundle-dir candidate-dist --source-root . --runtime-dir apps/desktop/src-tauri/.runtime
+
+      - name: Upload candidate artifacts (private)
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-candidate-${{ env.HEAD_SHA }}
+          path: candidate-dist/
+          retention-days: 30
