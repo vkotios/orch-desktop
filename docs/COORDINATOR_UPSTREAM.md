@@ -29,3 +29,10 @@ preserve desktop extensions, install each changed lockfile, and run affected
 coordinator plus desktop checks. Restage the packaged runtime and rebuild native
 artifacts after runtime-source changes. Never infer a merge, push, native
 qualification or independent review from importing source.
+
+Post-PR CI adaptation (2026-11-12): the shared release scanner now supports an
+exact file/pattern/line-SHA-256 exception manifest. Thirty reviewed entries cover
+synthetic test identifiers and retained audit provenance. Unknown or changed
+content still fails, malformed policy fails a control, and secret-detection
+positive controls remain mandatory. This is a desktop-specific addition, not an
+upstream claim or public-release approval. Desktop CI now enforces the scan too.

@@ -35,8 +35,7 @@ jobs:
       - name: Build
         run: npm run build
       - name: Public-tree release scan
-        # Advisory until remaining unexpected hits (fixtures/docs paths) are cleared.
-        continue-on-error: true
+        # Exact reviewed fixture/provenance exceptions; new or changed hits fail.
         run: node orch/tools/release-scan.mjs
 
   coordinator-contracts:

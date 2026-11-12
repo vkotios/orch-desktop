@@ -14,13 +14,15 @@
 // Positive controls (the scan is worthless if it cannot find anything):
 //  1. every pattern is first tested against a built-in sample it MUST match;
 //  2. the copyright line in LICENSE names the copyright holder and MUST be found by the
-//     `owner-name` pattern. That line is the only expected hit in the tree.
-// Exit code: 0 = clean (controls passed, no other hit), 1 = hits, 2 = a control failed.
+//     `owner-name` pattern. Other expected hits need exact file/pattern/line hashes
+//     in the reviewed exception manifest; new or changed content still fails.
+// Exit code: 0 = reviewed (controls passed, no unexpected hit), 1 = hits, 2 = a control failed.
 // Pure Node (no grep, no locale dependence). The patterns are built from fragments so this
 // file never matches itself.
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
 const B = String.fromCharCode(92); // backslash
@@ -66,8 +68,30 @@ export const PATTERNS = {
 
 const SKIP_DIRS = new Set(['node_modules', '.state', '.state-test', '.lane', '.git']);
 const SKIP_ROOT_FILES = new Set(['RELEASE_CHECK.md']);
-/** The one expected hit: the copyright holder in LICENSE. */
+/** Required positive control, independent of the reviewed exception manifest. */
 const EXPECTED = { file: 'LICENSE', pattern: 'owner-name', line: /^Copyright \(c\) \d{4} \S+ \S+$/ };
+
+const lineDigest = (text) => createHash('sha256').update(text, 'utf8').digest('hex');
+/** Exact reviewed content only: editing a line or moving it to another file reopens the hit. */
+function reviewedExceptions(root) {
+  const file = path.join(root, 'orch', 'tools', 'release-scan-expected.json');
+  try {
+    const policy = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (policy.version !== 1 || !Array.isArray(policy.entries) || policy.entries.length > 5000) throw new Error('invalid policy');
+    const keys = new Set();
+    for (const entry of policy.entries) {
+      if (typeof entry.file !== 'string' || !entry.file || path.isAbsolute(entry.file) || /[:\\]/.test(entry.file)
+        || entry.file.split('/').includes('..') || !Object.hasOwn(PATTERNS, entry.pattern)
+        || !/^[0-9a-f]{64}$/.test(entry.lineSha256) || typeof entry.reason !== 'string' || !entry.reason || entry.reason.length > 256) throw new Error('invalid entry');
+      const key = `${entry.file}\0${entry.pattern}\0${entry.lineSha256}`;
+      if (keys.has(key)) throw new Error('duplicate entry');
+      keys.add(key);
+    }
+    return { ok: true, keys };
+  } catch (error) {
+    return { ok: error?.code === 'ENOENT', keys: new Set() };
+  }
+}
 
 /**
  * The files git would commit under `root` (relative, forward slashes, sorted), or null when
@@ -134,8 +158,11 @@ export function scan(root) {
       for (const [name, { re }] of Object.entries(PATTERNS)) if (re.test(text)) hits.push({ file: rel, line: i + 1, pattern: name, text });
     });
   }
-  const isExpected = (h) => h.file === EXPECTED.file && h.pattern === EXPECTED.pattern && EXPECTED.line.test(h.text);
-  controls.push({ control: 'LICENSE copyright line found by owner-name', ok: hits.some(isExpected) });
+  const policy = reviewedExceptions(root);
+  const copyright = (h) => h.file === EXPECTED.file && h.pattern === EXPECTED.pattern && EXPECTED.line.test(h.text);
+  const isExpected = (h) => copyright(h) || policy.keys.has(`${h.file}\0${h.pattern}\0${lineDigest(h.text)}`);
+  controls.push({ control: 'LICENSE copyright line found by owner-name', ok: hits.some(copyright) });
+  controls.push({ control: 'reviewed exception manifest valid', ok: policy.ok });
   return { mode, files, controls, expected: hits.filter(isExpected), unexpected: hits.filter((h) => !isExpected(h)) };
 }
 
@@ -149,7 +176,7 @@ function main() {
       : 'files: FALLBACK - not a git work tree (or git could not be run): walked the whole directory except node_modules, .git, .state*, .lane',
   );
   for (const c of r.controls) out.push(`CONTROL ${c.ok ? 'hit ' : 'MISS'}  ${c.control}`);
-  for (const h of r.expected) out.push(`EXPECTED ${h.file}:${h.line}  [${h.pattern}]  (copyright holder)`);
+  for (const h of r.expected) out.push(`EXPECTED ${h.file}:${h.line}  [${h.pattern}]  (copyright or exact reviewed content)`);
   // The matched text is never printed: a hit could be a secret. File, line and pattern only.
   for (const h of r.unexpected) out.push(`HIT      ${h.file}:${h.line}  [${h.pattern}]`);
   const controlsOk = r.controls.every((c) => c.ok);

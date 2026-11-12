@@ -8,6 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
 import { execFile, execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { KIT, ORCH_BIN, TEST_ROSTER, makeCase, orch } from './helpers.mjs';
 import { assertSupportedPlatform } from '../src/platform.mjs';
@@ -350,6 +351,30 @@ test('P5: bench-gateway runs models one at a time against a local fake gateway a
 });
 
 /* ---------------------------------------------------------- release scan -- */
+
+test('P6: exact reviewed exceptions reopen when content changes and never hide new secrets', (t) => {
+  const dir = tmpDir(t, 'scan-exact');
+  execFileSync('git', ['init', '-q'], { cwd: dir, windowsHide: true });
+  fs.writeFileSync(path.join(dir, 'LICENSE'), `Copyright (c) 2026 ${SCAN_PATTERNS['owner-name'].sample} Example\n`);
+  const text = SCAN_PATTERNS['uuid (session/thread id)'].sample;
+  fs.writeFileSync(path.join(dir, 'fixture.txt'), text + '\n');
+  fs.mkdirSync(path.join(dir, 'orch', 'tools'), { recursive: true });
+  const policyPath = path.join(dir, 'orch', 'tools', 'release-scan-expected.json');
+  fs.writeFileSync(policyPath, JSON.stringify({ version: 1, entries: [{ file: 'fixture.txt', pattern: 'uuid (session/thread id)',
+    lineSha256: createHash('sha256').update(text).digest('hex'), reason: 'synthetic fixture' }] }));
+  let result = releaseScan(dir);
+  assert.equal(result.unexpected.length, 0);
+  assert.ok(result.controls.every((c) => c.ok));
+  fs.writeFileSync(path.join(dir, 'fixture.txt'), text + ' changed\n');
+  fs.writeFileSync(path.join(dir, 'new.txt'), SCAN_PATTERNS['assigned-secret'].sample + '\n');
+  result = releaseScan(dir);
+  assert.ok(result.unexpected.some((h) => h.file === 'fixture.txt'));
+  assert.ok(result.unexpected.some((h) => h.file === 'new.txt' && h.pattern === 'assigned-secret'));
+  fs.writeFileSync(policyPath, '{invalid');
+  result = releaseScan(dir);
+  assert.equal(result.controls.find((c) => c.control === 'reviewed exception manifest valid').ok, false);
+  assert.ok(result.unexpected.some((h) => h.file === 'new.txt'));
+});
 
 test('P6: release-scan scans exactly the files git would commit; git-ignored files are not reported', (t) => {
   const repo = tmpDir(t, 'scan-git');
