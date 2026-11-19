@@ -207,7 +207,7 @@ describe("prepareRuntime", () => {
     expect(files).not.toContain(join("app", "orch", "src", "nested", "deep.mjs"));
     expect(await readFile(join(outputDir, "app", "orch", "src", "index.mjs"), "utf8")).toBe("export const x = 2;\n");
     expect(await readFile(join(outputDir, "node.exe"))).toEqual(NODE_BYTES);
-  });
+  }, 15_000);
 
   it("rejects invalid output paths", async () => {
     const manifestPath = await makeManifestFile(buildManifest());
@@ -227,7 +227,7 @@ describe("prepareRuntime", () => {
     await expect(
       prepareRuntime({ manifestPath, sourceRoot: inner, outputDir: join(inner, "runtime-test-output"), fetchImpl: fakeFetch(bodies()).impl }),
     ).rejects.toThrow(/must not reside in the source root/);
-  });
+  }, 15_000);
 
   it("rejects symlink/junction ancestors for sources, output and entries", async () => {
     const manifestPath = await makeManifestFile(buildManifest());

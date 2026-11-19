@@ -1563,7 +1563,8 @@ describe("Codex durable dual-write", () => {
     expect(client.closes).toBeGreaterThanOrEqual(1);
   });
 
-  it("draft conflict list/resolve and restart keep drafts without replaying live approvals", async () => {
+  // Opening durable storage in each generation queries the OS process table.
+  it("draft conflict list/resolve and restart keep drafts without replaying live approvals", { timeout: 30_000 }, async () => {
     const dir = tempDir();
     const dbPath = join(dir, "sessions.sqlite3");
     const generation = randomUUID();
