@@ -1,3 +1,4 @@
+/// <reference types="vitest/config" />
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
@@ -7,6 +8,10 @@ const bridgePort = Number(process.env.CHO_BRIDGE_PORT || 1421);
 export default defineConfig({
   plugins: [react()],
   clearScreen: false,
+  test: {
+    // Limit contention between Windows process probes and on-disk fixtures.
+    maxWorkers: process.platform === "win32" ? 2 : undefined,
+  },
   server: {
     port: 1420,
     strictPort: true,
