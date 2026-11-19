@@ -11,6 +11,7 @@ export default defineConfig({
   test: {
     // Limit contention between Windows process probes and on-disk fixtures.
     maxWorkers: process.platform === "win32" ? 2 : undefined,
+    testTimeout: process.platform === "win32" ? 15_000 : undefined,
   },
   server: {
     port: 1420,
