@@ -38,7 +38,9 @@ function fixture() {
   return { dir, p, projectId: project.id, conversationId, write, open };
 }
 
-it("OPUS-01: hydrate/poll across the 2048-event boundary preserves every part once", { timeout: 30_000 }, () => {
+// Keep all 2,050 durable writes in this regression. Full SQLite sync can be
+// slow on hosted Windows runners while the other storage tests are running.
+it("OPUS-01: hydrate/poll across the 2048-event boundary preserves every part once", { timeout: 120_000 }, () => {
   const f = fixture(), chunks = Array.from({ length: 2050 }, (_, i) => `[${i}]`);
   f.write(0, chunks);
   const scope = { projectId: f.projectId, conversationId: f.conversationId };

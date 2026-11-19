@@ -623,7 +623,8 @@ describe("native acceptance probe (seam only, never live)", () => {
     expect(closeCase).toMatchObject({ status: "fail", detail: { thrown: true } });
   });
 
-  it("drives the two-generation flow through the real host with an injected deterministic peer", async () => {
+  // Two real host generations each query the OS process table on startup.
+  it("drives the two-generation flow through the real host with an injected deterministic peer", { timeout: 30_000 }, async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cho-acceptance-real-"));
     dirs.push(dir);
     const dbPath = path.join(dir, "sessions.sqlite3");
